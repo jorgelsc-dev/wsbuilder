@@ -1,0 +1,74 @@
+name: sync-rulesets
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop, main]
+    paths:
+      - ".github/rulesets/*.json"
+      - ".github/workflows/sync-rulesets.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rulesets-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate ruleset files
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(.github/rulesets/*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No ruleset files found under .github/rulesets"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            jq -e '.name and .target and .enforcement and .conditions and .rules' "$f" >/dev/null
+            echo "validated: $f"
+          done
+
+      - name: Sync rulesets (create/update)
+        env:
+          # Recomendado: crear este secret con un PAT de admin de repo.
+          # Si no existe, usa GITHUB_TOKEN y puede fallar con 403 según permisos.
+          GH_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN != '' && secrets.RULESET_ADMIN_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Missing token. Add RULESET_ADMIN_TOKEN secret."
+            exit 1
+          fi
+
+          current="$(gh api "repos/$REPO/rulesets")"
+
+          shopt -s nullglob
+          for file in .github/rulesets/*.json; do
+            name="$(jq -r '.name' "$file")"
+            if [ -z "$name" ] || [ "$name" = "null" ]; then
+              echo "Invalid ruleset name in $file"
+              exit 1
+            fi
+
+            id="$(jq -r --arg name "$name" '.[] | select(.name==$name) | .id' <<<"$current" | head -n1)"
+
+            if [ -n "$id" ] && [ "$id" != "null" ]; then
+              echo "Updating ruleset: $name (id=$id)"
+              gh api --method PUT "repos/$REPO/rulesets/$id" --input "$file" >/dev/null
+            else
+              echo "Creating ruleset: $name"
+              gh api --method POST "repos/$REPO/rulesets" --input "$file" >/dev/null
+            fi
+          done
+
+          echo "Rulesets synchronized successfully."
