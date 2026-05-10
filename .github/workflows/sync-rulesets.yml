@@ -38,15 +38,16 @@ jobs:
 
       - name: Sync rulesets (create/update)
         env:
-          # Recomendado: crear este secret con un PAT de admin de repo.
-          # Si no existe, usa GITHUB_TOKEN y puede fallar con 403 según permisos.
-          GH_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN != '' && secrets.RULESET_ADMIN_TOKEN || github.token }}
+          # Requerido: PAT/Fine-grained token con permiso de Administration (write)
+          # para este repositorio, guardado como RULESET_ADMIN_TOKEN.
+          GH_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "Missing token. Add RULESET_ADMIN_TOKEN secret."
+            echo "Missing RULESET_ADMIN_TOKEN secret."
+            echo "Create it in: Settings > Secrets and variables > Actions > New repository secret."
             exit 1
           fi
 
