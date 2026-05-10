@@ -1,0 +1,22 @@
+name: main-only-from-develop
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  enforce-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate source branch
+        run: |
+          echo "base=${{ github.base_ref }} head=${{ github.head_ref }}"
+          if [ "${{ github.head_ref }}" != "develop" ]; then
+            echo "ERROR: main solo acepta PR desde develop"
+            exit 1
+          fi

@@ -2,6 +2,10 @@
 
 `wsbuilder` es un paquete Python extraido de `PortHound4` para construir servidores HTTP + WebSocket sin dependencias externas.
 
+Lightweight Python HTTP + WebSocket framework for building real-time APIs and custom servers.
+
+**Keywords:** `python`, `http-server`, `websocket`, `framework`, `real-time`, `api`, `socket`.
+
 ## Incluye
 
 - `wsbuilder.framework`: router, request/response, servidor HTTP, handshake WS y utilidades de frames.
