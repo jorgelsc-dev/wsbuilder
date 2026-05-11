@@ -63,3 +63,28 @@ wsbuilder --host 0.0.0.0 --port 8765
 
 - `WSBUILDER_CORS_ALLOW_ORIGIN`: valor CORS para rutas `@app.api`.
 - Compatibilidad heredada: tambien respeta `PORTHOUND_CORS_ALLOW_ORIGIN`.
+
+## CI/CD (GitHub Actions)
+
+- `package-build.yml`: construye `sdist` + `wheel`, valida metadata y prueba instalacion/import.
+- `promote-and-release.yml` en push a `develop`: crea PR `develop -> staging`, aprueba y mergea.
+- `promote-and-release.yml` en push a `staging`: calcula version semantica automaticamente segun cambios, crea rama `release/v<version>`, construye paquetes, crea PR `release/* -> main`, aprueba y mergea, y crea tag `v<version>` en `main`.
+- `publish-packages.yml` en push de tag `v*`: construye y publica a PyPI/TestPyPI (instalable con `pip`).
+- `publish-packages.yml` en tags `v*`: adjunta los paquetes al GitHub Release.
+- `main-only-from-develop.yml` (renombrado internamente a `main-only-from-release`): valida que `main` solo reciba PR desde `release/*`.
+
+### Reglas de versionado automatico
+
+- `major`: si algun commit trae `BREAKING CHANGE` en body/footer o usa `type(scope)!:`.
+- `minor`: si hay commits `feat:` y no hay breaking changes.
+- `patch`: cualquier otro cambio (`fix:`, `docs:`, `chore:`, etc).
+
+Recomendado usar Conventional Commits para que el calculo de version sea preciso.
+
+### Secrets requeridos
+
+- `RELEASE_BOT_TOKEN` (opcional si ya usas `RULESET_ADMIN_TOKEN`): PAT/fine-grained token del bot/usuario que aprueba y mergea PR automaticos.
+- `RULESET_ADMIN_TOKEN` (soportado como fallback): si existe, el workflow lo usa automaticamente cuando `RELEASE_BOT_TOKEN` no esta configurado.
+- `RELEASE_REVIEW_TOKEN` (opcional): token de un segundo usuario (idealmente code owner) para aprobar PR cuando hay regla `require_last_push_approval`.
+- `PYPI_API_TOKEN`: token de publicacion para PyPI.
+- `TEST_PYPI_API_TOKEN` (opcional): token de publicacion para TestPyPI.

@@ -1,4 +1,4 @@
-name: main-only-from-develop
+name: main-only-from-release
 
 on:
   pull_request:
@@ -15,8 +15,14 @@ jobs:
     steps:
       - name: Validate source branch
         run: |
+          set -euo pipefail
           echo "base=${{ github.base_ref }} head=${{ github.head_ref }}"
-          if [ "${{ github.head_ref }}" != "develop" ]; then
-            echo "ERROR: main solo acepta PR desde develop"
-            exit 1
-          fi
+          case "${{ github.head_ref }}" in
+            release/*)
+              echo "OK: main acepta PR desde release/*"
+              ;;
+            *)
+              echo "ERROR: main solo acepta PR desde release/*"
+              exit 1
+              ;;
+          esac
