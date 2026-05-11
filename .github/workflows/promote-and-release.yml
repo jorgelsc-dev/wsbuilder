@@ -42,12 +42,28 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
           RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
-          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-}}"
-          if [ -z "${bot_token:-}" ]; then
-            echo "Missing RELEASE_BOT_TOKEN/RULESET_ADMIN_TOKEN secret"
+          declare -a token_labels=()
+          declare -a token_values=()
+
+          if [ -n "${BOT_TOKEN:-}" ]; then
+            token_labels+=("RELEASE_BOT_TOKEN")
+            token_values+=("$BOT_TOKEN")
+          fi
+          if [ -n "${ACTIONS_TOKEN:-}" ]; then
+            token_labels+=("GITHUB_TOKEN")
+            token_values+=("$ACTIONS_TOKEN")
+          fi
+          if [ -n "${RULESET_TOKEN:-}" ]; then
+            token_labels+=("RULESET_ADMIN_TOKEN")
+            token_values+=("$RULESET_TOKEN")
+          fi
+
+          if [ "${#token_values[@]}" -eq 0 ]; then
+            echo "No token available for PR operations."
             exit 1
           fi
 
@@ -59,16 +75,65 @@ jobs:
             exit 0
           fi
 
-          pr_number="$(GH_TOKEN="$bot_token" gh pr list --repo "$REPO" --base staging --head develop --state open --json number --jq '.[0].number')"
+          pr_number=""
+          for i in "${!token_values[@]}"; do
+            token="${token_values[$i]}"
+            label="${token_labels[$i]}"
+            set +e
+            candidate="$(GH_TOKEN="$token" gh pr list --repo "$REPO" --base staging --head develop --state open --json number --jq '.[0].number' 2>/dev/null)"
+            rc=$?
+            set -e
+            if [ $rc -eq 0 ]; then
+              pr_number="$candidate"
+              break
+            fi
+            echo "Token ${label} cannot list PRs for ${REPO}."
+          done
 
           if [ -z "$pr_number" ]; then
-            GH_TOKEN="$bot_token" gh pr create \
-              --repo "$REPO" \
-              --base staging \
-              --head develop \
-              --title "chore: promote develop to staging" \
-              --body "PR automatizado para promover cambios de develop a staging."
-            pr_number="$(GH_TOKEN="$bot_token" gh pr list --repo "$REPO" --base staging --head develop --state open --json number --jq '.[0].number')"
+            create_ok=0
+            for i in "${!token_values[@]}"; do
+              token="${token_values[$i]}"
+              label="${token_labels[$i]}"
+              set +e
+              create_output="$(GH_TOKEN="$token" gh pr create \
+                --repo "$REPO" \
+                --base staging \
+                --head develop \
+                --title "chore: promote develop to staging" \
+                --body "PR automatizado para promover cambios de develop a staging." 2>&1)"
+              rc=$?
+              set -e
+              if [ $rc -eq 0 ]; then
+                create_ok=1
+                echo "PR created with ${label}."
+                break
+              fi
+              echo "Token ${label} failed to create PR: ${create_output}"
+            done
+
+            if [ "$create_ok" -ne 1 ]; then
+              echo "Unable to create PR with available tokens."
+              echo "Required: token with repo access and Pull requests: write on ${REPO}."
+              exit 1
+            fi
+
+            for i in "${!token_values[@]}"; do
+              token="${token_values[$i]}"
+              set +e
+              pr_number="$(GH_TOKEN="$token" gh pr list --repo "$REPO" --base staging --head develop --state open --json number --jq '.[0].number' 2>/dev/null)"
+              rc=$?
+              set -e
+              if [ $rc -eq 0 ] && [ -n "$pr_number" ]; then
+                break
+              fi
+              pr_number=""
+            done
+          fi
+
+          if [ -z "$pr_number" ]; then
+            echo "PR was created/found but PR number could not be resolved."
+            exit 1
           fi
 
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
@@ -263,12 +328,28 @@ jobs:
           REPO: ${{ github.repository }}
           RELEASE_BRANCH: ${{ steps.release.outputs.release_branch }}
           BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
           RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
-          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-}}"
-          if [ -z "${bot_token:-}" ]; then
-            echo "Missing RELEASE_BOT_TOKEN/RULESET_ADMIN_TOKEN secret"
+          declare -a token_labels=()
+          declare -a token_values=()
+
+          if [ -n "${BOT_TOKEN:-}" ]; then
+            token_labels+=("RELEASE_BOT_TOKEN")
+            token_values+=("$BOT_TOKEN")
+          fi
+          if [ -n "${ACTIONS_TOKEN:-}" ]; then
+            token_labels+=("GITHUB_TOKEN")
+            token_values+=("$ACTIONS_TOKEN")
+          fi
+          if [ -n "${RULESET_TOKEN:-}" ]; then
+            token_labels+=("RULESET_ADMIN_TOKEN")
+            token_values+=("$RULESET_TOKEN")
+          fi
+
+          if [ "${#token_values[@]}" -eq 0 ]; then
+            echo "No token available for PR operations."
             exit 1
           fi
 
@@ -280,16 +361,65 @@ jobs:
             exit 0
           fi
 
-          pr_number="$(GH_TOKEN="$bot_token" gh pr list --repo "$REPO" --base main --head "$RELEASE_BRANCH" --state open --json number --jq '.[0].number')"
+          pr_number=""
+          for i in "${!token_values[@]}"; do
+            token="${token_values[$i]}"
+            label="${token_labels[$i]}"
+            set +e
+            candidate="$(GH_TOKEN="$token" gh pr list --repo "$REPO" --base main --head "$RELEASE_BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null)"
+            rc=$?
+            set -e
+            if [ $rc -eq 0 ]; then
+              pr_number="$candidate"
+              break
+            fi
+            echo "Token ${label} cannot list PRs for ${REPO}."
+          done
 
           if [ -z "$pr_number" ]; then
-            GH_TOKEN="$bot_token" gh pr create \
-              --repo "$REPO" \
-              --base main \
-              --head "$RELEASE_BRANCH" \
-              --title "release: promote $RELEASE_BRANCH to main" \
-              --body "PR automatizado para promover $RELEASE_BRANCH a main."
-            pr_number="$(GH_TOKEN="$bot_token" gh pr list --repo "$REPO" --base main --head "$RELEASE_BRANCH" --state open --json number --jq '.[0].number')"
+            create_ok=0
+            for i in "${!token_values[@]}"; do
+              token="${token_values[$i]}"
+              label="${token_labels[$i]}"
+              set +e
+              create_output="$(GH_TOKEN="$token" gh pr create \
+                --repo "$REPO" \
+                --base main \
+                --head "$RELEASE_BRANCH" \
+                --title "release: promote $RELEASE_BRANCH to main" \
+                --body "PR automatizado para promover $RELEASE_BRANCH a main." 2>&1)"
+              rc=$?
+              set -e
+              if [ $rc -eq 0 ]; then
+                create_ok=1
+                echo "PR created with ${label}."
+                break
+              fi
+              echo "Token ${label} failed to create PR: ${create_output}"
+            done
+
+            if [ "$create_ok" -ne 1 ]; then
+              echo "Unable to create PR with available tokens."
+              echo "Required: token with repo access and Pull requests: write on ${REPO}."
+              exit 1
+            fi
+
+            for i in "${!token_values[@]}"; do
+              token="${token_values[$i]}"
+              set +e
+              pr_number="$(GH_TOKEN="$token" gh pr list --repo "$REPO" --base main --head "$RELEASE_BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null)"
+              rc=$?
+              set -e
+              if [ $rc -eq 0 ] && [ -n "$pr_number" ]; then
+                break
+              fi
+              pr_number=""
+            done
+          fi
+
+          if [ -z "$pr_number" ]; then
+            echo "PR was created/found but PR number could not be resolved."
+            exit 1
           fi
 
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
