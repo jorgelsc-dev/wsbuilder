@@ -1,23 +1,21 @@
-name: promote-and-release
+name: release-on-main
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - develop
-      - staging
+      - main
 
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency:
-  group: promote-and-release-${{ github.ref }}
+  group: release-on-main-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  promote-develop-to-staging:
-    if: github.ref_name == 'develop'
+  create-release:
+    if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,511 +23,70 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Ensure staging branch exists
+      - name: Resolve version and tag
+        id: meta
         run: |
           set -euo pipefail
-          git fetch origin --prune
-          if git ls-remote --exit-code --heads origin staging >/dev/null 2>&1; then
-            echo "staging branch already exists"
-          else
-            git checkout -B staging origin/develop
-            git push origin staging
-            echo "staging branch created from develop"
-          fi
 
-      - name: Create or reuse PR develop -> staging
-        id: pr
-        env:
-          REPO: ${{ github.repository }}
-          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          ACTIONS_TOKEN: ${{ github.token }}
-          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
-        run: |
-          set -euo pipefail
-          declare -a token_labels=()
-          declare -a token_values=()
-
-          if [ -n "${BOT_TOKEN:-}" ]; then
-            token_labels+=("RELEASE_BOT_TOKEN")
-            token_values+=("$BOT_TOKEN")
-          fi
-          if [ -n "${ACTIONS_TOKEN:-}" ]; then
-            token_labels+=("GITHUB_TOKEN")
-            token_values+=("$ACTIONS_TOKEN")
-          fi
-          if [ -n "${RULESET_TOKEN:-}" ]; then
-            token_labels+=("RULESET_ADMIN_TOKEN")
-            token_values+=("$RULESET_TOKEN")
-          fi
-
-          if [ "${#token_values[@]}" -eq 0 ]; then
-            echo "No token available for PR operations."
-            exit 1
-          fi
-
-          git fetch origin develop staging
-
-          if [ "$(git rev-parse origin/develop)" = "$(git rev-parse origin/staging)" ]; then
-            echo "No pending commits from develop to staging"
-            echo "pr_number=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          pr_number=""
-          for i in "${!token_values[@]}"; do
-            token="${token_values[$i]}"
-            label="${token_labels[$i]}"
-            set +e
-            candidate="$(GH_TOKEN="$token" gh api \
-              --method GET \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$REPO/pulls?state=open&base=staging&head=${REPO%%/*}:develop&per_page=1" \
-              --jq '.[0].number' 2>/dev/null)"
-            rc=$?
-            set -e
-            if [ $rc -eq 0 ]; then
-              pr_number="$candidate"
-              break
-            fi
-            echo "Token ${label} cannot list PRs for ${REPO}."
-          done
-
-          if [ -z "$pr_number" ]; then
-            create_ok=0
-            for i in "${!token_values[@]}"; do
-              token="${token_values[$i]}"
-              label="${token_labels[$i]}"
-              set +e
-              create_output="$(GH_TOKEN="$token" gh api \
-                --method POST \
-                -H "Accept: application/vnd.github+json" \
-                "/repos/$REPO/pulls" \
-                -f title="chore: promote develop to staging" \
-                -f head="develop" \
-                -f base="staging" \
-                -f body="PR automatizado para promover cambios de develop a staging." \
-                --jq '.number' 2>&1)"
-              rc=$?
-              set -e
-              if [ $rc -eq 0 ]; then
-                create_ok=1
-                pr_number="$create_output"
-                echo "PR created with ${label}."
-                break
-              fi
-              echo "Token ${label} failed to create PR: ${create_output}"
-            done
-
-            if [ "$create_ok" -ne 1 ]; then
-              echo "Unable to create PR with available tokens."
-              echo "Required: token with repo access and Pull requests: write on ${REPO}."
-              exit 1
-            fi
-
-            for i in "${!token_values[@]}"; do
-              token="${token_values[$i]}"
-              set +e
-              pr_number="$(GH_TOKEN="$token" gh api \
-                --method GET \
-                -H "Accept: application/vnd.github+json" \
-                "/repos/$REPO/pulls?state=open&base=staging&head=${REPO%%/*}:develop&per_page=1" \
-                --jq '.[0].number' 2>/dev/null)"
-              rc=$?
-              set -e
-              if [ $rc -eq 0 ] && [ -n "$pr_number" ]; then
-                break
-              fi
-              pr_number=""
-            done
-          fi
-
-          if [ -z "$pr_number" ]; then
-            echo "PR was created/found but PR number could not be resolved."
-            exit 1
-          fi
-
-          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-
-      - name: Approve and merge PR develop -> staging
-        if: steps.pr.outputs.pr_number != ''
-        env:
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
-          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          REVIEW_TOKEN: ${{ secrets.RELEASE_REVIEW_TOKEN }}
-          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
-        run: |
-          set -euo pipefail
-          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-}}"
-          if [ -z "${bot_token:-}" ]; then
-            echo "Missing RELEASE_BOT_TOKEN/RULESET_ADMIN_TOKEN secret"
-            exit 1
-          fi
-
-          review_token="${REVIEW_TOKEN:-$bot_token}"
-
-          state="$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json state --jq .state)"
-          if [ "$state" = "MERGED" ]; then
-            echo "PR #$PR_NUMBER is already merged"
-            exit 0
-          fi
-
-          GH_TOKEN="$review_token" gh pr review "$PR_NUMBER" --repo "$REPO" --approve || true
-
-          if ! GH_TOKEN="$bot_token" gh pr merge "$PR_NUMBER" --repo "$REPO" --merge --delete-branch=false; then
-            if ! GH_TOKEN="$bot_token" gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --merge --delete-branch=false; then
-              GH_TOKEN="$bot_token" gh pr merge "$PR_NUMBER" --repo "$REPO" --admin --merge --delete-branch=false
-            fi
-          fi
-
-          for _ in $(seq 1 30); do
-            state="$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json state --jq .state)"
-            if [ "$state" = "MERGED" ]; then
-              echo "PR #$PR_NUMBER merged"
-              exit 0
-            fi
-            sleep 10
-          done
-
-          echo "PR #$PR_NUMBER was not merged after waiting."
-          exit 1
-
-  stage-release-main:
-    if: github.ref_name == 'staging'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Calculate semantic release version
-        id: semver
-        run: |
-          set -euo pipefail
-          git fetch origin --prune
-
-          commit_count="$(git rev-list --count origin/main..origin/staging)"
-          if [ "$commit_count" -eq 0 ]; then
-            echo "No new commits from staging to main."
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          subjects="$(git log --format=%s origin/main..origin/staging)"
-          bodies="$(git log --format=%B origin/main..origin/staging)"
-
-          bump="patch"
-          if echo "$subjects" | grep -Eqi '^[a-z]+(\([^)]+\))?!:' || echo "$bodies" | grep -Eqi 'BREAKING[ -]CHANGE'; then
-            bump="major"
-          elif echo "$subjects" | grep -Eqi '^feat(\([^)]+\))?:'; then
-            bump="minor"
-          fi
-
-          base_version="$(python - <<'PY'
-          import subprocess
+          version="$(python3 - <<'PY'
           import tomllib
+          from pathlib import Path
 
-          raw = subprocess.check_output(
-              ["git", "show", "origin/main:pyproject.toml"], text=True
-          )
-          data = tomllib.loads(raw)
-
-          version = (data.get("project") or {}).get("version")
+          data = tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))
+          version = (data.get('project') or {}).get('version')
           if version is None:
-              version = ((data.get("tool") or {}).get("poetry") or {}).get("version")
+              version = ((data.get('tool') or {}).get('poetry') or {}).get('version')
           if not version:
-              raise SystemExit(
-                  "Could not resolve version from [project].version or [tool.poetry].version in origin/main:pyproject.toml"
-              )
-
+              raise SystemExit('Could not resolve version from pyproject.toml')
           print(version)
           PY
           )"
 
-          next_version="$(python - "$base_version" "$bump" <<'PY'
-          import sys
-          base, bump = sys.argv[1], sys.argv[2]
-          major, minor, patch = map(int, base.split("."))
-          if bump == "major":
-              major += 1
-              minor = 0
-              patch = 0
-          elif bump == "minor":
-              minor += 1
-              patch = 0
-          else:
-              patch += 1
-          print(f"{major}.{minor}.{patch}")
-          PY
-          )"
-
-          echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          echo "bump=$bump" >> "$GITHUB_OUTPUT"
-          echo "base_version=$base_version" >> "$GITHUB_OUTPUT"
-          echo "next_version=$next_version" >> "$GITHUB_OUTPUT"
-          echo "Detected bump=$bump base=$base_version next=$next_version"
-
-      - name: Create release branch from staging and bump version
-        id: release
-        if: steps.semver.outputs.has_changes == 'true'
-        env:
-          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
-          NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
-        run: |
-          set -euo pipefail
-          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-}}"
-          if [ -z "${bot_token:-}" ]; then
-            echo "Missing RELEASE_BOT_TOKEN/RULESET_ADMIN_TOKEN secret"
-            exit 1
-          fi
-
-          git remote set-url origin "https://x-access-token:${bot_token}@github.com/${GITHUB_REPOSITORY}.git"
-          git config user.name "release-bot"
-          git config user.email "release-bot@users.noreply.github.com"
-          git fetch origin --prune
-
-          release_branch="release/v${NEXT_VERSION}"
-          if git ls-remote --exit-code --heads origin "$release_branch" >/dev/null 2>&1; then
-            release_branch="${release_branch}-$(date -u +%Y%m%d%H%M%S)"
-          fi
-
-          git checkout -B "$release_branch" origin/staging
-
-          python - "$NEXT_VERSION" <<'PY'
-          import re
-          import sys
-          from pathlib import Path
-
-          version = sys.argv[1]
-
-          def replace_one(path, pattern, replacement):
-              p = Path(path)
-              text = p.read_text(encoding="utf-8")
-              new_text, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
-              if count != 1:
-                  raise SystemExit(f"Could not update version in {path}")
-              p.write_text(new_text, encoding="utf-8")
-
-          replace_one("pyproject.toml", r'^version\s*=\s*"[^"]+"\s*$', f'version = "{version}"')
-          replace_one("src/wsbuilder/__init__.py", r'^__version__\s*=\s*"[^"]+"\s*$', f'__version__ = "{version}"')
-          PY
-
-          if ! git diff --quiet -- pyproject.toml src/wsbuilder/__init__.py; then
-            git add pyproject.toml src/wsbuilder/__init__.py
-            git commit -m "chore(release): v${NEXT_VERSION}"
-          fi
-
-          git push origin "$release_branch"
-
-          echo "release_branch=$release_branch" >> "$GITHUB_OUTPUT"
-          echo "Created $release_branch for v${NEXT_VERSION}"
-
-      - name: Build release packages
-        if: steps.semver.outputs.has_changes == 'true'
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install build twine
-          python -m build
-          python -m twine check dist/*
-
-      - name: Upload release package artifacts
-        if: steps.semver.outputs.has_changes == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-dist-${{ github.run_id }}
-          path: dist/*
-          if-no-files-found: error
-
-      - name: Create or reuse PR release -> main
-        id: pr
-        if: steps.semver.outputs.has_changes == 'true'
-        env:
-          REPO: ${{ github.repository }}
-          RELEASE_BRANCH: ${{ steps.release.outputs.release_branch }}
-          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          ACTIONS_TOKEN: ${{ github.token }}
-          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
-        run: |
-          set -euo pipefail
-          declare -a token_labels=()
-          declare -a token_values=()
-
-          if [ -n "${BOT_TOKEN:-}" ]; then
-            token_labels+=("RELEASE_BOT_TOKEN")
-            token_values+=("$BOT_TOKEN")
-          fi
-          if [ -n "${ACTIONS_TOKEN:-}" ]; then
-            token_labels+=("GITHUB_TOKEN")
-            token_values+=("$ACTIONS_TOKEN")
-          fi
-          if [ -n "${RULESET_TOKEN:-}" ]; then
-            token_labels+=("RULESET_ADMIN_TOKEN")
-            token_values+=("$RULESET_TOKEN")
-          fi
-
-          if [ "${#token_values[@]}" -eq 0 ]; then
-            echo "No token available for PR operations."
-            exit 1
-          fi
-
-          git fetch origin "$RELEASE_BRANCH" main
-
-          if [ "$(git rev-parse "origin/$RELEASE_BRANCH")" = "$(git rev-parse origin/main)" ]; then
-            echo "No pending commits from $RELEASE_BRANCH to main"
-            echo "pr_number=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          pr_number=""
-          for i in "${!token_values[@]}"; do
-            token="${token_values[$i]}"
-            label="${token_labels[$i]}"
-            set +e
-            candidate="$(GH_TOKEN="$token" gh api \
-              --method GET \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$REPO/pulls?state=open&base=main&head=${REPO%%/*}:${RELEASE_BRANCH}&per_page=1" \
-              --jq '.[0].number' 2>/dev/null)"
-            rc=$?
-            set -e
-            if [ $rc -eq 0 ]; then
-              pr_number="$candidate"
-              break
-            fi
-            echo "Token ${label} cannot list PRs for ${REPO}."
-          done
-
-          if [ -z "$pr_number" ]; then
-            create_ok=0
-            for i in "${!token_values[@]}"; do
-              token="${token_values[$i]}"
-              label="${token_labels[$i]}"
-              set +e
-              create_output="$(GH_TOKEN="$token" gh api \
-                --method POST \
-                -H "Accept: application/vnd.github+json" \
-                "/repos/$REPO/pulls" \
-                -f title="release: promote $RELEASE_BRANCH to main" \
-                -f head="$RELEASE_BRANCH" \
-                -f base="main" \
-                -f body="PR automatizado para promover $RELEASE_BRANCH a main." \
-                --jq '.number' 2>&1)"
-              rc=$?
-              set -e
-              if [ $rc -eq 0 ]; then
-                create_ok=1
-                pr_number="$create_output"
-                echo "PR created with ${label}."
-                break
-              fi
-              echo "Token ${label} failed to create PR: ${create_output}"
-            done
-
-            if [ "$create_ok" -ne 1 ]; then
-              echo "Unable to create PR with available tokens."
-              echo "Required: token with repo access and Pull requests: write on ${REPO}."
-              exit 1
-            fi
-
-            for i in "${!token_values[@]}"; do
-              token="${token_values[$i]}"
-              set +e
-              pr_number="$(GH_TOKEN="$token" gh api \
-                --method GET \
-                -H "Accept: application/vnd.github+json" \
-                "/repos/$REPO/pulls?state=open&base=main&head=${REPO%%/*}:${RELEASE_BRANCH}&per_page=1" \
-                --jq '.[0].number' 2>/dev/null)"
-              rc=$?
-              set -e
-              if [ $rc -eq 0 ] && [ -n "$pr_number" ]; then
-                break
-              fi
-              pr_number=""
-            done
-          fi
-
-          if [ -z "$pr_number" ]; then
-            echo "PR was created/found but PR number could not be resolved."
-            exit 1
-          fi
-
-          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-
-      - name: Approve and merge PR release -> main
-        if: steps.pr.outputs.pr_number != ''
-        env:
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
-          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          REVIEW_TOKEN: ${{ secrets.RELEASE_REVIEW_TOKEN }}
-          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
-        run: |
-          set -euo pipefail
-          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-}}"
-          if [ -z "${bot_token:-}" ]; then
-            echo "Missing RELEASE_BOT_TOKEN/RULESET_ADMIN_TOKEN secret"
-            exit 1
-          fi
-
-          review_token="${REVIEW_TOKEN:-$bot_token}"
-
-          state="$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json state --jq .state)"
-          if [ "$state" = "MERGED" ]; then
-            echo "PR #$PR_NUMBER is already merged"
-            exit 0
-          fi
-
-          GH_TOKEN="$review_token" gh pr review "$PR_NUMBER" --repo "$REPO" --approve || true
-
-          if ! GH_TOKEN="$bot_token" gh pr merge "$PR_NUMBER" --repo "$REPO" --merge --delete-branch=false; then
-            if ! GH_TOKEN="$bot_token" gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --merge --delete-branch=false; then
-              GH_TOKEN="$bot_token" gh pr merge "$PR_NUMBER" --repo "$REPO" --admin --merge --delete-branch=false
-            fi
-          fi
-
-          for _ in $(seq 1 30); do
-            state="$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json state --jq .state)"
-            if [ "$state" = "MERGED" ]; then
-              echo "PR #$PR_NUMBER merged"
-              exit 0
-            fi
-            sleep 10
-          done
-
-          echo "PR #$PR_NUMBER was not merged after waiting."
-          exit 1
-
-      - name: Create semantic tag on main
-        if: steps.pr.outputs.pr_number != ''
-        env:
-          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
-          NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
-        run: |
-          set -euo pipefail
-          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-}}"
-          if [ -z "${bot_token:-}" ]; then
-            echo "Missing RELEASE_BOT_TOKEN/RULESET_ADMIN_TOKEN secret"
-            exit 1
-          fi
-
-          tag="v${NEXT_VERSION}"
-          git remote set-url origin "https://x-access-token:${bot_token}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch origin main --tags
+          tag="v${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "branch=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "Tag ${tag} already exists. Skipping."
-            exit 0
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Create tag
+        if: steps.meta.outputs.tag_exists != 'true'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch origin main --tags
           git checkout -B main origin/main
-          git tag -a "$tag" -m "Release $tag"
-          git push origin "$tag"
-          echo "Created tag $tag"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          BRANCH: ${{ steps.meta.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          notes_file="$(mktemp)"
+          {
+            echo "## Release automática"
+            echo
+            echo "- Rama: ${BRANCH}"
+            echo "- Tag: ${TAG}"
+            echo "- Versión: ${VERSION}"
+            echo "- Commit: ${GITHUB_SHA}"
+          } > "$notes_file"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "Release ${TAG}" --notes-file "$notes_file"
+          else
+            gh release create "$TAG" --target main --title "Release ${TAG}" --notes-file "$notes_file"
+          fi

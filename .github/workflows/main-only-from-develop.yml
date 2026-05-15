@@ -18,11 +18,14 @@ jobs:
           set -euo pipefail
           echo "base=${{ github.base_ref }} head=${{ github.head_ref }}"
           case "${{ github.head_ref }}" in
+            staging)
+              echo "OK: main acepta PR desde staging"
+              ;;
             release/*)
               echo "OK: main acepta PR desde release/*"
               ;;
             *)
-              echo "ERROR: main solo acepta PR desde release/*"
+              echo "ERROR: main solo acepta PR desde release/* o staging"
               exit 1
               ;;
           esac
