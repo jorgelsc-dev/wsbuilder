@@ -231,10 +231,24 @@ jobs:
             bump="minor"
           fi
 
-          base_version="$(git show origin/main:pyproject.toml | python - <<'PY'
-          import sys, tomllib
-          data = tomllib.loads(sys.stdin.read())
-          print(data["project"]["version"])
+          base_version="$(python - <<'PY'
+          import subprocess
+          import tomllib
+
+          raw = subprocess.check_output(
+              ["git", "show", "origin/main:pyproject.toml"], text=True
+          )
+          data = tomllib.loads(raw)
+
+          version = (data.get("project") or {}).get("version")
+          if version is None:
+              version = ((data.get("tool") or {}).get("poetry") or {}).get("version")
+          if not version:
+              raise SystemExit(
+                  "Could not resolve version from [project].version or [tool.poetry].version in origin/main:pyproject.toml"
+              )
+
+          print(version)
           PY
           )"
 
