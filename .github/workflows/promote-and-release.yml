@@ -80,7 +80,11 @@ jobs:
             token="${token_values[$i]}"
             label="${token_labels[$i]}"
             set +e
-            candidate="$(GH_TOKEN="$token" gh pr list --repo "$REPO" --base staging --head develop --state open --json number --jq '.[0].number' 2>/dev/null)"
+            candidate="$(GH_TOKEN="$token" gh api \
+              --method GET \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPO/pulls?state=open&base=staging&head=${REPO%%/*}:develop&per_page=1" \
+              --jq '.[0].number' 2>/dev/null)"
             rc=$?
             set -e
             if [ $rc -eq 0 ]; then
@@ -96,16 +100,20 @@ jobs:
               token="${token_values[$i]}"
               label="${token_labels[$i]}"
               set +e
-              create_output="$(GH_TOKEN="$token" gh pr create \
-                --repo "$REPO" \
-                --base staging \
-                --head develop \
-                --title "chore: promote develop to staging" \
-                --body "PR automatizado para promover cambios de develop a staging." 2>&1)"
+              create_output="$(GH_TOKEN="$token" gh api \
+                --method POST \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/$REPO/pulls" \
+                -f title="chore: promote develop to staging" \
+                -f head="develop" \
+                -f base="staging" \
+                -f body="PR automatizado para promover cambios de develop a staging." \
+                --jq '.number' 2>&1)"
               rc=$?
               set -e
               if [ $rc -eq 0 ]; then
                 create_ok=1
+                pr_number="$create_output"
                 echo "PR created with ${label}."
                 break
               fi
@@ -121,7 +129,11 @@ jobs:
             for i in "${!token_values[@]}"; do
               token="${token_values[$i]}"
               set +e
-              pr_number="$(GH_TOKEN="$token" gh pr list --repo "$REPO" --base staging --head develop --state open --json number --jq '.[0].number' 2>/dev/null)"
+              pr_number="$(GH_TOKEN="$token" gh api \
+                --method GET \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/$REPO/pulls?state=open&base=staging&head=${REPO%%/*}:develop&per_page=1" \
+                --jq '.[0].number' 2>/dev/null)"
               rc=$?
               set -e
               if [ $rc -eq 0 ] && [ -n "$pr_number" ]; then
@@ -366,7 +378,11 @@ jobs:
             token="${token_values[$i]}"
             label="${token_labels[$i]}"
             set +e
-            candidate="$(GH_TOKEN="$token" gh pr list --repo "$REPO" --base main --head "$RELEASE_BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null)"
+            candidate="$(GH_TOKEN="$token" gh api \
+              --method GET \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPO/pulls?state=open&base=main&head=${REPO%%/*}:${RELEASE_BRANCH}&per_page=1" \
+              --jq '.[0].number' 2>/dev/null)"
             rc=$?
             set -e
             if [ $rc -eq 0 ]; then
@@ -382,16 +398,20 @@ jobs:
               token="${token_values[$i]}"
               label="${token_labels[$i]}"
               set +e
-              create_output="$(GH_TOKEN="$token" gh pr create \
-                --repo "$REPO" \
-                --base main \
-                --head "$RELEASE_BRANCH" \
-                --title "release: promote $RELEASE_BRANCH to main" \
-                --body "PR automatizado para promover $RELEASE_BRANCH a main." 2>&1)"
+              create_output="$(GH_TOKEN="$token" gh api \
+                --method POST \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/$REPO/pulls" \
+                -f title="release: promote $RELEASE_BRANCH to main" \
+                -f head="$RELEASE_BRANCH" \
+                -f base="main" \
+                -f body="PR automatizado para promover $RELEASE_BRANCH a main." \
+                --jq '.number' 2>&1)"
               rc=$?
               set -e
               if [ $rc -eq 0 ]; then
                 create_ok=1
+                pr_number="$create_output"
                 echo "PR created with ${label}."
                 break
               fi
@@ -407,7 +427,11 @@ jobs:
             for i in "${!token_values[@]}"; do
               token="${token_values[$i]}"
               set +e
-              pr_number="$(GH_TOKEN="$token" gh pr list --repo "$REPO" --base main --head "$RELEASE_BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null)"
+              pr_number="$(GH_TOKEN="$token" gh api \
+                --method GET \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/$REPO/pulls?state=open&base=main&head=${REPO%%/*}:${RELEASE_BRANCH}&per_page=1" \
+                --jq '.[0].number' 2>/dev/null)"
               rc=$?
               set -e
               if [ $rc -eq 0 ] && [ -n "$pr_number" ]; then
