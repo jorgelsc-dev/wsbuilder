@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: wsbuilder
+Version: 0.1.0
+Summary: Framework ligero HTTP + WebSocket extraido de PortHound4.
+Author: wsbuilder Authors
+License-Expression: MIT
+Keywords: websocket,http,framework,server,python
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
 # wsbuilder
 
 `wsbuilder` es un paquete Python extraido de `PortHound4` para construir servidores HTTP + WebSocket sin dependencias externas.
@@ -51,12 +67,6 @@ def ws_handler(ws, _request):
 app.run("0.0.0.0", 8765)
 ```
 
-Para CORS sin variables de entorno:
-
-```python
-app = App(cors_allow_origin="*")
-```
-
 ## HTTP streaming (chunked)
 
 ```python
@@ -82,10 +92,10 @@ python -m wsbuilder --host 0.0.0.0 --port 8765
 wsbuilder --host 0.0.0.0 --port 8765
 ```
 
-## Configuracion CORS
+## Variables de entorno
 
-- Usa `App(cors_allow_origin="https://tu-dominio.com")`.
-- Usa `App(cors_allow_origin="*")` para permitir cualquier origen.
+- `WSBUILDER_CORS_ALLOW_ORIGIN`: valor CORS para rutas `@app.api`.
+- Compatibilidad heredada: tambien respeta `PORTHOUND_CORS_ALLOW_ORIGIN`.
 
 ## CI/CD (GitHub Actions)
 
