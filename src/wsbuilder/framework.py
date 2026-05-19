@@ -3,6 +3,7 @@
 from .app import App, Route, Router
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN, MAGIC_WS, STATUS_MESSAGES
 from .http import Request, Response, parse_http_request, parse_query_string, send_http_response
+from .metrics import AppMetrics, install_metrics
 from .server import HTTPServer
 from .ws import (
     B64_ALPHABET,
@@ -22,6 +23,8 @@ __all__ = [
     "HTTPServer",
     "Request",
     "Response",
+    "AppMetrics",
+    "install_metrics",
     "Route",
     "Router",
     "WebSocket",
@@ -41,4 +44,3 @@ __all__ = [
     "send_http_response",
     "sha1",
 ]
-

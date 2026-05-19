@@ -1,6 +1,7 @@
 import socket
 import ssl
-from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 
 from .http import Request, Response, parse_http_request, send_http_response
 from .ws import handshake_websocket, is_ws_request, recv_exact
@@ -32,15 +33,19 @@ class HTTPServer:
         self._sock = s
         scheme = "https" if self.ssl_context else "http"
         print(f"Server listening on {scheme}://{self.host}:{self.port}/")
+        worker_limiter = threading.BoundedSemaphore(self.MAX_CONNECTION_WORKERS)
         interrupted = False
         try:
-            with ThreadPoolExecutor(
-                max_workers=self.MAX_CONNECTION_WORKERS,
-                thread_name_prefix="framework-http",
-            ) as pool:
-                while True:
-                    conn, addr = s.accept()
-                    pool.submit(self.handle_conn, conn, addr)
+            while True:
+                conn, addr = s.accept()
+                worker_limiter.acquire()
+                t = threading.Thread(
+                    target=self._handle_conn_with_release,
+                    args=(conn, addr, worker_limiter),
+                    name=f"framework-http-{addr[0]}:{addr[1]}",
+                    daemon=True,
+                )
+                t.start()
         except KeyboardInterrupt:
             interrupted = True
             print("\n[shutdown] interrupted by user (Ctrl+C). stopping server...")
@@ -49,7 +54,19 @@ class HTTPServer:
             if interrupted:
                 print("[shutdown] server stopped.")
 
+    def _handle_conn_with_release(self, conn, addr, limiter):
+        metrics = getattr(self.app, "metrics", None)
+        if metrics:
+            metrics.tcp_connection_open()
+        try:
+            self.handle_conn(conn, addr)
+        finally:
+            if metrics:
+                metrics.tcp_connection_close()
+            limiter.release()
+
     def handle_conn(self, conn, addr):
+        metrics = getattr(self.app, "metrics", None)
         tls_meta = {
             "enabled": bool(self.ssl_context),
             "peer_cert": None,
@@ -120,6 +137,7 @@ class HTTPServer:
 
             raw_path = req["path"]
             path, _, query = raw_path.partition("?")
+            started = time.time()
 
             request = Request(
                 method=req["method"],
@@ -130,21 +148,85 @@ class HTTPServer:
                 client=addr,
                 tls=tls_meta,
             )
+            if metrics:
+                metrics.http_request_started(
+                    request.method,
+                    request.path,
+                    body_size=len(request.body),
+                )
 
             if is_ws_request(headers):
                 handler = self.app.ws_routes.get(path)
                 if not handler:
-                    send_http_response(conn, Response.text("Not Found", status=404))
+                    response = Response.text("Not Found", status=404)
+                    send_http_response(conn, response)
+                    if metrics:
+                        elapsed = (time.time() - started) * 1000.0
+                        metrics.http_response_sent(
+                            request.method,
+                            request.path,
+                            response.status,
+                            body_size=len(response.body),
+                            duration_ms=elapsed,
+                        )
                     return
                 ws = handshake_websocket(conn, addr, headers)
                 if not ws:
+                    if metrics:
+                        elapsed = (time.time() - started) * 1000.0
+                        metrics.error("ws_handshake", "failed")
+                        metrics.http_response_sent(
+                            request.method,
+                            request.path,
+                            400,
+                            body_size=0,
+                            duration_ms=elapsed,
+                        )
                     return
+                if metrics:
+                    metrics.ws_opened(path)
+                    elapsed = (time.time() - started) * 1000.0
+                    metrics.http_response_sent(
+                        request.method,
+                        request.path,
+                        101,
+                        body_size=0,
+                        duration_ms=elapsed,
+                    )
                 try:
                     handler(ws, request)
                 except Exception as e:
                     print(f"[ws] error: {e}")
+                    if metrics:
+                        metrics.error("ws_handler", e)
+                finally:
+                    if metrics:
+                        metrics.ws_closed(path)
                 return
 
-            response = self.app.dispatch(request)
-            send_http_response(conn, response)
+            try:
+                response = self.app.dispatch(request)
+            except Exception as e:
+                if metrics:
+                    elapsed = (time.time() - started) * 1000.0
+                    metrics.error("http_dispatch", e)
+                    metrics.http_response_sent(
+                        request.method,
+                        request.path,
+                        500,
+                        body_size=0,
+                        duration_ms=elapsed,
+                    )
+                raise
 
+            send_http_response(conn, response)
+            if metrics:
+                elapsed = (time.time() - started) * 1000.0
+                body_size = 0 if response.is_stream else len(response.body)
+                metrics.http_response_sent(
+                    request.method,
+                    request.path,
+                    response.status,
+                    body_size=body_size,
+                    duration_ms=elapsed,
+                )
