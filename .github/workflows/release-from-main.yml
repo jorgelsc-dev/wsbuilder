@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -192,11 +192,10 @@ jobs:
               p.write_text(new_text, encoding="utf-8")
 
           replace_one("pyproject.toml", r'^version\s*=\s*"[^"]+"\s*$', f'version = "{version}"')
-          replace_one("src/wsbuilder/__init__.py", r'^__version__\s*=\s*"[^"]+"\s*$', f'__version__ = "{version}"')
           PY
 
-          if ! git diff --quiet -- pyproject.toml src/wsbuilder/__init__.py; then
-            git add pyproject.toml src/wsbuilder/__init__.py
+          if ! git diff --quiet -- pyproject.toml; then
+            git add pyproject.toml
             git commit -m "chore(release): v${NEXT_VERSION}"
           fi
 
@@ -238,7 +237,7 @@ jobs:
       - name: Create GitHub Release
         if: steps.semver.outputs.has_changes == 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.RULESET_ADMIN_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
           RELEASE_BRANCH: ${{ steps.release.outputs.release_branch }}
         run: |

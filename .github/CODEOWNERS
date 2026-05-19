@@ -1,2 +1,4 @@
 * @jorgelsc-dev
-/.github/CODEOWNERS @jorgelsc-dev
+/frontend/ @jorgelsc-dev
+/docs/ @jorgelsc-dev
+/.github/ @jorgelsc-dev
