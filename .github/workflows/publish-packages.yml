@@ -68,7 +68,17 @@ jobs:
           name: dist-publish-${{ github.run_id }}
           path: dist
 
-      - name: Publish to TestPyPI (Trusted Publishing)
+      - name: Publish to TestPyPI (API token)
+        if: ${{ secrets.TEST_PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+      - name: Publish to TestPyPI (Trusted Publishing fallback)
+        if: ${{ secrets.TEST_PYPI_API_TOKEN == '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -87,7 +97,16 @@ jobs:
           name: dist-publish-${{ github.run_id }}
           path: dist
 
-      - name: Publish to PyPI (Trusted Publishing)
+      - name: Publish to PyPI (API token)
+        if: ${{ secrets.PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+      - name: Publish to PyPI (Trusted Publishing fallback)
+        if: ${{ secrets.PYPI_API_TOKEN == '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
