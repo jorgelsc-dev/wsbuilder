@@ -1,43 +1,17 @@
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "05:00"
-      timezone: "UTC"
-    commit-message:
-      prefix: "chore(deps)"
-    labels:
-      - "dependencies"
-      - "github-actions"
-    open-pull-requests-limit: 10
-
   - package-ecosystem: "pip"
     directory: "/"
+    target-branch: "develop"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "05:15"
-      timezone: "UTC"
-    commit-message:
-      prefix: "chore(deps)"
-    labels:
-      - "dependencies"
-      - "python"
+      interval: "cron"
+      cronjob: "*/30 * * * *"
     open-pull-requests-limit: 10
 
-  - package-ecosystem: "npm"
-    directory: "/frontend"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "develop"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "05:30"
-      timezone: "UTC"
-    commit-message:
-      prefix: "chore(deps)"
-    labels:
-      - "dependencies"
-      - "frontend"
+      interval: "cron"
+      cronjob: "*/30 * * * *"
     open-pull-requests-limit: 10

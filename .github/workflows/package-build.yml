@@ -4,10 +4,14 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - develop
+      - staging
       - main
       - "release/*"
   pull_request:
     branches:
+      - develop
+      - staging
       - main
 
 permissions:
@@ -21,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
@@ -39,7 +43,7 @@ jobs:
       - name: Smoke test install
         run: |
           python -m pip install dist/*.whl
-          python -c "import manage; print('porthound4', hasattr(manage, 'main'))"
+          python -c "import wsbuilder; print('wsbuilder', wsbuilder.__version__)"
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4

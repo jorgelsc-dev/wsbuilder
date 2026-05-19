@@ -3,7 +3,7 @@ name: sync-rulesets
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [develop, main]
     paths:
       - ".github/rulesets/*.json"
       - ".github/workflows/sync-rulesets.yml"
