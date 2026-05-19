@@ -32,6 +32,7 @@ class App:
         self.ws_routes = {}
         self.startup_hooks = []
         self.cors_allow_origin = (cors_allow_origin or "").strip()
+        self.metrics = None
 
     def route(self, path, methods=("GET",), kind="plain"):
         def decorator(func):
@@ -55,6 +56,21 @@ class App:
 
     def add_startup(self, func):
         self.startup_hooks.append(func)
+
+    def enable_metrics(
+        self,
+        path="/api/metrics",
+        stream_path="/api/metrics/stream",
+        app_name=None,
+    ):
+        from .metrics import install_metrics
+
+        return install_metrics(
+            self,
+            path=path,
+            stream_path=stream_path,
+            app_name=app_name,
+        )
 
     def dispatch(self, request):
         cors_allow_origin = self.cors_allow_origin

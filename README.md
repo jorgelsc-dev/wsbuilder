@@ -9,6 +9,7 @@ Lightweight Python HTTP + WebSocket framework for building real-time APIs and cu
 ## Incluye
 
 - `wsbuilder.framework`: router, request/response, servidor HTTP, handshake WS y utilidades de frames.
+- `wsbuilder.orm`: ORM flexible para SQLite3 (modelos, QuerySet, filtros, transacciones anidadas).
 - `wsbuilder.ws_demo`: demo completo HTTP + WebSocket + REST + SQLite.
 
 ## Instalacion local
@@ -55,6 +56,47 @@ Para CORS sin variables de entorno:
 
 ```python
 app = App(cors_allow_origin="*")
+```
+
+## ORM SQLite3 rapido
+
+```python
+from wsbuilder import Database, IntegerField, Model, TextField
+
+class User(Model):
+    id = IntegerField(primary_key=True, auto_increment=True)
+    username = TextField(unique=True, index=True, null=False)
+    email = TextField(null=False)
+
+db = Database("app.db")
+User.create_table(db)
+
+u = User(username="alice", email="alice@example.com")
+u.save(db)
+
+admins = User.objects(db).filter(username__contains="ali").order_by("-id").all()
+print([x.to_dict() for x in admins])
+```
+
+## Metrics (JSON stream)
+
+```python
+from wsbuilder import App
+
+app = App()
+app.enable_metrics()  # crea /api/metrics y /api/metrics/stream
+```
+
+Probar snapshot:
+
+```bash
+curl http://127.0.0.1:8765/api/metrics
+```
+
+Probar stream NDJSON:
+
+```bash
+curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&limit=5"
 ```
 
 ## HTTP streaming (chunked)
