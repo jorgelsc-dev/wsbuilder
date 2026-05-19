@@ -336,6 +336,15 @@ INDEX_HTML = """<!doctype html>
   </fieldset>
 
   <fieldset>
+    <legend>Métricas en vivo</legend>
+    <button id="metrics_snapshot">Snapshot metrics</button>
+    <button id="metrics_stream_once">Stream x5</button>
+    <button id="metrics_stream_live">Stream continuo</button>
+    <button id="metrics_stream_stop">Detener stream</button>
+    <pre id="metrics_box">{}</pre>
+  </fieldset>
+
+  <fieldset>
     <legend>Cerrar conexión desde servidor</legend>
     <div>
       <label>Seleccionar cliente:
@@ -389,6 +398,7 @@ INDEX_HTML = """<!doctype html>
 
 <script>
 let ws = null;
+let metricsAbortController = null;
 
 function addMsg(s){
   const ul = document.getElementById('messages');
@@ -583,6 +593,110 @@ document.getElementById('server_chat_list').onclick = () =>
 
 document.getElementById('server_chat_clear').onclick = () =>
   callApi('/api/chat/clear', 'POST', {});
+
+function stopMetricsStream(){
+  if(metricsAbortController){
+    metricsAbortController.abort();
+    metricsAbortController = null;
+  }
+}
+
+async function startMetricsStream(url){
+  stopMetricsStream();
+  const pre = document.getElementById('metrics_box');
+  if(pre) pre.textContent = '[metrics] conectando...';
+
+  const ctrl = new AbortController();
+  metricsAbortController = ctrl;
+
+  try{
+    const r = await fetch(url, {
+      method: 'GET',
+      signal: ctrl.signal,
+      headers: {
+        'Accept': 'application/x-ndjson'
+      }
+    });
+    if(!r.ok){
+      const txt = await r.text();
+      if(pre) pre.textContent = txt || ('HTTP ' + r.status);
+      addMsg('[METRICS] error HTTP ' + r.status);
+      return;
+    }
+    if(!r.body){
+      if(pre) pre.textContent = '[metrics] stream sin body';
+      addMsg('[METRICS] stream sin body');
+      return;
+    }
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let count = 0;
+
+    while(true){
+      const part = await reader.read();
+      if(part.done){
+        break;
+      }
+      buffer += decoder.decode(part.value, {stream:true});
+
+      let idx = buffer.indexOf('\\n');
+      while(idx >= 0){
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if(line){
+          count++;
+          try{
+            const obj = JSON.parse(line);
+            if(pre) pre.textContent = JSON.stringify(obj, null, 2);
+          }catch(e){
+            if(pre) pre.textContent = line;
+          }
+        }
+        idx = buffer.indexOf('\\n');
+      }
+    }
+    addMsg('[METRICS] stream finalizado (' + count + ' eventos)');
+  }catch(e){
+    if(ctrl.signal.aborted){
+      addMsg('[METRICS] stream detenido por usuario');
+    }else{
+      addMsg('[METRICS] stream error: ' + e);
+      if(pre) pre.textContent = String(e);
+    }
+  }finally{
+    if(metricsAbortController === ctrl){
+      metricsAbortController = null;
+    }
+  }
+}
+
+document.getElementById('metrics_snapshot').onclick = async () => {
+  try{
+    const r = await fetch('/api/metrics');
+    const txt = await r.text();
+    const pre = document.getElementById('metrics_box');
+    try{
+      const jd = JSON.parse(txt);
+      if(pre) pre.textContent = JSON.stringify(jd, null, 2);
+    }catch(e){
+      if(pre) pre.textContent = txt;
+    }
+    addMsg('[METRICS] snapshot HTTP ' + r.status);
+  }catch(e){
+    addMsg('[METRICS] snapshot error: ' + e);
+  }
+};
+
+document.getElementById('metrics_stream_once').onclick = () =>
+  startMetricsStream('/api/metrics/stream?interval=1&limit=5');
+
+document.getElementById('metrics_stream_live').onclick = () =>
+  startMetricsStream('/api/metrics/stream?interval=1&follow=1');
+
+document.getElementById('metrics_stream_stop').onclick = () =>
+  stopMetricsStream();
 
 // ----- Chat UI -----
 document.getElementById('chat_save_alias').onclick = function(){
