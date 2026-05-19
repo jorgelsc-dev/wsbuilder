@@ -7,6 +7,7 @@ on:
       - main
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -23,7 +24,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -255,3 +256,14 @@ jobs:
             --title "$tag" \
             --generate-notes
           echo "Created GitHub Release $tag"
+
+      - name: Trigger package publishing workflow on new tag
+        if: steps.semver.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          tag="v${NEXT_VERSION}"
+          gh workflow run publish-packages.yml --ref "$tag"
+          echo "Triggered publish-packages.yml for $tag"
