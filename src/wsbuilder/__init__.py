@@ -1,4 +1,4 @@
-"""wsbuilder: mini framework HTTP + WebSocket extraido de PortHound4."""
+"""wsbuilder: mini framework HTTP + WebSocket."""
 
 from .framework import (
     App,
