@@ -1,3 +1,0 @@
-[console_scripts]
-wsbuilder = wsbuilder.__main__:main
-wsbuilder-demo = wsbuilder.__main__:main

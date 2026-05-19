@@ -3,26 +3,43 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wsbuilder"
+name = "porthound4"
 version = "0.1.0"
-description = "Framework ligero HTTP + WebSocket extraido de PortHound4."
+description = "PortHound4 network scanner with master/agent orchestration."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
-license-files = ["LICENSE"]
-authors = [{ name = "wsbuilder Authors" }]
-keywords = ["websocket", "http", "framework", "server", "python"]
+license = { file = "LICENSE" }
+authors = [{ name = "PortHound4 Authors" }]
+keywords = ["network", "scanner", "security", "tcp", "udp", "banner"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
 ]
 
 [project.scripts]
-wsbuilder = "wsbuilder.__main__:main"
-wsbuilder-demo = "wsbuilder.__main__:main"
+porthound = "manage:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
-packages = ["wsbuilder"]
+py-modules = [
+  "agent",
+  "app",
+  "banner_rules",
+  "country_centroids",
+  "framework",
+  "geoip_seed",
+  "getDBNIC",
+  "manage",
+  "master",
+  "scan_payloads",
+  "server",
+  "settings",
+  "ws_demo",
+]
+include-package-data = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
