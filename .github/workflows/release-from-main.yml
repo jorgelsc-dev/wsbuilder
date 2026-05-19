@@ -238,7 +238,7 @@ jobs:
       - name: Create GitHub Release
         if: steps.semver.outputs.has_changes == 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.RULESET_ADMIN_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
           RELEASE_BRANCH: ${{ steps.release.outputs.release_branch }}
         run: |
