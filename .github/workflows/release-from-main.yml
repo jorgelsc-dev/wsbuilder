@@ -1,0 +1,257 @@
+name: release-from-main
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-from-main-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Calculate semantic version from main history
+        id: semver
+        run: |
+          set -euo pipefail
+          git fetch origin --prune --tags
+
+          target_ref="main"
+
+          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)"
+
+          if [ -n "${latest_tag:-}" ]; then
+            base_version="${latest_tag#v}"
+            range="${latest_tag}..origin/${target_ref}"
+          else
+            base_version="$(git show "origin/${target_ref}:pyproject.toml" | python - <<'PY'
+          import sys, tomllib
+          data = tomllib.loads(sys.stdin.read())
+          print(data["project"]["version"])
+          PY
+            )"
+            range="origin/${target_ref}"
+          fi
+
+          commit_count="$(git rev-list --count "$range")"
+          if [ "$commit_count" -eq 0 ]; then
+            echo "No commits to release since ${latest_tag:-repository start}."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          subjects_file="$(mktemp)"
+          bodies_file="$(mktemp)"
+          branches_file="$(mktemp)"
+
+          git log --format=%s "$range" > "$subjects_file"
+          git log --format=%B "$range" > "$bodies_file"
+          git log --format=%s "$range" \
+            | sed -nE "s/^Merge pull request #[0-9]+ from [^/]+\/([^ ]+).*$/\1/p" \
+            > "$branches_file"
+
+          calc="$(python - "$base_version" "$commit_count" "$subjects_file" "$bodies_file" "$branches_file" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          base_version = sys.argv[1]
+          commit_count = int(sys.argv[2])
+          subjects_path = Path(sys.argv[3])
+          bodies_path = Path(sys.argv[4])
+          branches_path = Path(sys.argv[5])
+
+          subjects = [line.strip() for line in subjects_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+          bodies = bodies_path.read_text(encoding="utf-8")
+          branches = [line.strip().lower() for line in branches_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+          major_markers = {"breaking", "major"}
+          minor_markers = {"feat", "feature", "minor", "enhancement"}
+          patch_markers = {"fix", "hotfix", "bugfix", "patch", "docs", "chore", "refactor", "test", "ci", "perf"}
+
+          major_score = 0
+          minor_score = 0
+          patch_score = 0
+
+          if re.search(r"BREAKING[ -]CHANGE", bodies, re.IGNORECASE):
+              major_score += 3
+
+          for subject in subjects:
+              if re.match(r"^[a-z]+(\([^)]+\))?!:", subject):
+                  major_score += 3
+                  continue
+              if re.match(r"^feat(\([^)]+\))?:", subject, re.IGNORECASE):
+                  minor_score += 2
+              elif re.match(r"^(fix|perf|refactor|docs|chore|test|build|ci)(\([^)]+\))?:", subject, re.IGNORECASE):
+                  patch_score += 1
+              else:
+                  patch_score += 1
+
+          for branch in branches:
+              token = branch.split("/", 1)[0]
+              if token in major_markers or "breaking" in branch:
+                  major_score += 3
+              elif token in minor_markers:
+                  minor_score += 2
+              elif token in patch_markers:
+                  patch_score += 1
+
+          if major_score > 0:
+              bump = "major"
+          elif minor_score > 0 and minor_score * 2 >= max(patch_score, 1):
+              bump = "minor"
+          else:
+              bump = "patch"
+
+          major, minor, patch = map(int, base_version.split("."))
+          if bump == "major":
+              major += 1
+              minor = 0
+              patch = 0
+          elif bump == "minor":
+              minor += 1
+              patch = 0
+          else:
+              patch += 1
+
+          next_version = f"{major}.{minor}.{patch}"
+          print(f"bump={bump}")
+          print(f"next_version={next_version}")
+          print(f"major_score={major_score}")
+          print(f"minor_score={minor_score}")
+          print(f"patch_score={patch_score}")
+          print(f"commit_count={commit_count}")
+          PY
+          )"
+
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          echo "base_version=$base_version" >> "$GITHUB_OUTPUT"
+          echo "$calc" >> "$GITHUB_OUTPUT"
+
+          echo "base=${base_version}"
+          echo "$calc"
+
+      - name: Create release branch with bumped version
+        id: release
+        if: steps.semver.outputs.has_changes == 'true'
+        env:
+          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
+          NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-${ACTIONS_TOKEN:-}}}"
+          if [ -z "${bot_token:-}" ]; then
+            echo "No token available to push release branch."
+            exit 1
+          fi
+
+          git remote set-url origin "https://x-access-token:${bot_token}@github.com/${GITHUB_REPOSITORY}.git"
+          git config user.name "release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git fetch origin --prune
+
+          release_branch="release/v${NEXT_VERSION}"
+          if git ls-remote --exit-code --heads origin "$release_branch" >/dev/null 2>&1; then
+            release_branch="${release_branch}-$(date -u +%Y%m%d%H%M%S)"
+          fi
+
+          git checkout -B "$release_branch" origin/main
+
+          python - "$NEXT_VERSION" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+
+          def replace_one(path, pattern, replacement):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              new_text, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
+              if count != 1:
+                  raise SystemExit(f"Could not update version in {path}")
+              p.write_text(new_text, encoding="utf-8")
+
+          replace_one("pyproject.toml", r'^version\s*=\s*"[^"]+"\s*$', f'version = "{version}"')
+          replace_one("src/wsbuilder/__init__.py", r'^__version__\s*=\s*"[^"]+"\s*$', f'__version__ = "{version}"')
+          PY
+
+          if ! git diff --quiet -- pyproject.toml src/wsbuilder/__init__.py; then
+            git add pyproject.toml src/wsbuilder/__init__.py
+            git commit -m "chore(release): v${NEXT_VERSION}"
+          fi
+
+          git push origin "$release_branch"
+
+          echo "release_branch=$release_branch" >> "$GITHUB_OUTPUT"
+          echo "Created branch $release_branch"
+
+      - name: Create semantic tag on release branch
+        if: steps.semver.outputs.has_changes == 'true'
+        env:
+          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.release_branch }}
+          NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-${ACTIONS_TOKEN:-}}}"
+          if [ -z "${bot_token:-}" ]; then
+            echo "No token available to push release tag."
+            exit 1
+          fi
+
+          tag="v${NEXT_VERSION}"
+          git remote set-url origin "https://x-access-token:${bot_token}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch origin "$RELEASE_BRANCH" --tags
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists. Skipping."
+            exit 0
+          fi
+
+          git checkout -B "$RELEASE_BRANCH" "origin/$RELEASE_BRANCH"
+          git tag -a "$tag" -m "Release $tag"
+          git push origin "$tag"
+          echo "Created tag $tag"
+
+      - name: Create GitHub Release
+        if: steps.semver.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.RULESET_ADMIN_TOKEN || github.token }}
+          NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+          tag="v${NEXT_VERSION}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists."
+            exit 0
+          fi
+
+          gh release create "$tag" \
+            --target "$RELEASE_BRANCH" \
+            --title "$tag" \
+            --generate-notes
+          echo "Created GitHub Release $tag"

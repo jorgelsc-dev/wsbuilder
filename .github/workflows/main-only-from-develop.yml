@@ -1,4 +1,4 @@
-name: main-only-from-release
+name: main-pr-source-check
 
 on:
   pull_request:
@@ -13,19 +13,12 @@ jobs:
   enforce-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate source branch
+      - name: Validate PR source metadata
         run: |
           set -euo pipefail
           echo "base=${{ github.base_ref }} head=${{ github.head_ref }}"
-          case "${{ github.head_ref }}" in
-            staging)
-              echo "OK: main acepta PR desde staging"
-              ;;
-            release/*)
-              echo "OK: main acepta PR desde release/*"
-              ;;
-            *)
-              echo "ERROR: main solo acepta PR desde release/* o staging"
-              exit 1
-              ;;
-          esac
+          if [ -z "${{ github.head_ref }}" ]; then
+            echo "ERROR: missing pull request source branch"
+            exit 1
+          fi
+          echo "OK: PR hacia main con branch origen detectada."
