@@ -66,7 +66,22 @@ class TestMetrics(unittest.TestCase):
         self.assertEqual(data_stream["app_name"], "my-app")
         self.assertIs(app.metrics, metrics)
 
+    def test_stream_default_is_finite(self):
+        app = App()
+        install_metrics(app, app_name="finite-default")
+        req_stream = Request(
+            method="GET",
+            path="/api/metrics/stream",
+            query_string="interval=0.1",
+            headers={},
+            body=b"",
+            client=("127.0.0.1", 1234),
+            tls={},
+        )
+        resp_stream = app.dispatch(req_stream)
+        chunks = list(resp_stream.stream)
+        self.assertEqual(len(chunks), 5)
+
 
 if __name__ == "__main__":
     unittest.main()
-

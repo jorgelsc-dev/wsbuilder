@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 
 from .http import Response
 
+DEFAULT_STREAM_POINTS = 5
+
 
 def _iso_utc(ts):
     return datetime.fromtimestamp(ts, UTC).isoformat()
@@ -24,6 +26,13 @@ def _safe_float(value, default):
         return float(value)
     except Exception:
         return default
+
+
+def _is_truthy(value):
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "on"}
 
 
 class AppMetrics:
@@ -234,14 +243,22 @@ def install_metrics(app, path="/api/metrics", stream_path="/api/metrics/stream",
     @app.api(stream_path, methods=("GET",))
     def _metrics_stream(request):
         interval = request.query.get("interval", "1.0")
-        limit = request.query.get("limit", "")
-        max_points = None
-        if limit:
-            max_points = _safe_int(limit, None)
+        limit_text = request.query.get("limit", "")
+        follow = request.query.get("follow", "")
+        if limit_text:
+            parsed = _safe_int(limit_text, DEFAULT_STREAM_POINTS)
+            if parsed <= 0:
+                max_points = None
+            else:
+                max_points = parsed
+        else:
+            if _is_truthy(follow):
+                max_points = None
+            else:
+                max_points = DEFAULT_STREAM_POINTS
         return metrics.response_stream(interval_seconds=interval, max_points=max_points)
 
     return metrics
 
 
 __all__ = ["AppMetrics", "install_metrics"]
-

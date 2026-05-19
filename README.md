@@ -99,6 +99,12 @@ Probar stream NDJSON:
 curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&limit=5"
 ```
 
+Modo continuo (no termina solo):
+
+```bash
+curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&follow=1"
+```
+
 ## HTTP streaming (chunked)
 
 ```python

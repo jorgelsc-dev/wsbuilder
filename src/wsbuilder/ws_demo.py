@@ -16,9 +16,9 @@ import json
 import sqlite3
 
 try:
-    from .metrics import AppMetrics
+    from .metrics import AppMetrics, DEFAULT_STREAM_POINTS
 except Exception:
-    from metrics import AppMetrics
+    from metrics import AppMetrics, DEFAULT_STREAM_POINTS
 
 HOST = '0.0.0.0'
 PORT = 8765
@@ -1670,12 +1670,22 @@ class ConnectionThread(threading.Thread):
             params = parse_query_string(query)
             interval = params.get('interval', '1.0')
             limit_txt = params.get('limit', '')
-            max_points = None
+            follow_txt = (params.get('follow', '') or '').strip().lower()
+            follow_mode = follow_txt in ('1', 'true', 'yes', 'on')
             if limit_txt:
                 try:
-                    max_points = int(limit_txt)
+                    parsed = int(limit_txt)
+                    if parsed <= 0:
+                        max_points = None
+                    else:
+                        max_points = parsed
                 except Exception:
+                    max_points = DEFAULT_STREAM_POINTS
+            else:
+                if follow_mode:
                     max_points = None
+                else:
+                    max_points = DEFAULT_STREAM_POINTS
             headers_stream = {
                 'Content-Type': 'application/x-ndjson; charset=utf-8',
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
