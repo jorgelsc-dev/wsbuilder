@@ -12,6 +12,9 @@ from .framework import (
     parse_query_string,
 )
 from .metrics import AppMetrics, install_metrics
+from .dns import LocalDNSServer
+from .cookies import build_set_cookie, get_cookie, parse_cookie_header
+from .headers import get_header, has_header, normalize_header_name, set_header
 from .orm import (
     BlobField,
     BooleanField,
@@ -42,6 +45,14 @@ __all__ = [
     "Route",
     "Router",
     "WebSocket",
+    "LocalDNSServer",
+    "normalize_header_name",
+    "get_header",
+    "has_header",
+    "set_header",
+    "parse_cookie_header",
+    "get_cookie",
+    "build_set_cookie",
     "AppMetrics",
     "install_metrics",
     "Database",
