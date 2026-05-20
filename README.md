@@ -10,7 +10,13 @@ Lightweight Python HTTP + WebSocket framework for building real-time APIs and cu
 
 - `wsbuilder.framework`: router, request/response, servidor HTTP, handshake WS y utilidades de frames.
 - `wsbuilder.orm`: ORM flexible para SQLite3 (modelos, QuerySet, filtros, transacciones anidadas).
+- `wsbuilder.dns`: DNS UDP local minimo para registros `localhost`.
+- `wsbuilder.cookies` / `wsbuilder.headers`: utilidades para cookies y headers HTTP.
 - `wsbuilder.ws_demo`: demo completo HTTP + WebSocket + REST + SQLite.
+
+## Documentacion completa
+
+- Ver [docs/README.md](docs/README.md) para arquitectura, API, seguridad, CI/CD, testing y guias de uso.
 
 ## Instalacion local
 
@@ -58,6 +64,26 @@ Para CORS sin variables de entorno:
 app = App(cors_allow_origin="*")
 ```
 
+## Thread Routing por Cookie (views)
+
+Las `view` por defecto se ejecutan en el hilo padre (`thread_count=0`).
+Puedes crear workers por view y afinidad por cookie firmada:
+
+```python
+from wsbuilder import App
+
+app = App()
+
+@app.view("/jobs", thread_count=4, max_clients=200)
+def jobs(_request):
+    return "ok"
+```
+
+- Primera request sin cookie: responde la view padre y asigna cookie firmada.
+- Requests siguientes con cookie valida: se enrutan al worker asignado.
+- Si la cookie es invalida o no existe el worker: fallback seguro a la view padre.
+- `max_clients` limita clientes por worker y usa balanceo por menor carga.
+
 ## ORM SQLite3 rapido
 
 ```python
@@ -103,6 +129,17 @@ Modo continuo (no termina solo):
 
 ```bash
 curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&follow=1"
+```
+
+## DNS local minimo
+
+```python
+from wsbuilder import LocalDNSServer
+
+dns = LocalDNSServer()  # default: 127.0.0.1:5533
+dns.start()
+# ...
+dns.close()
 ```
 
 ## HTTP streaming (chunked)

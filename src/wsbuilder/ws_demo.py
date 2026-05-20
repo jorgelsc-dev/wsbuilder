@@ -1,3 +1,8 @@
+# LEGACY DEMO MODULE.
+# The package CLI (`python -m wsbuilder`) now uses `src/wsbuilder/__main__.py`
+# built on top of the modular core (`app.py`, `server.py`, `http.py`, `ws.py`).
+# This file remains as a standalone reference demo.
+#
 # enhanced_server.py (versión basada en clases Threading + ORM SQLite)
 # Servidor HTTP + WebSocket + REST con funcionalidades WebSocket ampliadas:
 # - text / binary

@@ -151,7 +151,7 @@ def _pack_ip(ip_value):
 class LocalDNSServer:
     """Minimal UDP DNS server for local hostnames."""
 
-    def __init__(self, host="127.0.0.53", port=53, records=None, ttl=60):
+    def __init__(self, host="127.0.0.1", port=5533, records=None, ttl=60):
         self.host = host
         self.port = int(port)
         self.ttl = max(0, int(ttl))

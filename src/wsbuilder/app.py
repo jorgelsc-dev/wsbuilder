@@ -1,17 +1,42 @@
-import socket
 import threading
+import time
 import uuid
 
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN
 from .cookies import build_set_cookie, get_cookie
 from .headers import get_header
 from .http import Response
+from .ws import sha1
 
 THREAD_COOKIE_NAME = "wsbuilder-thread"
 THREAD_RESPONSE_ID_HEADER = "WSBuilder-Thread"
 THREAD_RESPONSE_HOST_HEADER = "WSBuilder-Thread-Host"
 THREAD_RESPONSE_PORT_HEADER = "WSBuilder-Thread-Port"
 THREAD_RESPONSE_MODE_HEADER = "WSBuilder-Thread-Mode"
+
+DEFAULT_WORKER_REQUEST_TIMEOUT_SECONDS = 5.0
+DEFAULT_MAX_PENDING_JOBS = 256
+DEFAULT_AFFINITY_TTL_SECONDS = 900.0
+DEFAULT_AFFINITY_MAX_ENTRIES = 10000
+
+
+def _constant_time_equals(a, b):
+    left = str(a or "").encode("utf-8")
+    right = str(b or "").encode("utf-8")
+    max_len = max(len(left), len(right))
+    diff = len(left) ^ len(right)
+    for i in range(max_len):
+        x = left[i] if i < len(left) else 0
+        y = right[i] if i < len(right) else 0
+        diff |= x ^ y
+    return diff == 0
+
+
+class _RouteExecutionError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = int(status)
+        self.message = str(message)
 
 
 class _RouteJob:
@@ -28,35 +53,23 @@ class _RouteThreadWorker:
         self.index = int(index)
         self.thread_id = str(uuid.uuid4())
         self.host = route.thread_host
-        self.port = 0
+        self.port = route.thread_base_port + self.index if route.thread_base_port > 0 else 0
+        # Ports are metadata only for affinity/debugging. The main server socket handles HTTP I/O.
         self.listening = False
-        self.listen_error = None
-        self._listen_socket = None
+        self.listen_error = "disabled"
+
+        self.worker_timeout_seconds = route.worker_timeout_seconds
+        self.max_pending_jobs = route.max_pending_jobs
+
         self._jobs = []
         self._jobs_cond = threading.Condition()
         self._running = True
-        self._open_listener()
         self._thread = threading.Thread(
             target=self._run,
             name=f"wsbuilder-view-thread-{route.path}-{self.thread_id}",
             daemon=True,
         )
         self._thread.start()
-
-    def _open_listener(self):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind((self.host, 0))
-            sock.listen(8)
-            self._listen_socket = sock
-            self.port = sock.getsockname()[1]
-            self.listening = True
-        except OSError as e:
-            self.listen_error = str(e)
-            self._listen_socket = None
-            self.port = 0
-            self.listening = False
 
     def _run(self):
         while True:
@@ -77,10 +90,16 @@ class _RouteThreadWorker:
         job = _RouteJob(request)
         with self._jobs_cond:
             if not self._running:
-                raise RuntimeError("route thread is closed")
+                raise _RouteExecutionError(503, "Route worker is closed")
+            if self.max_pending_jobs > 0 and len(self._jobs) >= self.max_pending_jobs:
+                raise _RouteExecutionError(503, "Route worker queue is full")
             self._jobs.append(job)
             self._jobs_cond.notify()
-        job.done.wait()
+
+        timeout = self.worker_timeout_seconds
+        ok = job.done.wait(None if timeout <= 0 else timeout)
+        if not ok:
+            raise _RouteExecutionError(504, "Route worker execution timeout")
         if job.error is not None:
             raise job.error
         return job.result
@@ -89,13 +108,12 @@ class _RouteThreadWorker:
         with self._jobs_cond:
             self._running = False
             self._jobs_cond.notify_all()
-        try:
-            if self._listen_socket is not None:
-                self._listen_socket.close()
-        except Exception:
-            pass
         if self._thread.is_alive():
             self._thread.join(timeout=1.0)
+
+    def pending_jobs(self):
+        with self._jobs_cond:
+            return len(self._jobs)
 
     def describe(self):
         return {
@@ -104,6 +122,9 @@ class _RouteThreadWorker:
             "port": self.port,
             "listening": self.listening,
             "listen_error": self.listen_error,
+            "pending_jobs": self.pending_jobs(),
+            "max_pending_jobs": self.max_pending_jobs,
+            "worker_timeout_seconds": self.worker_timeout_seconds,
         }
 
 
@@ -111,28 +132,47 @@ class _RouteThreadPool:
     def __init__(self, route):
         self.route = route
         self.max_clients = max(0, int(route.max_clients))
+        self.affinity_ttl_seconds = max(0.0, float(route.affinity_ttl_seconds))
+        self.affinity_max_entries = max(1, int(route.affinity_max_entries))
+
         self.workers = [_RouteThreadWorker(route, i) for i in range(route.thread_count)]
         self.by_id = {worker.thread_id: worker for worker in self.workers}
         self.default_worker = self.workers[0] if self.workers else None
+
         self._lock = threading.Lock()
-        self._client_to_worker = {}
+        self._client_to_worker = {}  # fingerprint -> worker_id
+        self._client_last_seen = {}  # fingerprint -> unix timestamp
         self._worker_clients = {worker.thread_id: set() for worker in self.workers}
 
     def _fingerprint(self, request):
         client = request.client or ("", 0)
         ip = str(client[0] or "")
+        xff = str(get_header(request.headers, "x-forwarded-for", default="") or "").strip()
+        if xff:
+            ip = xff.split(",", 1)[0].strip() or ip
         ua = str(get_header(request.headers, "user-agent", default="") or "")
         return f"{ip}|{ua}"
 
-    def _worker_from_cookie(self, cookie_value):
-        raw = str(cookie_value or "").strip()
-        if not raw:
-            return None
-        try:
-            normalized = str(uuid.UUID(raw))
-        except Exception:
-            return None
-        return self.by_id.get(normalized)
+    def _evict_fingerprint_locked(self, fingerprint):
+        worker_id = self._client_to_worker.pop(fingerprint, None)
+        self._client_last_seen.pop(fingerprint, None)
+        if worker_id:
+            members = self._worker_clients.get(worker_id)
+            if members and fingerprint in members:
+                members.remove(fingerprint)
+
+    def _evict_stale_locked(self, now):
+        if self.affinity_ttl_seconds > 0:
+            cutoff = now - self.affinity_ttl_seconds
+            for fp, seen in list(self._client_last_seen.items()):
+                if seen < cutoff:
+                    self._evict_fingerprint_locked(fp)
+
+        over = len(self._client_last_seen) - self.affinity_max_entries
+        if over > 0:
+            oldest = sorted(self._client_last_seen.items(), key=lambda item: item[1])[:over]
+            for fp, _seen in oldest:
+                self._evict_fingerprint_locked(fp)
 
     def _worker_from_map_locked(self, fingerprint):
         worker_id = self._client_to_worker.get(fingerprint)
@@ -148,13 +188,14 @@ class _RouteThreadPool:
             return True
         return len(clients) < self.max_clients
 
-    def _assign_client_locked(self, fingerprint, worker):
-        prev_worker_id = self._client_to_worker.get(fingerprint)
-        if prev_worker_id and prev_worker_id != worker.thread_id:
-            prev_set = self._worker_clients.get(prev_worker_id)
-            if prev_set is not None and fingerprint in prev_set:
-                prev_set.remove(fingerprint)
+    def _assign_client_locked(self, fingerprint, worker, now):
+        previous = self._client_to_worker.get(fingerprint)
+        if previous and previous != worker.thread_id:
+            prev_members = self._worker_clients.get(previous)
+            if prev_members and fingerprint in prev_members:
+                prev_members.remove(fingerprint)
         self._client_to_worker[fingerprint] = worker.thread_id
+        self._client_last_seen[fingerprint] = now
         self._worker_clients.setdefault(worker.thread_id, set()).add(fingerprint)
 
     def _pick_best_worker_locked(self, fingerprint):
@@ -169,22 +210,26 @@ class _RouteThreadPool:
         candidates.sort(key=lambda row: (row[0], row[1]))
         return candidates[0][2]
 
-    def resolve(self, request, cookie_value):
+    def resolve(self, request, cookie_thread_id=""):
         with self._lock:
+            now = time.time()
+            self._evict_stale_locked(now)
             fingerprint = self._fingerprint(request)
-            cookie_worker = self._worker_from_cookie(cookie_value)
-            if cookie_worker is not None:
-                self._assign_client_locked(fingerprint, cookie_worker)
-                return cookie_worker, cookie_worker
+
+            if cookie_thread_id:
+                cookie_worker = self.by_id.get(cookie_thread_id)
+                if cookie_worker and self._can_accept_locked(cookie_worker, fingerprint):
+                    self._assign_client_locked(fingerprint, cookie_worker, now)
+                    return cookie_worker, cookie_worker
 
             mapped_worker = self._worker_from_map_locked(fingerprint)
-            if mapped_worker is not None and self._can_accept_locked(mapped_worker, fingerprint):
-                self._assign_client_locked(fingerprint, mapped_worker)
+            if mapped_worker and self._can_accept_locked(mapped_worker, fingerprint):
+                self._assign_client_locked(fingerprint, mapped_worker, now)
                 return None, mapped_worker
 
             assigned_worker = self._pick_best_worker_locked(fingerprint)
-            if assigned_worker is not None:
-                self._assign_client_locked(fingerprint, assigned_worker)
+            if assigned_worker:
+                self._assign_client_locked(fingerprint, assigned_worker, now)
                 return None, assigned_worker
 
             return None, None
@@ -199,7 +244,7 @@ class _RouteThreadPool:
             for worker in self.workers:
                 clients = len(self._worker_clients.get(worker.thread_id, set()))
                 row = worker.describe()
-                row["default"] = worker.thread_id == self.default_worker.thread_id
+                row["default"] = bool(self.default_worker and worker.thread_id == self.default_worker.thread_id)
                 row["clients"] = clients
                 row["max_clients"] = self.max_clients
                 rows.append(row)
@@ -215,14 +260,26 @@ class Route:
         kind,
         thread_count=0,
         thread_host="127.0.0.1",
+        thread_base_port=0,
         max_clients=100,
+        worker_timeout_seconds=DEFAULT_WORKER_REQUEST_TIMEOUT_SECONDS,
+        max_pending_jobs=DEFAULT_MAX_PENDING_JOBS,
+        affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
+        affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
     ):
         self.path = path
         self.methods = {m.upper() for m in methods}
         self.handler = handler
         self.kind = kind
+
         self.thread_host = thread_host or "127.0.0.1"
+        self.thread_base_port = max(0, int(thread_base_port or 0))
         self.max_clients = max(0, int(max_clients))
+        self.worker_timeout_seconds = max(0.0, float(worker_timeout_seconds))
+        self.max_pending_jobs = max(1, int(max_pending_jobs))
+        self.affinity_ttl_seconds = max(0.0, float(affinity_ttl_seconds))
+        self.affinity_max_entries = max(1, int(affinity_max_entries))
+
         if kind == "plain":
             count = int(thread_count) if thread_count is not None else 0
             if count < 0:
@@ -251,12 +308,45 @@ class Router:
 
 
 class App:
-    def __init__(self, cors_allow_origin=DEFAULT_CORS_ALLOW_ORIGIN):
+    def __init__(
+        self,
+        cors_allow_origin=DEFAULT_CORS_ALLOW_ORIGIN,
+        thread_cookie_secret="",
+        thread_cookie_name=THREAD_COOKIE_NAME,
+    ):
         self.router = Router()
         self.ws_routes = {}
         self.startup_hooks = []
         self.cors_allow_origin = (cors_allow_origin or "").strip()
         self.metrics = None
+
+        raw_secret = str(thread_cookie_secret or "").strip()
+        if not raw_secret:
+            raw_secret = f"{uuid.uuid4()}|{uuid.uuid4()}|{time.time_ns()}"
+        self._thread_cookie_secret = raw_secret.encode("utf-8")
+        self.thread_cookie_name = str(thread_cookie_name or THREAD_COOKIE_NAME)
+
+    def _sign_thread_cookie(self, route_path, thread_id):
+        payload = f"{route_path}|{thread_id}".encode("utf-8")
+        digest = sha1(self._thread_cookie_secret + b"|" + payload + b"|" + self._thread_cookie_secret)
+        sig = digest.hex()
+        return f"{thread_id}.{sig}"
+
+    def _verify_thread_cookie(self, route_path, raw_cookie):
+        value = str(raw_cookie or "").strip()
+        if not value or "." not in value:
+            return ""
+        thread_id, sig = value.split(".", 1)
+        try:
+            normalized = str(uuid.UUID(thread_id))
+        except Exception:
+            return ""
+
+        payload = f"{route_path}|{normalized}".encode("utf-8")
+        expected = sha1(self._thread_cookie_secret + b"|" + payload + b"|" + self._thread_cookie_secret).hex()
+        if not _constant_time_equals(sig, expected):
+            return ""
+        return normalized
 
     def route(
         self,
@@ -265,7 +355,12 @@ class App:
         kind="plain",
         thread_count=None,
         thread_host="127.0.0.1",
+        thread_base_port=0,
         max_clients=100,
+        worker_timeout_seconds=DEFAULT_WORKER_REQUEST_TIMEOUT_SECONDS,
+        max_pending_jobs=DEFAULT_MAX_PENDING_JOBS,
+        affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
+        affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
     ):
         def decorator(func):
             if thread_count is None:
@@ -280,7 +375,12 @@ class App:
                     kind,
                     thread_count=resolved_count,
                     thread_host=thread_host,
+                    thread_base_port=thread_base_port,
                     max_clients=max_clients,
+                    worker_timeout_seconds=worker_timeout_seconds,
+                    max_pending_jobs=max_pending_jobs,
+                    affinity_ttl_seconds=affinity_ttl_seconds,
+                    affinity_max_entries=affinity_max_entries,
                 )
             )
             return func
@@ -293,7 +393,12 @@ class App:
         methods=("GET",),
         thread_count=0,
         thread_host="127.0.0.1",
+        thread_base_port=0,
         max_clients=100,
+        worker_timeout_seconds=DEFAULT_WORKER_REQUEST_TIMEOUT_SECONDS,
+        max_pending_jobs=DEFAULT_MAX_PENDING_JOBS,
+        affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
+        affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
     ):
         return self.route(
             path,
@@ -301,7 +406,12 @@ class App:
             kind="plain",
             thread_count=thread_count,
             thread_host=thread_host,
+            thread_base_port=thread_base_port,
             max_clients=max_clients,
+            worker_timeout_seconds=worker_timeout_seconds,
+            max_pending_jobs=max_pending_jobs,
+            affinity_ttl_seconds=affinity_ttl_seconds,
+            affinity_max_entries=affinity_max_entries,
         )
 
     def api(self, path, methods=("GET",)):
@@ -368,14 +478,17 @@ class App:
         assigned_worker = None
         try:
             if route.thread_pool:
-                cookie_value = get_cookie(request.headers, THREAD_COOKIE_NAME, default="")
-                selected_worker, assigned_worker = route.thread_pool.resolve(request, cookie_value)
+                raw_cookie = get_cookie(request.headers, self.thread_cookie_name, default="")
+                cookie_thread_id = self._verify_thread_cookie(route.path, raw_cookie)
+                selected_worker, assigned_worker = route.thread_pool.resolve(request, cookie_thread_id)
                 if selected_worker is not None:
                     result = selected_worker.submit(request)
                 else:
                     result = route.handler(request)
             else:
                 result = route.handler(request)
+        except _RouteExecutionError as e:
+            return Response.text(e.message, status=e.status)
         except Exception as e:
             print(f"[http] handler error {request.method} {request.path}: {e}")
             if route.kind == "api":
@@ -402,16 +515,19 @@ class App:
         if thread_info is not None:
             resp.headers.setdefault(THREAD_RESPONSE_ID_HEADER, thread_info.thread_id)
             resp.headers.setdefault(THREAD_RESPONSE_HOST_HEADER, thread_info.host)
-            resp.headers.setdefault(THREAD_RESPONSE_PORT_HEADER, str(thread_info.port))
+            if thread_info.port > 0:
+                resp.headers.setdefault(THREAD_RESPONSE_PORT_HEADER, str(thread_info.port))
             if selected_worker is not None:
                 resp.headers.setdefault(THREAD_RESPONSE_MODE_HEADER, "worker")
             else:
                 resp.headers.setdefault(THREAD_RESPONSE_MODE_HEADER, "parent-assigned")
+                signed_cookie = self._sign_thread_cookie(route.path, thread_info.thread_id)
                 resp.headers["Set-Cookie"] = build_set_cookie(
-                    THREAD_COOKIE_NAME,
-                    thread_info.thread_id,
+                    self.thread_cookie_name,
+                    signed_cookie,
                     path=route.path or "/",
-                    http_only=False,
+                    http_only=True,
+                    secure=bool((request.tls or {}).get("enabled")),
                     same_site="Lax",
                 )
 

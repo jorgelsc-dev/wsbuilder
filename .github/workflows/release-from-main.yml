@@ -42,9 +42,10 @@ jobs:
             base_version="${latest_tag#v}"
             range="${latest_tag}..origin/${target_ref}"
           else
-            base_version="$(git show "origin/${target_ref}:pyproject.toml" | python - <<'PY'
-          import sys, tomllib
-          data = tomllib.loads(sys.stdin.read())
+            base_version="$(python - <<'PY'
+          import subprocess, tomllib
+          raw = subprocess.check_output(["git", "show", "origin/main:pyproject.toml"], text=True)
+          data = tomllib.loads(raw)
           print(data["project"]["version"])
           PY
             )"

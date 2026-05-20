@@ -1,4 +1,5 @@
 import threading
+import time
 import unittest
 
 from wsbuilder import App, Request
@@ -17,14 +18,14 @@ class TestViewThreadRouting(unittest.TestCase):
         self.apps.append(app)
         return app
 
-    def _request(self, path, headers=None):
+    def _request(self, path, headers=None, client=("127.0.0.1", 1234)):
         return Request(
             method="GET",
             path=path,
             query_string="",
             headers=headers or {},
             body=b"",
-            client=("127.0.0.1", 1234),
+            client=client,
             tls={},
         )
 
@@ -64,12 +65,13 @@ class TestViewThreadRouting(unittest.TestCase):
         first = app.dispatch(self._request("/work"))
         set_cookie = first.headers["Set-Cookie"]
         cookie_value = set_cookie.split(";", 1)[0].split("=", 1)[1]
+        thread_id_from_cookie = cookie_value.split(".", 1)[0]
 
         second = app.dispatch(self._request("/work", headers={"Cookie": f"wsbuilder-thread={cookie_value}"}))
         self.assertEqual(second.status, 200)
         self.assertNotEqual(second.body.decode("utf-8"), threading.current_thread().name)
         self.assertEqual(second.headers.get("WSBuilder-Thread-Mode"), "worker")
-        self.assertEqual(second.headers.get("WSBuilder-Thread"), cookie_value)
+        self.assertEqual(second.headers.get("WSBuilder-Thread"), thread_id_from_cookie)
 
     def test_invalid_or_unknown_cookie_falls_back_to_parent_without_error(self):
         app = self._new_app()
@@ -92,6 +94,51 @@ class TestViewThreadRouting(unittest.TestCase):
         self.assertEqual(unknown.status, 200)
         self.assertEqual(unknown.body.decode("utf-8"), "ok")
         self.assertEqual(unknown.headers.get("WSBuilder-Thread-Mode"), "parent-assigned")
+
+    def test_max_clients_cannot_be_bypassed_with_cookie(self):
+        app = self._new_app()
+
+        @app.view("/limited", thread_count=1, max_clients=1)
+        def limited(_request):
+            return threading.current_thread().name
+
+        first = app.dispatch(
+            self._request(
+                "/limited",
+                headers={"User-Agent": "client-a"},
+                client=("10.0.0.1", 1234),
+            )
+        )
+        cookie_value = first.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+
+        second = app.dispatch(
+            self._request(
+                "/limited",
+                headers={
+                    "User-Agent": "client-b",
+                    "Cookie": f"wsbuilder-thread={cookie_value}",
+                },
+                client=("10.0.0.2", 4321),
+            )
+        )
+        self.assertEqual(second.status, 200)
+        self.assertEqual(second.body.decode("utf-8"), threading.current_thread().name)
+        self.assertNotEqual(second.headers.get("WSBuilder-Thread-Mode"), "worker")
+
+    def test_worker_execution_timeout_returns_504(self):
+        app = self._new_app()
+
+        @app.view("/slow", thread_count=1, worker_timeout_seconds=0.05)
+        def slow(_request):
+            time.sleep(0.2)
+            return "done"
+
+        first = app.dispatch(self._request("/slow"))
+        cookie_value = first.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+        second = app.dispatch(
+            self._request("/slow", headers={"Cookie": f"wsbuilder-thread={cookie_value}"})
+        )
+        self.assertEqual(second.status, 504)
 
     def test_api_routes_keep_existing_dispatch(self):
         app = self._new_app()
