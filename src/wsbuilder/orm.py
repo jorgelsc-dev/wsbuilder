@@ -254,7 +254,7 @@ class ModelMeta(type):
 
 
 class Database:
-    """Thread-safe sqlite3 wrapper with nested transaction support."""
+    """Thread-safe sqlite3 wrapper with nested transaction support and read replicas."""
 
     def __init__(
         self,
@@ -265,10 +265,15 @@ class Database:
         pragmas: dict | None = None,
         detect_types: int = 0,
         debug: bool = False,
+        enable_replicas: bool = False,
+        replica_count: int = 3,
+        enable_wal: bool = True,
+        cache_size_mb: int = 10,
     ):
         self.debug = debug
         self._lock = threading.RLock()
         self._tx_depth = threading.local()
+        self._replicas = None
 
         if shared_cache:
             dsn = "file::memory:?cache=shared" if path == ":memory:" else path
@@ -288,14 +293,38 @@ class Database:
             )
 
         self._conn.row_factory = sqlite3.Row
+        
+        # Default optimized pragmas
         base_pragmas = {
             "foreign_keys": 1,
             "busy_timeout": int(timeout * 1000),
         }
+        
+        # Add SQLite3 optimizations
+        if enable_wal:
+            base_pragmas["journal_mode"] = "WAL"
+            base_pragmas["wal_autocheckpoint"] = 1000
+        
+        base_pragmas["cache_size"] = -cache_size_mb
+        base_pragmas["synchronous"] = "NORMAL"
+        base_pragmas["temp_store"] = "MEMORY"
+        base_pragmas["mmap_size"] = 30000000
+        base_pragmas["automatic_index"] = 1
+        
         if pragmas:
             base_pragmas.update(pragmas)
         for key, value in base_pragmas.items():
             self.set_pragma(key, value)
+        
+        # Enable read replicas if needed
+        if enable_replicas and path != ":memory:":
+            from . import db_replicas
+            self._replicas = db_replicas.DatabaseReplicaPool(
+                path,
+                replica_count=replica_count,
+                timeout=timeout,
+                detect_types=detect_types,
+            )
 
     def __enter__(self):
         return self
@@ -306,6 +335,8 @@ class Database:
 
     def close(self):
         with self._lock:
+            if self._replicas:
+                self._replicas.close_all()
             self._conn.close()
 
     def _log(self, *parts):
@@ -327,6 +358,25 @@ class Database:
             cur = self._conn.execute(sql)
             row = cur.fetchone()
             return None if row is None else row[0]
+
+    def checkpoint(self, mode: str = "RESTART"):
+        """Perform WAL checkpoint to reclaim space."""
+        validate_identifier(mode)
+        with self._lock:
+            self._log(f"PRAGMA wal_checkpoint({mode})")
+            self._conn.execute(f"PRAGMA wal_checkpoint({mode})")
+
+    def vacuum(self):
+        """Vacuum the database to reclaim disk space."""
+        with self._lock:
+            self._log("VACUUM")
+            self._conn.execute("VACUUM")
+
+    def optimize(self):
+        """Run SQLite3 PRAGMA optimize."""
+        with self._lock:
+            self._log("PRAGMA optimize")
+            self._conn.execute("PRAGMA optimize")
 
     def _get_tx_depth(self) -> int:
         return getattr(self._tx_depth, "value", 0)
@@ -376,6 +426,30 @@ class Database:
         if row is None:
             return default
         return row[0]
+
+    def read_replica_execute(self, sql: str, params=None):
+        """Execute a read-only query on a replica if available."""
+        if self._replicas is None:
+            return self.execute(sql, params)
+        return self._replicas.execute(sql, params)
+
+    def read_replica_fetchone(self, sql: str, params=None):
+        """Fetch one row from a replica if available."""
+        if self._replicas is None:
+            return self.fetchone(sql, params)
+        return self._replicas.fetchone(sql, params)
+
+    def read_replica_fetchall(self, sql: str, params=None):
+        """Fetch all rows from a replica if available."""
+        if self._replicas is None:
+            return self.fetchall(sql, params)
+        return self._replicas.fetchall(sql, params)
+
+    def read_replica_scalar(self, sql: str, params=None, default=None):
+        """Fetch a scalar value from a replica if available."""
+        if self._replicas is None:
+            return self.scalar(sql, params, default)
+        return self._replicas.scalar(sql, params, default)
 
     def transaction(self):
         return Transaction(self)
