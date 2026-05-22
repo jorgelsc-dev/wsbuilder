@@ -61,6 +61,7 @@ class TestMetrics(unittest.TestCase):
         resp_stream = app.dispatch(req_stream)
         self.assertEqual(resp_stream.status, 200)
         self.assertTrue(resp_stream.is_stream)
+        self.assertEqual(resp_stream.headers.get("X-Content-Type-Options"), "nosniff")
         first = next(iter(resp_stream.stream))
         data_stream = json.loads(first.decode("utf-8"))
         self.assertEqual(data_stream["app_name"], "my-app")

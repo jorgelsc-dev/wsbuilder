@@ -238,6 +238,7 @@ class AppMetrics:
             "Pragma": "no-cache",
             "Expires": "0",
             "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
         }
         return Response.stream(
             self.stream_chunks(interval_seconds=interval_seconds, max_points=max_points),
