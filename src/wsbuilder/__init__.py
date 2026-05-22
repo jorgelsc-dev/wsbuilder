@@ -43,6 +43,7 @@ from .db_replicas import (
     OptimizedDatabase,
     SQLite3OptimizationConfig,
 )
+from .predicts import Predictor
 
 __version__ = "0.1.0"
 
@@ -97,4 +98,5 @@ __all__ = [
     "DatabaseReplicaPool",
     "OptimizedDatabase",
     "SQLite3OptimizationConfig",
+    "Predictor",
 ]
