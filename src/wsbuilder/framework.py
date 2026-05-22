@@ -4,6 +4,9 @@ from .app import App, Route, Router
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN, MAGIC_WS, STATUS_MESSAGES
 from .http import Request, Response, parse_http_request, parse_query_string, send_http_response
 from .metrics import AppMetrics, install_metrics
+from .cache import Cache, SQLiteMemoryCache, install_cache
+from .caches import GlobalCacheRule, ViewResponseCache, install_caches
+from .security import ACLRule, SecurityDecision, SecurityPolicy, install_security
 from .server import HTTPServer
 from .ws import (
     B64_ALPHABET,
@@ -25,6 +28,16 @@ __all__ = [
     "Response",
     "AppMetrics",
     "install_metrics",
+    "Cache",
+    "SQLiteMemoryCache",
+    "install_cache",
+    "GlobalCacheRule",
+    "ViewResponseCache",
+    "install_caches",
+    "ACLRule",
+    "SecurityDecision",
+    "SecurityPolicy",
+    "install_security",
     "Route",
     "Router",
     "WebSocket",

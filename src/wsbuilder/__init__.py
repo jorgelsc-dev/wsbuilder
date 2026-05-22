@@ -12,6 +12,9 @@ from .framework import (
     parse_query_string,
 )
 from .metrics import AppMetrics, install_metrics
+from .cache import Cache, SQLiteMemoryCache, install_cache
+from .caches import GlobalCacheRule, ViewResponseCache, install_caches
+from .security import ACLRule, SecurityDecision, SecurityPolicy, install_security
 from .dns import LocalDNSServer
 from .cookies import build_set_cookie, get_cookie, parse_cookie_header
 from .headers import get_header, has_header, normalize_header_name, set_header
@@ -55,6 +58,16 @@ __all__ = [
     "build_set_cookie",
     "AppMetrics",
     "install_metrics",
+    "Cache",
+    "SQLiteMemoryCache",
+    "install_cache",
+    "GlobalCacheRule",
+    "ViewResponseCache",
+    "install_caches",
+    "ACLRule",
+    "SecurityDecision",
+    "SecurityPolicy",
+    "install_security",
     "Database",
     "Model",
     "QuerySet",
