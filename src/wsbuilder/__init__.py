@@ -37,6 +37,12 @@ from .orm import (
     quote_identifier,
     validate_identifier,
 )
+from .db_replicas import (
+    DatabaseReplica,
+    DatabaseReplicaPool,
+    OptimizedDatabase,
+    SQLite3OptimizationConfig,
+)
 
 __version__ = "0.1.0"
 
@@ -87,4 +93,8 @@ __all__ = [
     "validate_identifier",
     "parse_close_payload",
     "parse_query_string",
+    "DatabaseReplica",
+    "DatabaseReplicaPool",
+    "OptimizedDatabase",
+    "SQLite3OptimizationConfig",
 ]
