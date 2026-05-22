@@ -254,6 +254,7 @@ class Route:
         requests_per_thread=None,
         affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
         affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
+        cache=None,
     ):
         self.path = path
         self.methods = {m.upper() for m in methods}
@@ -273,6 +274,7 @@ class Route:
         self.max_pending_jobs = self.requests_per_thread
         self.affinity_ttl_seconds = max(0.0, float(affinity_ttl_seconds))
         self.affinity_max_entries = max(1, int(affinity_max_entries))
+        self.cache_config = cache
 
         if kind == "plain":
             count = int(thread_count) if thread_count is not None else 0
@@ -328,6 +330,8 @@ class App:
         self.startup_hooks = []
         self.cors_allow_origin = (cors_allow_origin or "").strip()
         self.metrics = None
+        self.security = None
+        self.caches = None
 
         raw_secret = str(thread_cookie_secret or "").strip()
         if not raw_secret:
@@ -373,6 +377,7 @@ class App:
         requests_per_thread=None,
         affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
         affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
+        cache=None,
     ):
         def decorator(func):
             if thread_count is None:
@@ -396,6 +401,7 @@ class App:
                     requests_per_thread=requests_per_thread,
                     affinity_ttl_seconds=affinity_ttl_seconds,
                     affinity_max_entries=affinity_max_entries,
+                    cache=cache,
                 )
             )
             return func
@@ -417,6 +423,7 @@ class App:
         requests_per_thread=None,
         affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
         affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
+        cache=None,
     ):
         return self.route(
             path,
@@ -433,6 +440,7 @@ class App:
             requests_per_thread=requests_per_thread,
             affinity_ttl_seconds=affinity_ttl_seconds,
             affinity_max_entries=affinity_max_entries,
+            cache=cache,
         )
 
     def api(self, path, methods=("GET",)):
@@ -456,13 +464,46 @@ class App:
     ):
         from .metrics import install_metrics
 
+        def _extra_snapshot():
+            data = {"threads": self.thread_metrics_snapshot()}
+            cache = getattr(self, "cache", None)
+            if cache and hasattr(cache, "metrics_snapshot"):
+                try:
+                    cache_snapshot = cache.metrics_snapshot()
+                    if isinstance(cache_snapshot, dict):
+                        data.update(cache_snapshot)
+                except Exception as e:
+                    data["cache_metrics_error"] = str(e)
+            caches = getattr(self, "caches", None)
+            if caches and hasattr(caches, "metrics_snapshot"):
+                try:
+                    caches_snapshot = caches.metrics_snapshot()
+                    if isinstance(caches_snapshot, dict):
+                        data.update(caches_snapshot)
+                except Exception as e:
+                    data["http_cache_metrics_error"] = str(e)
+            security = getattr(self, "security", None)
+            if security:
+                data["security"] = security.snapshot()
+            return data
+
         return install_metrics(
             self,
             path=path,
             stream_path=stream_path,
             app_name=app_name,
-            extra_snapshot_provider=lambda: {"threads": self.thread_metrics_snapshot()},
+            extra_snapshot_provider=_extra_snapshot,
         )
+
+    def enable_security(self, policy=None):
+        from .security import install_security
+
+        return install_security(self, policy=policy)
+
+    def enable_caches(self, caches=None):
+        from .caches import install_caches
+
+        return install_caches(self, caches=caches)
 
     def list_view_threads(self, path, method="GET"):
         route = self.router.resolve(path, method=method)
@@ -516,6 +557,12 @@ class App:
         }
 
     def close(self):
+        caches = getattr(self, "caches", None)
+        if caches and hasattr(caches, "close"):
+            try:
+                caches.close()
+            except Exception:
+                pass
         for route in self.router.routes:
             pool = getattr(route, "thread_pool", None)
             if pool:
@@ -523,6 +570,25 @@ class App:
 
     def dispatch(self, request):
         cors_allow_origin = self.cors_allow_origin
+
+        security = getattr(self, "security", None)
+        if security:
+            decision = security.evaluate(request)
+            if not decision.allowed:
+                route_for_format = self.router.resolve(request.path, request.method)
+                headers = decision.response_headers()
+                if cors_allow_origin:
+                    headers.setdefault("Access-Control-Allow-Origin", cors_allow_origin)
+                    if cors_allow_origin != "*":
+                        headers.setdefault("Vary", "Origin")
+                if route_for_format and route_for_format.kind == "api":
+                    return Response.json(
+                        {"status": "error", "message": decision.message, "reason": decision.reason},
+                        status=decision.status,
+                        headers=headers,
+                    )
+                return Response.text(decision.message, status=decision.status, headers=headers)
+
         if request.method == "OPTIONS":
             route = self.router.resolve(request.path, method=None)
             if route:
@@ -540,6 +606,12 @@ class App:
         route = self.router.resolve(request.path, request.method)
         if not route:
             return Response.text("Not Found", status=404)
+
+        caches = getattr(self, "caches", None)
+        if caches and route.kind == "plain":
+            cached_response = caches.fetch(request, route)
+            if cached_response is not None:
+                return cached_response
 
         selected_worker = None
         try:
@@ -573,6 +645,9 @@ class App:
             resp = Response.json(result)
         else:
             resp = Response.text("" if result is None else str(result))
+
+        if caches and route.kind == "plain":
+            caches.store_response(request, route, resp)
 
         thread_info = selected_worker
         if thread_info is not None:

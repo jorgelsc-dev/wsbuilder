@@ -85,6 +85,7 @@ class HTTPServer:
 
     def handle_conn(self, conn, addr):
         metrics = getattr(self.app, "metrics", None)
+        security = getattr(self.app, "security", None)
         tls_meta = {
             "enabled": bool(self.ssl_context),
             "peer_cert": None,
@@ -185,7 +186,25 @@ class HTTPServer:
                     body_size=len(request.body),
                 )
 
-            if is_ws_request(headers):
+            ws_request = is_ws_request(headers)
+            if ws_request and security:
+                decision = security.evaluate(request)
+                if not decision.allowed:
+                    response = decision.to_response()
+                    send_http_response(conn, response)
+                    if metrics:
+                        elapsed = (time.time() - started) * 1000.0
+                        metrics.http_response_sent(
+                            request.method,
+                            request.path,
+                            response.status,
+                            body_size=len(response.body),
+                            duration_ms=elapsed,
+                        )
+                    security.observe_response(request, response.status)
+                    return
+
+            if ws_request:
                 handler = self.app.ws_routes.get(path)
                 if not handler:
                     response = Response.text("Not Found", status=404)
@@ -199,6 +218,8 @@ class HTTPServer:
                             body_size=len(response.body),
                             duration_ms=elapsed,
                         )
+                    if security:
+                        security.observe_response(request, response.status)
                     return
                 ws = handshake_websocket(conn, addr, headers)
                 if not ws:
@@ -212,6 +233,8 @@ class HTTPServer:
                             body_size=0,
                             duration_ms=elapsed,
                         )
+                    if security:
+                        security.observe_response(request, 400)
                     return
                 if metrics:
                     metrics.ws_opened(path)
@@ -223,6 +246,8 @@ class HTTPServer:
                         body_size=0,
                         duration_ms=elapsed,
                     )
+                if security:
+                    security.observe_response(request, 101)
                 try:
                     handler(ws, request)
                 except Exception as e:
@@ -247,6 +272,8 @@ class HTTPServer:
                         body_size=0,
                         duration_ms=elapsed,
                     )
+                if security:
+                    security.observe_response(request, 500)
                 send_http_response(conn, Response.text("Internal Server Error", status=500))
                 return
 
@@ -261,3 +288,5 @@ class HTTPServer:
                     body_size=body_size,
                     duration_ms=elapsed,
                 )
+            if security:
+                security.observe_response(request, response.status)
