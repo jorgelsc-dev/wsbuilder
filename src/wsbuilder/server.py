@@ -11,6 +11,9 @@ class HTTPServer:
     MAX_CONNECTION_WORKERS = 64
     MAX_REQUEST_HEADER_BYTES = 64 * 1024
     MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024
+    ACCEPT_TIMEOUT_SECONDS = 0.5
+    ACQUIRE_WORKER_TIMEOUT_SECONDS = 1.0
+    REQUEST_READ_TIMEOUT_SECONDS = 10.0
 
     def __init__(self, host, port, app, ssl_context=None):
         self.host = host
@@ -30,6 +33,7 @@ class HTTPServer:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((self.host, self.port))
         s.listen(128)
+        s.settimeout(self.ACCEPT_TIMEOUT_SECONDS)
         self._sock = s
         scheme = "https" if self.ssl_context else "http"
         print(f"Server listening on {scheme}://{self.host}:{self.port}/")
@@ -37,8 +41,17 @@ class HTTPServer:
         interrupted = False
         try:
             while True:
-                conn, addr = s.accept()
-                worker_limiter.acquire()
+                try:
+                    conn, addr = s.accept()
+                except socket.timeout:
+                    continue
+                acquired = worker_limiter.acquire(timeout=self.ACQUIRE_WORKER_TIMEOUT_SECONDS)
+                if not acquired:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    continue
                 t = threading.Thread(
                     target=self._handle_conn_with_release,
                     args=(conn, addr, worker_limiter),
@@ -51,6 +64,11 @@ class HTTPServer:
             print("\n[shutdown] interrupted by user (Ctrl+C). stopping server...")
         finally:
             s.close()
+            try:
+                if hasattr(self.app, "close"):
+                    self.app.close()
+            except Exception as e:
+                print(f"[shutdown] app.close() error: {e}")
             if interrupted:
                 print("[shutdown] server stopped.")
 
@@ -76,6 +94,7 @@ class HTTPServer:
         if self.ssl_context:
             try:
                 conn = self.ssl_context.wrap_socket(conn, server_side=True)
+                conn.settimeout(self.REQUEST_READ_TIMEOUT_SECONDS)
                 tls_meta["peer_cert"] = conn.getpeercert()
                 tls_meta["cipher"] = conn.cipher()
                 tls_meta["version"] = conn.version()
@@ -96,10 +115,17 @@ class HTTPServer:
 
         with conn:
             try:
+                conn.settimeout(self.REQUEST_READ_TIMEOUT_SECONDS)
+            except Exception:
+                pass
+            try:
                 req = parse_http_request(
                     conn,
                     max_header_bytes=self.MAX_REQUEST_HEADER_BYTES,
                 )
+            except socket.timeout:
+                send_http_response(conn, Response.text("Request Timeout", status=408))
+                return
             except ValueError as e:
                 message = str(e).lower()
                 status = 431 if "header" in message else 400
@@ -127,7 +153,11 @@ class HTTPServer:
                 if len(body) < cl:
                     need = cl - len(body)
                     if need > 0:
-                        body += recv_exact(conn, need)
+                        try:
+                            body += recv_exact(conn, need)
+                        except socket.timeout:
+                            send_http_response(conn, Response.text("Request Timeout", status=408))
+                            return
                 if len(body) > self.MAX_REQUEST_BODY_BYTES:
                     send_http_response(
                         conn,
@@ -217,7 +247,8 @@ class HTTPServer:
                         body_size=0,
                         duration_ms=elapsed,
                     )
-                raise
+                send_http_response(conn, Response.text("Internal Server Error", status=500))
+                return
 
             send_http_response(conn, response)
             if metrics:

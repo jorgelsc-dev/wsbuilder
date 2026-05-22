@@ -10,7 +10,13 @@ Lightweight Python HTTP + WebSocket framework for building real-time APIs and cu
 
 - `wsbuilder.framework`: router, request/response, servidor HTTP, handshake WS y utilidades de frames.
 - `wsbuilder.orm`: ORM flexible para SQLite3 (modelos, QuerySet, filtros, transacciones anidadas).
+- `wsbuilder.dns`: DNS UDP local minimo para registros `localhost`.
+- `wsbuilder.cookies` / `wsbuilder.headers`: utilidades para cookies y headers HTTP.
 - `wsbuilder.ws_demo`: demo completo HTTP + WebSocket + REST + SQLite.
+
+## Documentacion completa
+
+- Ver [docs/README.md](docs/README.md) para arquitectura, API, seguridad, CI/CD, testing y guias de uso.
 
 ## Instalacion local
 
@@ -58,6 +64,27 @@ Para CORS sin variables de entorno:
 app = App(cors_allow_origin="*")
 ```
 
+## Thread Pool en Views
+
+Las `view` por defecto se ejecutan en el hilo padre (`thread_count=0`).
+Puedes configurar un pool por ruta con min/max de hilos y limite de requests por hilo:
+
+```python
+from wsbuilder import App
+
+app = App()
+
+@app.view("/jobs", min_threads=1, max_threads=4, requests_per_thread=0)
+def jobs(_request):
+    return "ok"
+```
+
+- `min_threads`: workers iniciales para la `view`.
+- `max_threads`: tope de workers para esa `view` (`0` deshabilita pool).
+- `requests_per_thread`: capacidad por worker (`0` = sin limite).
+- Distribucion: siempre por `least_busy` (worker menos ocupado).
+- Se expone metadata de worker en headers y metrics (`/api/metrics`, `/api/metrics/stream`).
+
 ## ORM SQLite3 rapido
 
 ```python
@@ -103,6 +130,17 @@ Modo continuo (no termina solo):
 
 ```bash
 curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&follow=1"
+```
+
+## DNS local minimo
+
+```python
+from wsbuilder import LocalDNSServer
+
+dns = LocalDNSServer()  # default: 127.0.0.1:5533
+dns.start()
+# ...
+dns.close()
 ```
 
 ## HTTP streaming (chunked)

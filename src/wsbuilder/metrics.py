@@ -40,6 +40,7 @@ class AppMetrics:
         self.app_name = app_name
         self.started_at = time.time()
         self._lock = threading.Lock()
+        self._extra_snapshot_provider = None
 
         self.active_tcp_connections = 0
         self.total_tcp_connections = 0
@@ -66,6 +67,12 @@ class AppMetrics:
 
         self.total_errors = 0
         self.last_error = ""
+
+    def set_extra_snapshot_provider(self, provider):
+        if callable(provider):
+            self._extra_snapshot_provider = provider
+        else:
+            self._extra_snapshot_provider = None
 
     def _inc_map(self, data, key, step=1):
         data[key] = data.get(key, 0) + step
@@ -188,6 +195,14 @@ class AppMetrics:
                     "last": self.last_error,
                 },
             }
+        provider = self._extra_snapshot_provider
+        if provider:
+            try:
+                extra = provider()
+            except Exception as e:
+                extra = {"metrics_provider_error": str(e)}
+            if isinstance(extra, dict):
+                data.update(extra)
         return data
 
     def stream_chunks(self, interval_seconds=1.0, max_points=None):
@@ -231,9 +246,17 @@ class AppMetrics:
         )
 
 
-def install_metrics(app, path="/api/metrics", stream_path="/api/metrics/stream", app_name=None):
+def install_metrics(
+    app,
+    path="/api/metrics",
+    stream_path="/api/metrics/stream",
+    app_name=None,
+    extra_snapshot_provider=None,
+):
     name = app_name or app.__class__.__name__
     metrics = AppMetrics(app_name=name)
+    if extra_snapshot_provider:
+        metrics.set_extra_snapshot_provider(extra_snapshot_provider)
     app.metrics = metrics
 
     @app.api(path, methods=("GET",))

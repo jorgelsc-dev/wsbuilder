@@ -1,15 +1,66 @@
+import base64
+
 from .constants import MAGIC_WS
 from .http import Response, send_http_response
 
+MAX_WS_FRAME_PAYLOAD_BYTES = 2 * 1024 * 1024
+
+
+class WebSocketProtocolError(Exception):
+    pass
+
+
+def _header_token_contains(raw_value, token):
+    wanted = str(token or "").strip().lower()
+    if not wanted:
+        return False
+    values = [part.strip().lower() for part in str(raw_value or "").split(",")]
+    return wanted in values
+
+
+def _is_valid_websocket_key(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        decoded = base64.b64decode(raw.encode("ascii"), validate=True)
+    except Exception:
+        return False
+    return len(decoded) == 16
+
 
 def is_ws_request(headers):
-    return headers.get("upgrade", "").lower() == "websocket"
+    upgrade_ok = str(headers.get("upgrade", "")).strip().lower() == "websocket"
+    connection_ok = _header_token_contains(headers.get("connection", ""), "upgrade")
+    return upgrade_ok and connection_ok
 
 
 def handshake_websocket(conn, addr, headers):
     key = headers.get("sec-websocket-key", "")
     if not key:
         send_http_response(conn, Response.text("Missing Sec-WebSocket-Key", status=400))
+        return None
+    if not _is_valid_websocket_key(key):
+        send_http_response(conn, Response.text("Invalid Sec-WebSocket-Key", status=400))
+        return None
+
+    if not _header_token_contains(headers.get("connection", ""), "upgrade"):
+        send_http_response(conn, Response.text("Missing/invalid Connection: Upgrade", status=400))
+        return None
+    if str(headers.get("upgrade", "")).strip().lower() != "websocket":
+        send_http_response(conn, Response.text("Missing/invalid Upgrade: websocket", status=400))
+        return None
+
+    version = str(headers.get("sec-websocket-version", "")).strip()
+    if version != "13":
+        send_http_response(
+            conn,
+            Response(
+                status=426,
+                body=b"Unsupported WebSocket Version",
+                headers={"Sec-WebSocket-Version": "13"},
+            ),
+        )
         return None
 
     subprotocol = ""
@@ -43,7 +94,14 @@ class WebSocket:
         self.headers = headers or {}
 
     def recv_frame(self):
-        return read_ws_frame_raw(self.sock)
+        try:
+            return read_ws_frame_raw(self.sock)
+        except WebSocketProtocolError:
+            try:
+                self.close(1002, "Protocol Error")
+            except Exception:
+                pass
+            raise
 
     def send_frame(self, opcode, payload=b""):
         self.sock.sendall(make_ws_frame_bytes(opcode, payload))
@@ -81,9 +139,19 @@ def read_ws_frame_raw(conn):
     hdr = recv_exact(conn, 2)
     b1, b2 = hdr[0], hdr[1]
     fin = (b1 >> 7) & 1
+    rsv = (b1 >> 4) & 0x07
     opcode = b1 & 0x0F
     masked = (b2 >> 7) & 1
     payload_len = b2 & 0x7F
+
+    if rsv != 0:
+        raise WebSocketProtocolError("RSV bits must be zero without negotiated extensions")
+
+    if opcode in {0x3, 0x4, 0x5, 0x6, 0x7, 0xB, 0xC, 0xD, 0xE, 0xF}:
+        raise WebSocketProtocolError(f"Reserved/unsupported opcode: {opcode}")
+
+    if not masked:
+        raise WebSocketProtocolError("Client-to-server frames must be masked")
 
     if payload_len == 126:
         ext = recv_exact(conn, 2)
@@ -91,6 +159,15 @@ def read_ws_frame_raw(conn):
     elif payload_len == 127:
         ext = recv_exact(conn, 8)
         payload_len = int.from_bytes(ext, "big")
+
+    if opcode >= 0x8:
+        if not fin:
+            raise WebSocketProtocolError("Control frames must not be fragmented")
+        if payload_len > 125:
+            raise WebSocketProtocolError("Control frame payload too large")
+
+    if payload_len > MAX_WS_FRAME_PAYLOAD_BYTES:
+        raise WebSocketProtocolError("Frame payload exceeds server limit")
 
     mask = None
     if masked:
@@ -213,4 +290,3 @@ def base64_encode(data_bytes):
         if pad:
             res[-pad:] = "=" * pad
     return "".join(res)
-

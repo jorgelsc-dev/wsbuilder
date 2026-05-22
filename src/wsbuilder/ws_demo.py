@@ -1,3 +1,8 @@
+# LEGACY DEMO MODULE.
+# The package CLI (`python -m wsbuilder`) now uses `src/wsbuilder/__main__.py`
+# built on top of the modular core (`app.py`, `server.py`, `http.py`, `ws.py`).
+# This file remains as a standalone reference demo.
+#
 # enhanced_server.py (versión basada en clases Threading + ORM SQLite)
 # Servidor HTTP + WebSocket + REST con funcionalidades WebSocket ampliadas:
 # - text / binary
@@ -1413,6 +1418,10 @@ class ClientRegistry:
         print(f"[WS] list_clients_info -> {len(out)} clientes")
         return out
 
+    def active_client_count(self):
+        with self._lock:
+            return len(self._clients)
+
     def send_to_client(self, client_id, opcode, payload=b''):
         with self._lock:
             info = self._clients.get(client_id)
@@ -2036,6 +2045,7 @@ class WebSocketHTTPServer:
         self.port = port
         self.metrics = AppMetrics(app_name="wsbuilder-ws-demo")
         self.registry = ClientRegistry(metrics=self.metrics)
+        self.metrics.set_extra_snapshot_provider(self._thread_metrics_snapshot)
         self._sock = None
 
         # BD en memoria compartida: file::memory:?cache=shared
@@ -2051,6 +2061,22 @@ class WebSocketHTTPServer:
         )
         # Crear tabla de ejemplo para el chat
         ChatMessage.create_table(self.db)
+
+    def _thread_metrics_snapshot(self):
+        active_connection_threads = max(0, threading.active_count() - 1)
+        active_ws_clients = self.registry.active_client_count()
+        return {
+            "threads": {
+                "distribution": "least_busy",
+                "demo": {
+                    "min_threads": 0,
+                    "max_threads": 0,
+                    "requests_per_thread": 0,
+                    "active_connection_threads": active_connection_threads,
+                    "active_ws_clients": active_ws_clients,
+                },
+            }
+        }
 
     def serve_forever(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
