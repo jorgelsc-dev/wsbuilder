@@ -64,25 +64,26 @@ Para CORS sin variables de entorno:
 app = App(cors_allow_origin="*")
 ```
 
-## Thread Routing por Cookie (views)
+## Thread Pool en Views
 
 Las `view` por defecto se ejecutan en el hilo padre (`thread_count=0`).
-Puedes crear workers por view y afinidad por cookie firmada:
+Puedes configurar un pool por ruta con min/max de hilos y limite de requests por hilo:
 
 ```python
 from wsbuilder import App
 
 app = App()
 
-@app.view("/jobs", thread_count=4, max_clients=200)
+@app.view("/jobs", min_threads=1, max_threads=4, requests_per_thread=0)
 def jobs(_request):
     return "ok"
 ```
 
-- Primera request sin cookie: responde la view padre y asigna cookie firmada.
-- Requests siguientes con cookie valida: se enrutan al worker asignado.
-- Si la cookie es invalida o no existe el worker: fallback seguro a la view padre.
-- `max_clients` limita clientes por worker y usa balanceo por menor carga.
+- `min_threads`: workers iniciales para la `view`.
+- `max_threads`: tope de workers para esa `view` (`0` deshabilita pool).
+- `requests_per_thread`: capacidad por worker (`0` = sin limite).
+- Distribucion: siempre por `least_busy` (worker menos ocupado).
+- Se expone metadata de worker en headers y metrics (`/api/metrics`, `/api/metrics/stream`).
 
 ## ORM SQLite3 rapido
 

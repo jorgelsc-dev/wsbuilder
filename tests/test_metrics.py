@@ -82,6 +82,50 @@ class TestMetrics(unittest.TestCase):
         chunks = list(resp_stream.stream)
         self.assertEqual(len(chunks), 5)
 
+    def test_app_enable_metrics_exposes_thread_metrics_in_snapshot_and_stream(self):
+        app = App()
+
+        @app.view("/jobs", min_threads=1, max_threads=2, requests_per_thread=0)
+        def jobs(_request):
+            return "ok"
+
+        app.enable_metrics(app_name="thread-metrics")
+
+        req_snapshot = Request(
+            method="GET",
+            path="/api/metrics",
+            query_string="",
+            headers={},
+            body=b"",
+            client=("127.0.0.1", 1234),
+            tls={},
+        )
+        resp_snapshot = app.dispatch(req_snapshot)
+        data = json.loads(resp_snapshot.body.decode("utf-8"))
+        self.assertEqual(resp_snapshot.status, 200)
+        self.assertIn("threads", data)
+        self.assertEqual(data["threads"]["distribution"], "least_busy")
+        route_row = next(row for row in data["threads"]["routes"] if row["path"] == "/jobs")
+        self.assertEqual(route_row["min_threads"], 1)
+        self.assertEqual(route_row["max_threads"], 2)
+        self.assertEqual(route_row["requests_per_thread"], 0)
+
+        req_stream = Request(
+            method="GET",
+            path="/api/metrics/stream",
+            query_string="interval=0.01&limit=1",
+            headers={},
+            body=b"",
+            client=("127.0.0.1", 1234),
+            tls={},
+        )
+        resp_stream = app.dispatch(req_stream)
+        self.assertEqual(resp_stream.status, 200)
+        first = next(iter(resp_stream.stream))
+        stream_data = json.loads(first.decode("utf-8"))
+        self.assertIn("threads", stream_data)
+        self.assertEqual(stream_data["threads"]["distribution"], "least_busy")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,8 +3,7 @@ import time
 import uuid
 
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN
-from .cookies import build_set_cookie, get_cookie
-from .headers import get_header
+from .cookies import build_set_cookie
 from .http import Response
 from .ws import sha1
 
@@ -54,16 +53,20 @@ class _RouteThreadWorker:
         self.thread_id = str(uuid.uuid4())
         self.host = route.thread_host
         self.port = route.thread_base_port + self.index if route.thread_base_port > 0 else 0
-        # Ports are metadata only for affinity/debugging. The main server socket handles HTTP I/O.
+        # Ports are metadata only for tracing/debugging. The main server socket handles HTTP I/O.
         self.listening = False
         self.listen_error = "disabled"
 
         self.worker_timeout_seconds = route.worker_timeout_seconds
-        self.max_pending_jobs = route.max_pending_jobs
+        self.requests_per_thread = route.requests_per_thread
+        # Backward-compatible alias used by existing callers/tests.
+        self.max_pending_jobs = self.requests_per_thread
 
         self._jobs = []
         self._jobs_cond = threading.Condition()
         self._running = True
+        self._active_jobs = 0
+        self._served_jobs = 0
         self._thread = threading.Thread(
             target=self._run,
             name=f"wsbuilder-view-thread-{route.path}-{self.thread_id}",
@@ -79,11 +82,16 @@ class _RouteThreadWorker:
                 if not self._running and not self._jobs:
                     break
                 job = self._jobs.pop(0)
+                self._active_jobs += 1
             try:
                 job.result = self.route.handler(job.request)
             except Exception as e:
                 job.error = e
             finally:
+                with self._jobs_cond:
+                    if self._active_jobs > 0:
+                        self._active_jobs -= 1
+                    self._served_jobs += 1
                 job.done.set()
 
     def submit(self, request):
@@ -91,8 +99,9 @@ class _RouteThreadWorker:
         with self._jobs_cond:
             if not self._running:
                 raise _RouteExecutionError(503, "Route worker is closed")
-            if self.max_pending_jobs > 0 and len(self._jobs) >= self.max_pending_jobs:
-                raise _RouteExecutionError(503, "Route worker queue is full")
+            current_load = self._active_jobs + len(self._jobs)
+            if self.requests_per_thread > 0 and current_load >= self.requests_per_thread:
+                raise _RouteExecutionError(503, "Route worker capacity reached")
             self._jobs.append(job)
             self._jobs_cond.notify()
 
@@ -115,6 +124,18 @@ class _RouteThreadWorker:
         with self._jobs_cond:
             return len(self._jobs)
 
+    def active_jobs(self):
+        with self._jobs_cond:
+            return self._active_jobs
+
+    def load(self):
+        with self._jobs_cond:
+            return self._active_jobs + len(self._jobs)
+
+    def served_jobs(self):
+        with self._jobs_cond:
+            return self._served_jobs
+
     def describe(self):
         return {
             "id": self.thread_id,
@@ -123,6 +144,10 @@ class _RouteThreadWorker:
             "listening": self.listening,
             "listen_error": self.listen_error,
             "pending_jobs": self.pending_jobs(),
+            "active_jobs": self.active_jobs(),
+            "current_load": self.load(),
+            "served_jobs": self.served_jobs(),
+            "requests_per_thread": self.requests_per_thread,
             "max_pending_jobs": self.max_pending_jobs,
             "worker_timeout_seconds": self.worker_timeout_seconds,
         }
@@ -131,108 +156,67 @@ class _RouteThreadWorker:
 class _RouteThreadPool:
     def __init__(self, route):
         self.route = route
-        self.max_clients = max(0, int(route.max_clients))
-        self.affinity_ttl_seconds = max(0.0, float(route.affinity_ttl_seconds))
-        self.affinity_max_entries = max(1, int(route.affinity_max_entries))
-
-        self.workers = [_RouteThreadWorker(route, i) for i in range(route.thread_count)]
-        self.by_id = {worker.thread_id: worker for worker in self.workers}
-        self.default_worker = self.workers[0] if self.workers else None
-
         self._lock = threading.Lock()
-        self._client_to_worker = {}  # fingerprint -> worker_id
-        self._client_last_seen = {}  # fingerprint -> unix timestamp
-        self._worker_clients = {worker.thread_id: set() for worker in self.workers}
+        self.min_threads = max(0, int(route.min_threads))
+        self.max_threads = max(0, int(route.max_threads))
+        if self.max_threads < self.min_threads:
+            raise ValueError("max_threads for view routes must be >= min_threads")
 
-    def _fingerprint(self, request):
-        client = request.client or ("", 0)
-        ip = str(client[0] or "")
-        xff = str(get_header(request.headers, "x-forwarded-for", default="") or "").strip()
-        if xff:
-            ip = xff.split(",", 1)[0].strip() or ip
-        ua = str(get_header(request.headers, "user-agent", default="") or "")
-        return f"{ip}|{ua}"
+        self.workers = []
+        self.by_id = {}
+        self.default_worker = None
+        self._next_index = 0
 
-    def _evict_fingerprint_locked(self, fingerprint):
-        worker_id = self._client_to_worker.pop(fingerprint, None)
-        self._client_last_seen.pop(fingerprint, None)
-        if worker_id:
-            members = self._worker_clients.get(worker_id)
-            if members and fingerprint in members:
-                members.remove(fingerprint)
+        for _ in range(self.min_threads):
+            self._spawn_worker_locked()
 
-    def _evict_stale_locked(self, now):
-        if self.affinity_ttl_seconds > 0:
-            cutoff = now - self.affinity_ttl_seconds
-            for fp, seen in list(self._client_last_seen.items()):
-                if seen < cutoff:
-                    self._evict_fingerprint_locked(fp)
-
-        over = len(self._client_last_seen) - self.affinity_max_entries
-        if over > 0:
-            oldest = sorted(self._client_last_seen.items(), key=lambda item: item[1])[:over]
-            for fp, _seen in oldest:
-                self._evict_fingerprint_locked(fp)
-
-    def _worker_from_map_locked(self, fingerprint):
-        worker_id = self._client_to_worker.get(fingerprint)
-        if not worker_id:
+    def _spawn_worker_locked(self):
+        if self.max_threads > 0 and len(self.workers) >= self.max_threads:
             return None
-        return self.by_id.get(worker_id)
+        worker = _RouteThreadWorker(self.route, self._next_index)
+        self._next_index += 1
+        self.workers.append(worker)
+        self.by_id[worker.thread_id] = worker
+        if self.default_worker is None:
+            self.default_worker = worker
+        return worker
 
-    def _can_accept_locked(self, worker, fingerprint):
-        if self.max_clients <= 0:
-            return True
-        clients = self._worker_clients.get(worker.thread_id, set())
-        if fingerprint in clients:
-            return True
-        return len(clients) < self.max_clients
-
-    def _assign_client_locked(self, fingerprint, worker, now):
-        previous = self._client_to_worker.get(fingerprint)
-        if previous and previous != worker.thread_id:
-            prev_members = self._worker_clients.get(previous)
-            if prev_members and fingerprint in prev_members:
-                prev_members.remove(fingerprint)
-        self._client_to_worker[fingerprint] = worker.thread_id
-        self._client_last_seen[fingerprint] = now
-        self._worker_clients.setdefault(worker.thread_id, set()).add(fingerprint)
-
-    def _pick_best_worker_locked(self, fingerprint):
+    def _pick_least_busy_locked(self):
+        if not self.workers:
+            return None
         candidates = []
         for worker in self.workers:
-            if not self._can_accept_locked(worker, fingerprint):
+            load = worker.load()
+            if self.route.requests_per_thread > 0 and load >= self.route.requests_per_thread:
                 continue
-            load = len(self._worker_clients.get(worker.thread_id, set()))
             candidates.append((load, worker.index, worker))
         if not candidates:
             return None
         candidates.sort(key=lambda row: (row[0], row[1]))
         return candidates[0][2]
 
-    def resolve(self, request, cookie_thread_id=""):
+    def _pick_any_least_busy_locked(self):
+        if not self.workers:
+            return None
+        candidates = [(worker.load(), worker.index, worker) for worker in self.workers]
+        candidates.sort(key=lambda row: (row[0], row[1]))
+        return candidates[0][2]
+
+    def resolve(self, request=None, cookie_thread_id=""):
+        _ = request
+        _ = cookie_thread_id
         with self._lock:
-            now = time.time()
-            self._evict_stale_locked(now)
-            fingerprint = self._fingerprint(request)
+            selected = self._pick_least_busy_locked()
+            if selected is not None:
+                return selected
 
-            if cookie_thread_id:
-                cookie_worker = self.by_id.get(cookie_thread_id)
-                if cookie_worker and self._can_accept_locked(cookie_worker, fingerprint):
-                    self._assign_client_locked(fingerprint, cookie_worker, now)
-                    return cookie_worker, cookie_worker
+            can_grow = self.max_threads == 0 or len(self.workers) < self.max_threads
+            if can_grow:
+                created = self._spawn_worker_locked()
+                if created is not None:
+                    return created
 
-            mapped_worker = self._worker_from_map_locked(fingerprint)
-            if mapped_worker and self._can_accept_locked(mapped_worker, fingerprint):
-                self._assign_client_locked(fingerprint, mapped_worker, now)
-                return None, mapped_worker
-
-            assigned_worker = self._pick_best_worker_locked(fingerprint)
-            if assigned_worker:
-                self._assign_client_locked(fingerprint, assigned_worker, now)
-                return None, assigned_worker
-
-            return None, None
+            return self._pick_any_least_busy_locked()
 
     def close(self):
         for worker in self.workers:
@@ -242,11 +226,12 @@ class _RouteThreadPool:
         rows = []
         with self._lock:
             for worker in self.workers:
-                clients = len(self._worker_clients.get(worker.thread_id, set()))
                 row = worker.describe()
                 row["default"] = bool(self.default_worker and worker.thread_id == self.default_worker.thread_id)
-                row["clients"] = clients
-                row["max_clients"] = self.max_clients
+                row["min_threads"] = self.min_threads
+                row["max_threads"] = self.max_threads
+                row["workers_total"] = len(self.workers)
+                row["distribution"] = "least_busy"
                 rows.append(row)
         return rows
 
@@ -259,11 +244,14 @@ class Route:
         handler,
         kind,
         thread_count=0,
+        min_threads=None,
+        max_threads=None,
         thread_host="127.0.0.1",
         thread_base_port=0,
         max_clients=100,
         worker_timeout_seconds=DEFAULT_WORKER_REQUEST_TIMEOUT_SECONDS,
         max_pending_jobs=DEFAULT_MAX_PENDING_JOBS,
+        requests_per_thread=None,
         affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
         affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
     ):
@@ -276,7 +264,13 @@ class Route:
         self.thread_base_port = max(0, int(thread_base_port or 0))
         self.max_clients = max(0, int(max_clients))
         self.worker_timeout_seconds = max(0.0, float(worker_timeout_seconds))
-        self.max_pending_jobs = max(1, int(max_pending_jobs))
+        if requests_per_thread is None:
+            resolved_requests_per_thread = int(max_pending_jobs)
+        else:
+            resolved_requests_per_thread = int(requests_per_thread)
+        self.requests_per_thread = max(0, resolved_requests_per_thread)
+        # Backward-compatible alias.
+        self.max_pending_jobs = self.requests_per_thread
         self.affinity_ttl_seconds = max(0.0, float(affinity_ttl_seconds))
         self.affinity_max_entries = max(1, int(affinity_max_entries))
 
@@ -284,9 +278,24 @@ class Route:
             count = int(thread_count) if thread_count is not None else 0
             if count < 0:
                 raise ValueError("thread_count for view routes must be >= 0")
-            self.thread_count = count
-            self.thread_pool = _RouteThreadPool(self) if count > 0 else None
+
+            resolved_min = count if min_threads is None else int(min_threads)
+            resolved_max = count if max_threads is None else int(max_threads)
+            if resolved_min < 0:
+                raise ValueError("min_threads for view routes must be >= 0")
+            if resolved_max < 0:
+                raise ValueError("max_threads for view routes must be >= 0")
+            if resolved_max > 0 and resolved_max < resolved_min:
+                raise ValueError("max_threads for view routes must be >= min_threads")
+
+            self.min_threads = resolved_min
+            self.max_threads = resolved_max
+            # Keep existing field name for compatibility in metadata/tests.
+            self.thread_count = resolved_max
+            self.thread_pool = _RouteThreadPool(self) if resolved_max > 0 else None
         else:
+            self.min_threads = 0
+            self.max_threads = 0
             self.thread_count = 0
             self.thread_pool = None
 
@@ -354,11 +363,14 @@ class App:
         methods=("GET",),
         kind="plain",
         thread_count=None,
+        min_threads=None,
+        max_threads=None,
         thread_host="127.0.0.1",
         thread_base_port=0,
         max_clients=100,
         worker_timeout_seconds=DEFAULT_WORKER_REQUEST_TIMEOUT_SECONDS,
         max_pending_jobs=DEFAULT_MAX_PENDING_JOBS,
+        requests_per_thread=None,
         affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
         affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
     ):
@@ -374,11 +386,14 @@ class App:
                     func,
                     kind,
                     thread_count=resolved_count,
+                    min_threads=min_threads,
+                    max_threads=max_threads,
                     thread_host=thread_host,
                     thread_base_port=thread_base_port,
                     max_clients=max_clients,
                     worker_timeout_seconds=worker_timeout_seconds,
                     max_pending_jobs=max_pending_jobs,
+                    requests_per_thread=requests_per_thread,
                     affinity_ttl_seconds=affinity_ttl_seconds,
                     affinity_max_entries=affinity_max_entries,
                 )
@@ -392,11 +407,14 @@ class App:
         path,
         methods=("GET",),
         thread_count=0,
+        min_threads=None,
+        max_threads=None,
         thread_host="127.0.0.1",
         thread_base_port=0,
         max_clients=100,
         worker_timeout_seconds=DEFAULT_WORKER_REQUEST_TIMEOUT_SECONDS,
         max_pending_jobs=DEFAULT_MAX_PENDING_JOBS,
+        requests_per_thread=None,
         affinity_ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
         affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
     ):
@@ -405,11 +423,14 @@ class App:
             methods=methods,
             kind="plain",
             thread_count=thread_count,
+            min_threads=min_threads,
+            max_threads=max_threads,
             thread_host=thread_host,
             thread_base_port=thread_base_port,
             max_clients=max_clients,
             worker_timeout_seconds=worker_timeout_seconds,
             max_pending_jobs=max_pending_jobs,
+            requests_per_thread=requests_per_thread,
             affinity_ttl_seconds=affinity_ttl_seconds,
             affinity_max_entries=affinity_max_entries,
         )
@@ -440,6 +461,7 @@ class App:
             path=path,
             stream_path=stream_path,
             app_name=app_name,
+            extra_snapshot_provider=lambda: {"threads": self.thread_metrics_snapshot()},
         )
 
     def list_view_threads(self, path, method="GET"):
@@ -447,6 +469,51 @@ class App:
         if not route or not route.thread_pool:
             return []
         return route.thread_pool.describe()
+
+    def thread_metrics_snapshot(self):
+        routes = []
+        workers_total = 0
+        active_jobs_total = 0
+        pending_jobs_total = 0
+        current_load_total = 0
+
+        for route in self.router.routes:
+            if route.kind != "plain":
+                continue
+            workers = route.thread_pool.describe() if route.thread_pool else []
+            workers_total += len(workers)
+            active_jobs = sum(int(row.get("active_jobs", 0)) for row in workers)
+            pending_jobs = sum(int(row.get("pending_jobs", 0)) for row in workers)
+            current_load = sum(int(row.get("current_load", 0)) for row in workers)
+            active_jobs_total += active_jobs
+            pending_jobs_total += pending_jobs
+            current_load_total += current_load
+
+            routes.append(
+                {
+                    "path": route.path,
+                    "methods": sorted(route.methods),
+                    "min_threads": int(route.min_threads),
+                    "max_threads": int(route.max_threads),
+                    "requests_per_thread": int(route.requests_per_thread),
+                    "distribution": "least_busy",
+                    "workers_total": len(workers),
+                    "active_jobs": active_jobs,
+                    "pending_jobs": pending_jobs,
+                    "current_load": current_load,
+                    "workers": workers,
+                }
+            )
+
+        return {
+            "distribution": "least_busy",
+            "routes_total": len(routes),
+            "workers_total": workers_total,
+            "active_jobs_total": active_jobs_total,
+            "pending_jobs_total": pending_jobs_total,
+            "current_load_total": current_load_total,
+            "routes": routes,
+        }
 
     def close(self):
         for route in self.router.routes:
@@ -475,16 +542,12 @@ class App:
             return Response.text("Not Found", status=404)
 
         selected_worker = None
-        assigned_worker = None
         try:
             if route.thread_pool:
-                raw_cookie = get_cookie(request.headers, self.thread_cookie_name, default="")
-                cookie_thread_id = self._verify_thread_cookie(route.path, raw_cookie)
-                selected_worker, assigned_worker = route.thread_pool.resolve(request, cookie_thread_id)
-                if selected_worker is not None:
-                    result = selected_worker.submit(request)
-                else:
-                    result = route.handler(request)
+                selected_worker = route.thread_pool.resolve(request=request)
+                if selected_worker is None:
+                    raise _RouteExecutionError(503, "No route workers available")
+                result = selected_worker.submit(request)
             else:
                 result = route.handler(request)
         except _RouteExecutionError as e:
@@ -511,25 +574,22 @@ class App:
         else:
             resp = Response.text("" if result is None else str(result))
 
-        thread_info = selected_worker or assigned_worker
+        thread_info = selected_worker
         if thread_info is not None:
             resp.headers.setdefault(THREAD_RESPONSE_ID_HEADER, thread_info.thread_id)
             resp.headers.setdefault(THREAD_RESPONSE_HOST_HEADER, thread_info.host)
             if thread_info.port > 0:
                 resp.headers.setdefault(THREAD_RESPONSE_PORT_HEADER, str(thread_info.port))
-            if selected_worker is not None:
-                resp.headers.setdefault(THREAD_RESPONSE_MODE_HEADER, "worker")
-            else:
-                resp.headers.setdefault(THREAD_RESPONSE_MODE_HEADER, "parent-assigned")
-                signed_cookie = self._sign_thread_cookie(route.path, thread_info.thread_id)
-                resp.headers["Set-Cookie"] = build_set_cookie(
-                    self.thread_cookie_name,
-                    signed_cookie,
-                    path=route.path or "/",
-                    http_only=True,
-                    secure=bool((request.tls or {}).get("enabled")),
-                    same_site="Lax",
-                )
+            resp.headers.setdefault(THREAD_RESPONSE_MODE_HEADER, "worker")
+            signed_cookie = self._sign_thread_cookie(route.path, thread_info.thread_id)
+            resp.headers["Set-Cookie"] = build_set_cookie(
+                self.thread_cookie_name,
+                signed_cookie,
+                path=route.path or "/",
+                http_only=True,
+                secure=bool((request.tls or {}).get("enabled")),
+                same_site="Lax",
+            )
 
         if route.kind == "api":
             if cors_allow_origin:

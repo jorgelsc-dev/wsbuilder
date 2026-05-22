@@ -11,13 +11,13 @@ Documentacion tecnica y de uso del proyecto `wsbuilder` en su estado actual.
 - ORM SQLite.
 - Metricas de aplicacion.
 - DNS local minimo.
-- Routing de `view` por afinidad de cookie firmada hacia workers dedicados.
+- Routing de `view` con pool dinamico por ruta y distribucion `least_busy`.
 
 ## 2. Estructura del proyecto
 
 Rutas principales:
 
-- `src/wsbuilder/app.py`: enrutado, dispatch, view workers, afinidad por cookie.
+- `src/wsbuilder/app.py`: enrutado, dispatch, view workers y pool dinamico.
 - `src/wsbuilder/server.py`: servidor HTTP/TCP, control de conexiones, limites y timeouts.
 - `src/wsbuilder/http.py`: parser/request/response HTTP.
 - `src/wsbuilder/ws.py`: handshake y frames WebSocket.
@@ -55,12 +55,12 @@ Rutas principales:
 - CORS basico para rutas API.
 - Hooks de startup.
 
-### 3.3 Thread routing por cookie en views
+### 3.3 Thread pool por view
 
 Para `view` puedes declarar workers dedicados:
 
 ```python
-@app.view("/jobs", thread_count=4, max_clients=200)
+@app.view("/jobs", min_threads=1, max_threads=4, requests_per_thread=0)
 def jobs(request):
     return "ok"
 ```
@@ -68,10 +68,9 @@ def jobs(request):
 Comportamiento:
 
 - `thread_count=0` (default): la `view` corre en el hilo padre.
-- `thread_count>0`: crea workers con UUID internos.
-- Primera request sin cookie valida: responde la `view` padre y asigna cookie firmada.
-- Requests siguientes con cookie valida: ejecutan en el worker asignado.
-- Cookie invalida/expirada/no encontrada: fallback seguro al padre.
+- `min_threads`/`max_threads`: rango del pool por ruta.
+- `requests_per_thread=0`: capacidad ilimitada por worker.
+- Distribucion siempre `least_busy` (menor carga actual).
 
 Seguridad:
 
@@ -79,13 +78,13 @@ Seguridad:
 - Comparacion de firma con funcion interna de tiempo constante.
 - Cookie emitida con `HttpOnly=True`.
 - `Secure=True` cuando la request llega por TLS.
+- La cookie queda como metadata de trazabilidad (no controla el balanceo).
 
 Control de capacidad y estabilidad:
 
-- `max_clients`: limite por worker.
-- `max_pending_jobs`: limite de cola por worker.
+- `requests_per_thread`: limite por worker (0 = sin limite).
 - `worker_timeout_seconds`: timeout de ejecucion de job de worker.
-- Mapa de afinidad con `TTL` y limite de entradas para evitar fuga de memoria.
+- Escalado dinamico: se crean workers hasta `max_threads` cuando hay carga.
 
 ## 4. API HTTP y tipos base
 
@@ -213,8 +212,8 @@ Incluye:
 - Timeouts de socket y request en servidor HTTP.
 - Limites de body/header.
 - Cola y timeout por worker de view.
-- Firma de cookie de afinidad.
-- Eviccion de afinidad por TTL y capacidad.
+- Firma de cookie de trazabilidad de worker.
+- Distribucion por worker menos ocupado (`least_busy`).
 - Validaciones de protocolo WebSocket.
 
 ## 13. Limitaciones conocidas
@@ -232,7 +231,7 @@ from wsbuilder import App, Response
 app = App(cors_allow_origin="*")
 app.enable_metrics()
 
-@app.view("/", thread_count=2, max_clients=100)
+@app.view("/", min_threads=1, max_threads=2, requests_per_thread=0)
 def home(_request):
     return Response.html("<h1>wsbuilder</h1>")
 
