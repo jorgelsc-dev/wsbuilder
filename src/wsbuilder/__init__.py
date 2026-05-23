@@ -56,6 +56,7 @@ from .db_replicas import (
     OptimizedDatabase,
     SQLite3OptimizationConfig,
 )
+from .predicts import Predictor
 
 __version__ = "0.1.0"
 
@@ -118,9 +119,11 @@ __all__ = [
     "quote_identifier",
     "validate_identifier",
     "parse_close_payload",
+    "handshake_websocket_with_options",
     "parse_query_string",
     "DatabaseReplica",
     "DatabaseReplicaPool",
     "OptimizedDatabase",
     "SQLite3OptimizationConfig",
+    "Predictor",
 ]
