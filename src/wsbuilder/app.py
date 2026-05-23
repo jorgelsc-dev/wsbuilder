@@ -5,6 +5,7 @@ import uuid
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN
 from .cookies import build_set_cookie
 from .http import Response
+from .tasks import TaskManager
 from .ws import sha1
 
 THREAD_COOKIE_NAME = "wsbuilder-thread"
@@ -340,6 +341,7 @@ class App:
         self.metrics = None
         self.security = None
         self.caches = None
+        self.tasks = TaskManager(app=self)
 
         raw_secret = str(thread_cookie_secret or "").strip()
         if not raw_secret:
@@ -595,6 +597,12 @@ class App:
         }
 
     def close(self):
+        tasks = getattr(self, "tasks", None)
+        if tasks:
+            try:
+                tasks.close(wait=False)
+            except Exception:
+                pass
         caches = getattr(self, "caches", None)
         if caches and hasattr(caches, "close"):
             try:
@@ -607,6 +615,10 @@ class App:
                 pool.close()
 
     def dispatch(self, request):
+        try:
+            request.app = self
+        except Exception:
+            pass
         cors_allow_origin = self.cors_allow_origin
 
         security = getattr(self, "security", None)

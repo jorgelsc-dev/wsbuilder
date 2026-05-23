@@ -7,6 +7,21 @@ from .metrics import AppMetrics, install_metrics
 from .cache import Cache, SQLiteMemoryCache, install_cache
 from .caches import GlobalCacheRule, ViewResponseCache, install_caches
 from .security import ACLRule, SecurityDecision, SecurityPolicy, install_security
+from .tasks import (
+    TASK_CANCELLED,
+    TASK_COMPLETED,
+    TASK_FAILED,
+    TASK_PENDING,
+    TASK_REJECTED,
+    TASK_RUNNING,
+    TaskCancelledError,
+    TaskClosedError,
+    TaskContext,
+    TaskError,
+    TaskHandle,
+    TaskManager,
+    TaskRejectedError,
+)
 from .server import HTTPServer
 from .ws import (
     B64_ALPHABET,
@@ -44,6 +59,19 @@ __all__ = [
     "SecurityDecision",
     "SecurityPolicy",
     "install_security",
+    "TaskError",
+    "TaskClosedError",
+    "TaskCancelledError",
+    "TaskRejectedError",
+    "TaskContext",
+    "TaskHandle",
+    "TaskManager",
+    "TASK_PENDING",
+    "TASK_RUNNING",
+    "TASK_COMPLETED",
+    "TASK_FAILED",
+    "TASK_CANCELLED",
+    "TASK_REJECTED",
     "Route",
     "Router",
     "WebSocket",

@@ -29,6 +29,7 @@ class Request:
         self.body = body or b""
         self.client = client
         self.tls = tls or {}
+        self.app = None
 
     def text(self, encoding="utf-8"):
         return self.body.decode(encoding, errors="ignore")
