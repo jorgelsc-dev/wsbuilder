@@ -19,6 +19,14 @@ DEFAULT_AFFINITY_TTL_SECONDS = 900.0
 DEFAULT_AFFINITY_MAX_ENTRIES = 10000
 
 
+def _normalize_ws_protocols(value):
+    if not value:
+        return ()
+    if isinstance(value, str):
+        return tuple(part.strip() for part in value.split(",") if part.strip())
+    return tuple(str(part).strip() for part in value if str(part).strip())
+
+
 def _constant_time_equals(a, b):
     left = str(a or "").encode("utf-8")
     right = str(b or "").encode("utf-8")
@@ -446,9 +454,39 @@ class App:
     def api(self, path, methods=("GET",)):
         return self.route(path, methods=methods, kind="api")
 
-    def ws(self, path):
+    def ws(
+        self,
+        path,
+        *,
+        subprotocols=(),
+        idle_timeout=0.0,
+        keepalive_interval=0.0,
+        pong_timeout=0.0,
+        auto_pong=True,
+        on_close=None,
+        on_error=None,
+        on_timeout=None,
+        io_poll_interval=1.0,
+        ping_payload=b"",
+    ):
         def decorator(func):
-            self.ws_routes[path] = func
+            self.ws_routes[path] = {
+                "handler": func,
+                "subprotocols": _normalize_ws_protocols(subprotocols),
+                "idle_timeout": float(idle_timeout or 0.0),
+                "keepalive_interval": float(keepalive_interval or 0.0),
+                "pong_timeout": float(pong_timeout or 0.0),
+                "auto_pong": bool(auto_pong),
+                "on_close": on_close,
+                "on_error": on_error,
+                "on_timeout": on_timeout,
+                "io_poll_interval": float(io_poll_interval or 1.0),
+                "ping_payload": (
+                    ping_payload.encode("utf-8")
+                    if isinstance(ping_payload, str)
+                    else bytes(ping_payload or b"")
+                ),
+            }
             return func
 
         return decorator

@@ -4,7 +4,7 @@ import threading
 import time
 
 from .http import Request, Response, parse_http_request, send_http_response
-from .ws import handshake_websocket, is_ws_request, recv_exact
+from .ws import handshake_websocket_with_options, is_ws_request, recv_exact
 
 
 class HTTPServer:
@@ -205,8 +205,8 @@ class HTTPServer:
                     return
 
             if ws_request:
-                handler = self.app.ws_routes.get(path)
-                if not handler:
+                ws_route = self.app.ws_routes.get(path)
+                if not ws_route:
                     response = Response.text("Not Found", status=404)
                     send_http_response(conn, response)
                     if metrics:
@@ -221,7 +221,21 @@ class HTTPServer:
                     if security:
                         security.observe_response(request, response.status)
                     return
-                ws = handshake_websocket(conn, addr, headers)
+                ws = handshake_websocket_with_options(
+                    conn,
+                    addr,
+                    headers,
+                    supported_subprotocols=ws_route.get("subprotocols", ()),
+                    idle_timeout=ws_route.get("idle_timeout", 0.0),
+                    keepalive_interval=ws_route.get("keepalive_interval", 0.0),
+                    pong_timeout=ws_route.get("pong_timeout", 0.0),
+                    auto_pong=ws_route.get("auto_pong", True),
+                    on_close=ws_route.get("on_close"),
+                    on_error=ws_route.get("on_error"),
+                    on_timeout=ws_route.get("on_timeout"),
+                    io_poll_interval=ws_route.get("io_poll_interval", 1.0),
+                    ping_payload=ws_route.get("ping_payload", b""),
+                )
                 if not ws:
                     if metrics:
                         elapsed = (time.time() - started) * 1000.0
@@ -249,7 +263,7 @@ class HTTPServer:
                 if security:
                     security.observe_response(request, 101)
                 try:
-                    handler(ws, request)
+                    ws_route["handler"](ws, request)
                 except Exception as e:
                     print(f"[ws] error: {e}")
                     if metrics:

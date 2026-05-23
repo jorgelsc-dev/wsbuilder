@@ -159,7 +159,9 @@ def build_demo_app():
     @app.ws("/ws/")
     def ws_handler(ws, _request):
         while True:
-            fin, opcode, payload, _masked, _mask = ws.recv_frame()
+            frame = ws.recv_frame()
+            opcode = frame.opcode
+            payload = frame.payload
             if opcode == 0x8:
                 code, reason = parse_close_payload(payload)
                 ws.close(code or 1000, reason or "")
