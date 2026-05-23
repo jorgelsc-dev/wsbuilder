@@ -87,22 +87,26 @@ class DatabaseReplica:
         conn = self.connect()
         if params is None:
             params = ()
-        return conn.execute(sql, tuple(params))
+        with self._lock:
+            return conn.execute(sql, tuple(params))
     
     def fetchone(self, sql: str, params=None):
         """Fetch one result."""
-        return self.execute(sql, params).fetchone()
+        with self._lock:
+            return self.execute(sql, params).fetchone()
     
     def fetchall(self, sql: str, params=None):
         """Fetch all results."""
-        return self.execute(sql, params).fetchall()
+        with self._lock:
+            return self.execute(sql, params).fetchall()
     
     def scalar(self, sql: str, params=None, default=None):
         """Fetch a scalar value."""
-        row = self.fetchone(sql, params)
-        if row is None:
-            return default
-        return row[0]
+        with self._lock:
+            row = self.fetchone(sql, params)
+            if row is None:
+                return default
+            return row[0]
 
 
 class DatabaseReplicaPool:
