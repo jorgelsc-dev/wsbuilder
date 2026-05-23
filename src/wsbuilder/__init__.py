@@ -51,8 +51,7 @@ from .db_replicas import (
 )
 from .predicts import Predictor
 
-__version__ = "0.1.0"
-
+__version__ = "0.10.0"
 __all__ = [
     "App",
     "HTTPServer",
