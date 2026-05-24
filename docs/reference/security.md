@@ -23,6 +23,13 @@ policy = SecurityPolicy(rate_limit_requests=120, rate_limit_window_seconds=60)
 install_security(app, policy)
 ```
 
+## Como decide
+
+1. Resuelve la IP del cliente.
+2. Evalua ACL y listas blanca/negra.
+3. Aplica limites de tasa y ventanas temporales.
+4. Devuelve una decision que puede convertirse en respuesta HTTP.
+
 ## Capacidades
 
 - ACL por `path`, `path_prefix`, `path_regex`.
@@ -32,3 +39,9 @@ install_security(app, policy)
 - Reglas por headers exactos o regex.
 - Bloqueo temporal con `Retry-After` cuando corresponde.
 
+## Casos de uso
+
+- Restringir endpoints de administracion.
+- Proteger APIs publicas con limites de tasa.
+- Bloquear bots o clientes abusivos.
+- Exigir TLS en rutas sensibles.

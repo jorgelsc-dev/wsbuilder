@@ -5,7 +5,15 @@ Esta seccion resume la API publica exportada por `wsbuilder`.
 ## Importes principales
 
 ```python
-from wsbuilder import App, Response, Database, Model, LocalDNSServer
+from wsbuilder import (
+    App,
+    Response,
+    Database,
+    Model,
+    LocalDNSServer,
+    TaskManager,
+    SQLiteMemoryCache,
+)
 ```
 
 ## Bloques de la API
@@ -16,6 +24,8 @@ from wsbuilder import App, Response, Database, Model, LocalDNSServer
 - [Cache](cache.md)
 - [Seguridad](security.md)
 - [Metricas](metrics.md)
+- [Tareas en background](tasks.md)
+- [Utilidades HTTP](utilities.md)
 - [DNS local](dns.md)
 - [Avanzado](advanced.md)
 
@@ -28,7 +38,7 @@ from wsbuilder import App, Response, Database, Model, LocalDNSServer
 - `SQLiteMemoryCache`, `install_cache`, `install_caches`
 - `SecurityPolicy`, `ACLRule`, `install_security`
 - `AppMetrics`, `install_metrics`
+- `TaskManager`, `TaskHandle`, `TaskContext`
 - `LocalDNSServer`
-- `DatabaseReplica`, `DatabaseReplicaPool`, `OptimizedDatabase`
+- `DatabaseReplica`, `DatabaseReplicaPool`, `OptimizedDatabase`, `SQLite3OptimizationConfig`
 - `Predictor`
-

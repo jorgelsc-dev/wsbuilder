@@ -2,7 +2,6 @@ site_name: wsbuilder
 site_description: Documentacion oficial de wsbuilder
 site_author: wsbuilder Authors
 repo_name: wsbuilder
-site_url: https://wsbuilder.jorgelsc.dev/
 
 nav:
   - Inicio: index.md
@@ -16,10 +15,10 @@ nav:
       - Cache: reference/cache.md
       - Seguridad: reference/security.md
       - Metricas: reference/metrics.md
+      - Tareas en background: reference/tasks.md
+      - Utilidades HTTP: reference/utilities.md
       - DNS local: reference/dns.md
       - Avanzado: reference/advanced.md
-  - Despliegue:
-      - GitHub Pages: deployment/github-pages.md
 
 theme:
   name: material
