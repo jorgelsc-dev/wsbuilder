@@ -25,10 +25,12 @@ En el repositorio:
 2. Entra en `Pages`.
 3. En `Build and deployment`, selecciona `GitHub Actions`.
 4. Guarda.
+5. En `Custom domain`, usa `wsbuilder.jorgelsc.dev`.
+6. Activa `Enforce HTTPS` cuando GitHub lo habilite.
 
 ## URL final
 
-Cuando el workflow se ejecute en `main`, el sitio quedara disponible en la URL de Pages del repositorio.
+Cuando el workflow se ejecute en `main`, el sitio quedara disponible en `https://wsbuilder.jorgelsc.dev/`.
 
 ## Preview local
 
@@ -38,4 +40,3 @@ mkdocs serve
 ```
 
 Luego abre `http://127.0.0.1:8000`.
-

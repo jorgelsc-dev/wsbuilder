@@ -2,6 +2,7 @@ site_name: wsbuilder
 site_description: Documentacion oficial de wsbuilder
 site_author: wsbuilder Authors
 repo_name: wsbuilder
+site_url: https://wsbuilder.jorgelsc.dev/
 
 nav:
   - Inicio: index.md
@@ -52,4 +53,3 @@ extra_css:
 
 plugins:
   - search
-
