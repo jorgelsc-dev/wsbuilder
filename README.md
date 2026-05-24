@@ -16,7 +16,15 @@ Lightweight Python HTTP + WebSocket framework for building real-time APIs and cu
 
 ## Documentacion completa
 
-- Ver [docs/README.md](docs/README.md) para arquitectura, API, seguridad, CI/CD, testing y guias de uso.
+- Sitio de docs para GitHub Pages: `mkdocs.yml` + contenido en `docs/`.
+- Vista local:
+
+```bash
+python -m pip install -r requirements-docs.txt
+mkdocs serve
+```
+
+- La guia tecnica por secciones vive en el sitio MkDocs y cubre arquitectura, HTTP, WebSocket, ORM, cache, seguridad, metricas, DNS y despliegue.
 
 ## Instalacion local
 
@@ -167,6 +175,18 @@ python -m wsbuilder --host 0.0.0.0 --port 8765
 # o
 wsbuilder --host 0.0.0.0 --port 8765
 ```
+
+## Documentacion en navegador
+
+Si activas GitHub Pages en el repo, el workflow `docs-pages.yml` publica la documentacion automaticamente desde `main`.
+
+Para ver el sitio antes de subirlo:
+
+```bash
+mkdocs serve
+```
+
+Y abre `http://127.0.0.1:8000`.
 
 ## Configuracion CORS
 
