@@ -255,25 +255,26 @@ def test_concurrent_reads_with_replicas():
         for i in range(20):
             TestUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
         
-        results = []
-        lock = threading.Lock()
-        
-        def reader_thread():
-            """Thread that reads from replica."""
-            count = db.read_replica_scalar("SELECT COUNT(*) FROM test_users")
-            with lock:
-                results.append(count)
-        
-        # Spawn multiple reader threads
-        threads = [threading.Thread(target=reader_thread) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        
-        # All should have read 20 users
-        assert len(results) == 10
-        assert all(r == 20 for r in results)
+        for _ in range(5):
+            results = []
+            lock = threading.Lock()
+
+            def reader_thread():
+                """Thread that reads from replica."""
+                count = db.read_replica_scalar("SELECT COUNT(*) FROM test_users")
+                with lock:
+                    results.append(count)
+
+            # Spawn multiple reader threads
+            threads = [threading.Thread(target=reader_thread) for _ in range(10)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # All should have read 20 users
+            assert len(results) == 10
+            assert all(r == 20 for r in results)
         
         db.close()
     finally:
