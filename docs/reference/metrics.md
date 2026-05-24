@@ -1,5 +1,13 @@
 # Metricas
 
+```mermaid
+flowchart TD
+    Event[Eventos HTTP / WS] --> Collector[AppMetrics]
+    Collector --> Snapshot[Snapshot JSON]
+    Collector --> Stream[NDJSON stream]
+    Stream --> Dashboard[Dashboard / CLI]
+```
+
 ## Collector
 
 `AppMetrics` acumula:
@@ -54,3 +62,9 @@ curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&follow=1"
 - Auditar rutas mas utilizadas.
 - Detectar errores recientes.
 - Alimentar dashboards simples sin dependencia adicional.
+
+## Rol del modulo
+
+- Convertir eventos internos en una vista operativa clara.
+- Dar un plano comun para HTTP, WebSocket, trafico y errores.
+- Exponer un stream facil de consumir sin acoplar el proyecto a otra herramienta.

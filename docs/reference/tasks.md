@@ -1,5 +1,14 @@
 # Tareas en background
 
+```mermaid
+flowchart LR
+    Request --> Spawn[TaskManager.spawn]
+    Spawn --> Handle[TaskHandle]
+    Handle --> Worker[Thread worker]
+    Worker --> Result[Result / Exception]
+    Result --> Snapshot[snapshot()]
+```
+
 `TaskManager` permite ejecutar trabajo asincrono con control de concurrencia, cancelacion y estados.
 
 ## Tipos principales
@@ -57,3 +66,9 @@ print(job.result)
 - Procesamiento diferido de requests largas.
 - Sincronizacion o tareas de mantenimiento.
 - Fan-out controlado para trabajo paralelo.
+
+## Rol del modulo
+
+- Evita bloquear el ciclo HTTP con trabajo pesado.
+- Da visibilidad al estado, resultado y error de cada tarea.
+- Permite modelar jobs locales sin introducir un orquestador externo.

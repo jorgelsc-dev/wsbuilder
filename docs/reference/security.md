@@ -1,5 +1,13 @@
 # Seguridad
 
+```mermaid
+flowchart LR
+    Request --> ACL[ACL]
+    ACL --> Lists[Allow/Deny lists]
+    Lists --> Rate[Rate limiting]
+    Rate --> Decision[SecurityDecision]
+```
+
 El motor de seguridad se centra en tres capas:
 
 1. ACL por ruta, metodo, IP y headers.
@@ -45,3 +53,9 @@ install_security(app, policy)
 - Proteger APIs publicas con limites de tasa.
 - Bloquear bots o clientes abusivos.
 - Exigir TLS en rutas sensibles.
+
+## Rol del modulo
+
+- Cortar acceso no autorizado antes de llegar al handler.
+- Convertir reglas de acceso en respuestas HTTP concretas.
+- Registrar senales de abuso para bloquear o limitar trafico.

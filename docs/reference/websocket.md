@@ -1,5 +1,14 @@
 # WebSocket
 
+```mermaid
+flowchart TD
+    HTTP[HTTP Upgrade] --> HS[Handshake]
+    HS --> WS[WebSocket]
+    WS --> PING[ping/pong]
+    WS --> FRAMES[frames]
+    FRAMES --> CLOSE[cierre]
+```
+
 `wsbuilder` implementa handshake y framing WebSocket sin dependencias externas.
 
 ## Handshake
@@ -97,3 +106,9 @@ def ws_handler(ws, _request):
 - `handshake_websocket(...)` para hacer el upgrade basico.
 - `handshake_websocket_with_options(...)` para controlar subprotocolos y timeouts.
 - `make_ws_frame_bytes(...)` para generar frames manualmente.
+
+## Rol del modulo
+
+- Convierte una conexion HTTP en un canal persistente.
+- Expone control fino de frames y estados del protocolo.
+- Permite construir tiempo real sin depender de un stack externo pesado.

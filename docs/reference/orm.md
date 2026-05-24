@@ -1,5 +1,15 @@
 # ORM
 
+```mermaid
+flowchart LR
+    Model[Model] --> Table[create_table]
+    Table --> DB[(Database)]
+    Model --> QS[QuerySet]
+    QS --> DB
+    DB --> TX[Transaction]
+    TX --> DB
+```
+
 El ORM de `wsbuilder` esta pensado para SQLite y modelos declarativos simples, con un coste de aprendizaje bajo.
 
 ## Tipos principales
@@ -80,3 +90,9 @@ Soporta:
 - Paneles admin simples sin ORM pesado.
 - Servicios embebidos con persistencia determinista.
 - Lecturas razonadas con filtros por campo y operador.
+
+## Rol del modulo
+
+- Traduce modelos declarativos a tablas SQLite.
+- Aporta consultas expresivas sin perder control del SQL final.
+- Funciona bien en servicios donde la base de datos vive junto al servicio.

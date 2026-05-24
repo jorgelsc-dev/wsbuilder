@@ -10,12 +10,32 @@ Se apoya en la biblioteca estandar y expone bloques pequenos y composables para:
 - cache, seguridad, metricas y tareas en background.
 - DNS local y replicas SQLite optimizadas.
 
+## Mapa rapido
+
+```mermaid
+flowchart TD
+    Cliente --> HTTPServer
+    HTTPServer --> App
+    App --> Router
+    App --> Security
+    App --> Cache
+    App --> Metrics
+    App --> Tasks
+    Router --> HTTP[HTTP / HTML / JSON]
+    Router --> WS[WebSocket]
+    HTTP --> ORM
+    HTTP --> Utilities[Cookies / Headers]
+    ORM --> SQLite[(SQLite)]
+    Cache --> SQLite
+```
+
 ## Por que destaca
 
 - Menos superficie de dependencia en runtime.
 - Flujo explicito: request, dispatch, respuesta y cierre.
 - Modulos separados que puedes activar solo cuando los necesitas.
 - API publica uniforme: `App`, `Response`, `Database`, `TaskManager`, `LocalDNSServer`.
+- Adecuado para servicios pequenos, medianos y capas de borde en Microservicios.
 
 ## Instalacion
 
@@ -44,6 +64,21 @@ app.run("0.0.0.0", 8765)
 
 ## Mapa de la libreria
 
+```mermaid
+flowchart LR
+    AppFacade[framework / App] --> HTTP[http]
+    AppFacade --> WS[ws]
+    AppFacade --> ORM[orm]
+    AppFacade --> Cache[cache / caches]
+    AppFacade --> Security[security]
+    AppFacade --> Metrics[metrics]
+    AppFacade --> Tasks[tasks]
+    AppFacade --> DNS[dns]
+    AppFacade --> Replicas[db_replicas]
+    AppFacade --> Utils[cookies / headers]
+    AppFacade --> Predictor[predicts]
+```
+
 - `wsbuilder.framework`: fachada publica con `App`, `Request`, `Response`, `HTTPServer`, `WebSocket` y helpers.
 - `wsbuilder.http`: parseo HTTP, request/response y streaming.
 - `wsbuilder.ws`: handshake, frames y errores WebSocket.
@@ -70,6 +105,7 @@ app.run("0.0.0.0", 8765)
 
 - [Inicio](docs/index.md)
 - [Arquitectura](docs/architecture.md)
+- [Ayuda](docs/help/index.md)
 - [Referencia](docs/reference/index.md)
 
 ## Contribucion y soporte

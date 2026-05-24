@@ -1,5 +1,12 @@
 # Utilidades HTTP
 
+```mermaid
+flowchart LR
+    Headers[Headers] --> Normalize[normalize_header_name]
+    Cookies[Cookies] --> Parse[parse_cookie_header]
+    Parse --> Build[build_set_cookie]
+```
+
 Esta pagina agrupa helpers pequenos de cabeceras y cookies.
 
 ## Headers
@@ -31,3 +38,9 @@ cookie = build_set_cookie("session", "abc123", httponly=True, samesite="Lax")
 - Autenticacion basada en cookies.
 - Normalizacion de cabeceras entrantes.
 - Respuestas con `Set-Cookie` controlado.
+
+## Rol del modulo
+
+- Evitar repetir logica de protocolo en cada handler.
+- Mantener lectura y escritura de cabeceras consistente.
+- Facilitar autenticacion y afinidad sin acoplar el negocio.

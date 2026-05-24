@@ -73,7 +73,8 @@ app = App(cors_allow_origin="https://tu-dominio.com")
 
 1. Ejecuta el demo incluido y prueba `GET /api/health`.
 2. Lee [Arquitectura](architecture.md) para entender como se resuelve una request.
-3. Abre [Referencia](reference/index.md) cuando necesites una clase, metodo o helper concreto.
+3. Abre [Ayuda](help/index.md) si quieres adaptar `wsbuilder` a Microservicios.
+4. Abre [Referencia](reference/index.md) cuando necesites una clase, metodo o helper concreto.
 
 ## Recomendacion de desarrollo
 

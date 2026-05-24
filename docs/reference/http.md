@@ -1,5 +1,15 @@
 # HTTP y respuesta
 
+```mermaid
+flowchart LR
+    Socket --> Parser[parse_http_request]
+    Parser --> Request[Request]
+    Request --> App[App.dispatch]
+    App --> Handler[Handler]
+    Handler --> Response[Response]
+    Response --> Writer[send_http_response]
+```
+
 ## Request
 
 `Request` modela la request entrante con:
@@ -44,6 +54,12 @@ def handler(_request):
 2. `App.dispatch()` resuelve la ruta.
 3. El handler devuelve `str`, `dict`, `list` o `Response`.
 4. `Response` se serializa a texto, JSON, HTML o stream chunked.
+
+## Rol del modulo
+
+- Representa la entrada y salida del servicio.
+- Normaliza query string, headers y cuerpo.
+- Hace que el handler pueda devolver datos simples o un `Response` completo.
 
 ## Parser y writer
 
