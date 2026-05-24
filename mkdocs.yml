@@ -7,6 +7,9 @@ nav:
   - Inicio: index.md
   - Empezar: getting-started.md
   - Arquitectura: architecture.md
+  - Ayuda:
+      - Resumen: help/index.md
+      - Microservicios: help/microservices.md
   - Referencia:
       - Resumen: reference/index.md
       - HTTP y respuesta: reference/http.md
@@ -44,6 +47,7 @@ markdown_extensions:
   - attr_list
   - def_list
   - footnotes
+  - pymdownx.superfences
   - toc:
       permalink: true
 

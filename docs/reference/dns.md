@@ -1,5 +1,13 @@
 # DNS local
 
+```mermaid
+flowchart LR
+    Client --> DNS[LocalDNSServer]
+    DNS --> Localhost[localhost]
+    DNS --> Custom[Registros custom]
+    DNS --> NX[NXDOMAIN]
+```
+
 `LocalDNSServer` expone un servidor DNS UDP minimo pensado para entornos locales.
 
 ## Valores por defecto
@@ -28,3 +36,9 @@ dns.start()
 - Resolver nombres locales en desarrollo.
 - Simular dominios de prueba sin infraestructura externa.
 - Montar un resolver pequeno para demos o laboratorios.
+
+## Rol del modulo
+
+- Cerrar el circuito de una demo local sin depender de DNS externo.
+- Ayudar en pruebas de integracion y laboratorios.
+- Mantener una pieza de infraestructura simple y portable.

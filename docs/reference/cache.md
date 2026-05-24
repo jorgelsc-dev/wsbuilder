@@ -1,5 +1,14 @@
 # Cache
 
+```mermaid
+flowchart LR
+    Request --> Lookup[Lookup]
+    Lookup -->|hit| Hit[Response cacheada]
+    Lookup -->|miss| Handler[Handler]
+    Handler --> Store[Store]
+    Store --> StoreDB[(SQLiteMemoryCache)]
+```
+
 ## Cache en memoria
 
 `SQLiteMemoryCache` es una cache thread-safe en memoria respaldada por SQLite.
@@ -46,3 +55,9 @@ Usalas cuando quieras cachear respuestas de rutas `view()` de forma declarativa.
 - Fragmentos calculados que cambian poco.
 - Reutilizacion de resultados de lectura en servicios SQLite.
 - Contadores temporales o limitacion basica de frecuencia.
+
+## Rol del modulo
+
+- Reduce costo de calculo o serializacion.
+- Mantiene TTL, namespaces y tags para invalidacion controlada.
+- Se integra con rutas `view()` y no compite con la persistencia de dominio.

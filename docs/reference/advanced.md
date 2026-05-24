@@ -1,5 +1,13 @@
 # Avanzado
 
+```mermaid
+flowchart LR
+    Write[Write] --> Primary[(Principal)]
+    Read[Read] --> ReplicaPool[DatabaseReplicaPool]
+    ReplicaPool --> Replica[(Replica)]
+    Replica --> SQLite[(SQLite)]
+```
+
 Esta pagina cubre piezas utilitarias que no forman parte del flujo basico HTTP, pero si de la API publica.
 
 ## Replicas SQLite
@@ -35,3 +43,9 @@ Es una utilidad matematica interna exportada por el paquete. Si vas a exponerla 
 
 - Cuando necesites una capa de lectura optimizada sin salir de SQLite.
 - Cuando el control de pragmas y replicas sea mas importante que la abstraccion ORM.
+
+## Rol del modulo
+
+- Resolver escenarios de lectura intensiva sin cambiar de base de datos.
+- Dar control fino sobre optimizacion SQLite.
+- Mantener utilidades avanzadas fuera del flujo comun de la app.

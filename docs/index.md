@@ -6,26 +6,54 @@ Libreria Python para construir servidores HTTP, WebSocket y utilidades de infrae
 
 </div>
 
-## Lo que incluye
+## Mapa de plataforma
+
+```mermaid
+flowchart TD
+    Cliente --> HTTPServer
+    HTTPServer --> App
+    App --> Router
+    App --> Security
+    App --> Cache
+    App --> Metrics
+    App --> Tasks
+    Router --> HTTP[HTTP / HTML / JSON]
+    Router --> WS[WebSocket]
+    HTTP --> ORM
+    HTTP --> Headers[Headers / Cookies]
+    HTTP --> DBReplicas[SQLite replicas]
+    HTTP --> DNS[Local DNS]
+    ORM --> SQLite[(SQLite)]
+    Cache --> SQLite
+```
+
+## Bloques principales
 
 <div class="cards">
 <div class="card"><strong>HTTP</strong>Router, request/response, stream chunked y parseo de query string.</div>
 <div class="card"><strong>WebSocket</strong>Handshake, frames, control de ping/pong y errores de protocolo.</div>
-<div class="card"><strong>ORM</strong>Modelos SQLite, `QuerySet`, transacciones y consultas expresivas.</div>
-<div class="card"><strong>Infra</strong>Cache, seguridad, metricas, tareas, DNS local y replicas SQLite.</div>
+<div class="card"><strong>Persistencia</strong>Modelos SQLite, `QuerySet`, transacciones y replicas de lectura.</div>
+<div class="card"><strong>Infra</strong>Cache, seguridad, metricas, tareas, DNS local y utilidades de protocolo.</div>
 </div>
 
 ## Flujo mental
 
-```text
-Cliente
-  -> HTTPServer
-  -> parse_http_request()
-  -> App.dispatch()
-  -> router / policy / cache / task hooks
-  -> handler
-  -> Response o dict/list
-  -> send_http_response()
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant S as HTTPServer
+    participant A as App.dispatch
+    participant P as Security / Cache / Metrics
+    participant H as Handler
+    participant R as Response
+
+    C->>S: request
+    S->>A: Request
+    A->>P: validar y preparar
+    A->>H: ejecutar ruta
+    H-->>A: Response o datos
+    A-->>R: serializar
+    R-->>C: respuesta final
 ```
 
 ## Casos de uso principales
@@ -39,10 +67,11 @@ Cliente
 
 ## Por que esta libreria es fuerte
 
-- Tiene fronteras claras entre HTTP, WebSocket, persistencia y observabilidad.
+- Tiene fronteras claras entre transporte, negocio y observabilidad.
 - Exige poco para empezar y permite crecer por modulos.
 - Usa componentes simples que puedes leer, depurar y extender sin magia opaca.
 - Expone helpers de bajo nivel para cuando necesitas controlar el protocolo, no solo abstraerlo.
+- Encaja bien como base de servicios pequenos o como pieza interna de una arquitectura mayor.
 
 ## Vista rapida
 
@@ -75,7 +104,8 @@ app.run("0.0.0.0", 8765)
 
 1. Empieza por [Empezar](getting-started.md) si quieres levantar algo rapido.
 2. Sigue con [Arquitectura](architecture.md) para entender el flujo interno.
-3. Usa [Referencia](reference/index.md) para ir directo a una clase, modulo o helper.
+3. Abre [Ayuda](help/index.md) si estas pensando en Microservicios o topologias distribuidas.
+4. Usa [Referencia](reference/index.md) para ir directo a una clase, modulo o helper.
 
 ## Contribucion y soporte
 
