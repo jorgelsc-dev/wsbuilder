@@ -1,11 +1,18 @@
 # Utilidades HTTP
 
-```mermaid
-flowchart LR
-    Headers[Headers] --> Normalize[normalize_header_name]
-    Cookies[Cookies] --> Parse[parse_cookie_header]
-    Parse --> Build[build_set_cookie]
-```
+<div class="diagram">
+<div class="diagram-title">Utilidades HTTP</div>
+<div class="diagram-track">
+<div class="diagram-node">Headers</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">normalize</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Cookies</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">build_set_cookie</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Las utilidades simplifican lectura y escritura de protocolo sin reimplementar cada handler.</div>
+</div>
 
 Esta pagina agrupa helpers pequenos de cabeceras y cookies.
 

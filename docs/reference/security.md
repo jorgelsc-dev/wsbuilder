@@ -1,12 +1,20 @@
 # Seguridad
 
-```mermaid
-flowchart LR
-    Request --> ACL[ACL]
-    ACL --> Lists[Allow/Deny lists]
-    Lists --> Rate[Rate limiting]
-    Rate --> Decision[SecurityDecision]
-```
+<div class="diagram">
+<div class="diagram-title">Seguridad</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">ACL</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Lists</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Rate limiting</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Decision</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">La regla decide si la request sigue o se corta con una respuesta de bloqueo.</div>
+</div>
 
 El motor de seguridad se centra en tres capas:
 

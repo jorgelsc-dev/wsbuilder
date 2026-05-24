@@ -12,22 +12,21 @@ Se apoya en la biblioteca estandar y expone bloques pequenos y composables para:
 
 ## Mapa rapido
 
-```mermaid
-flowchart TD
-    Cliente --> HTTPServer
-    HTTPServer --> App
-    App --> Router
-    App --> Security
-    App --> Cache
-    App --> Metrics
-    App --> Tasks
-    Router --> HTTP[HTTP / HTML / JSON]
-    Router --> WS[WebSocket]
-    HTTP --> ORM
-    HTTP --> Utilities[Cookies / Headers]
-    ORM --> SQLite[(SQLite)]
-    Cache --> SQLite
-```
+<div class="diagram">
+<div class="diagram-title">Mapa rapido</div>
+<div class="diagram-track">
+<div class="diagram-node">Cliente</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTP / WS</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">El servicio se organiza alrededor de `App` y sus capas transversales.</div>
+</div>
 
 ## Por que destaca
 
@@ -64,20 +63,20 @@ app.run("0.0.0.0", 8765)
 
 ## Mapa de la libreria
 
-```mermaid
-flowchart LR
-    AppFacade[framework / App] --> HTTP[http]
-    AppFacade --> WS[ws]
-    AppFacade --> ORM[orm]
-    AppFacade --> Cache[cache / caches]
-    AppFacade --> Security[security]
-    AppFacade --> Metrics[metrics]
-    AppFacade --> Tasks[tasks]
-    AppFacade --> DNS[dns]
-    AppFacade --> Replicas[db_replicas]
-    AppFacade --> Utils[cookies / headers]
-    AppFacade --> Predictor[predicts]
-```
+<div class="diagram">
+<div class="diagram-title">Mapa de la libreria</div>
+<div class="diagram-track">
+<div class="diagram-node">framework / App</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">http / ws / orm</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">cache / security</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">metrics / tasks</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">dns / replicas / utils</div>
+</div>
+</div>
 
 - `wsbuilder.framework`: fachada publica con `App`, `Request`, `Response`, `HTTPServer`, `WebSocket` y helpers.
 - `wsbuilder.http`: parseo HTTP, request/response y streaming.

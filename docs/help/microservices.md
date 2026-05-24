@@ -4,30 +4,36 @@
 
 ## Modelo recomendado
 
-```mermaid
-flowchart TD
-    Client[Cliente web o mobile] --> Gateway[API Gateway / LB]
-    Gateway --> Auth[Servicio de autenticacion]
-    Gateway --> Users[Servicio de usuarios]
-    Gateway --> Orders[Servicio de pedidos]
-    Gateway --> Billing[Servicio de pagos]
-
-    Users --> UsersDB[(SQLite propia)]
-    Orders --> OrdersDB[(SQLite propia)]
-    Billing --> BillingDB[(SQLite propia)]
-
-    Users --> UsersMetrics[/api/metrics]
-    Orders --> OrdersMetrics[/api/metrics]
-    Billing --> BillingMetrics[/api/metrics]
-
-    Users --> UsersJobs[TaskManager local]
-    Orders --> OrdersJobs[TaskManager local]
-    Billing --> BillingJobs[TaskManager local]
-
-    Gateway -->|HTTP JSON| Users
-    Gateway -->|HTTP JSON| Orders
-    Gateway -->|HTTP JSON| Billing
-```
+<div class="diagram">
+<div class="diagram-title">Modelo recomendado</div>
+<div class="diagram-track">
+<div class="diagram-node">Cliente</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Gateway</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Auth</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Users</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Orders</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Billing</div>
+</div>
+<div class="diagram-rows" style="margin-top: 1rem;">
+<div class="diagram-row">
+<div class="diagram-step">Users / Orders / Billing</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">SQLite propia</div>
+<div class="diagram-note">Cada servicio mantiene su propio almacenamiento.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Metrics</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">TaskManager local</div>
+<div class="diagram-note">Observabilidad y trabajo diferido por servicio.</div>
+</div>
+</div>
+</div>
 
 ## Principios
 
@@ -51,15 +57,31 @@ No compartas una misma base de datos para todos los servicios. Con `wsbuilder`, 
 - replicas de lectura solo si el servicio lo necesita;
 - cache local para lecturas repetitivas o respuestas calculadas.
 
-```mermaid
-flowchart LR
-    App1[Servicio A] --> DB1[(DB A)]
-    App2[Servicio B] --> DB2[(DB B)]
-    App3[Servicio C] --> DB3[(DB C)]
-    App1 --> Cache1[(Cache local)]
-    App2 --> Cache2[(Cache local)]
-    App3 --> Cache3[(Cache local)]
-```
+<div class="diagram">
+<div class="diagram-title">Datos por servicio</div>
+<div class="diagram-track">
+<div class="diagram-node">Servicio A</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">DB A</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Cache A</div>
+</div>
+<div class="diagram-track" style="margin-top: 0.75rem;">
+<div class="diagram-node">Servicio B</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">DB B</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Cache B</div>
+</div>
+<div class="diagram-track" style="margin-top: 0.75rem;">
+<div class="diagram-node">Servicio C</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">DB C</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Cache C</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Cada servicio tiene su propia ruta de datos y no comparte el mismo almacenamiento primario.</div>
+</div>
 
 ### 3. Seguridad en el borde de cada servicio
 
@@ -87,24 +109,40 @@ Cada servicio debe poder responder a estas preguntas:
 
 ## Como encaja `wsbuilder`
 
-```mermaid
-flowchart LR
-    A[Request entrante] --> B[HTTPServer]
-    B --> C[App.dispatch]
-    C --> D{Seguridad}
-    D -->|permitido| E{Ruta}
-    D -->|bloqueado| X[Respuesta 401/403/429]
-    E -->|HTTP| F[Handler del servicio]
-    E -->|WebSocket| G[Handler WS]
-    F --> H{Cache}
-    F --> I{ORM}
-    F --> J{Tasks}
-    G --> K[Frames WS]
-    H --> L[Response]
-    I --> L
-    J --> L
-    L --> M[Respuesta final]
-```
+<div class="diagram">
+<div class="diagram-title">Como encaja `wsbuilder`</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Security</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Route</div>
+</div>
+<div class="diagram-rows" style="margin-top: 1rem;">
+<div class="diagram-row">
+<div class="diagram-step">HTTP</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Handler del servicio</div>
+<div class="diagram-note">Responde con JSON, texto o HTML.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Handler WS</div>
+<div class="diagram-note">Opera con frames persistentes.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Handler</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Cache / ORM / Tasks</div>
+<div class="diagram-note">Usa las capacidades locales del servicio.</div>
+</div>
+</div>
+</div>
 
 ## Patrón por tipo de servicio
 

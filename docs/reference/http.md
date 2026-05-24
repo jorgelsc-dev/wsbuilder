@@ -1,14 +1,20 @@
 # HTTP y respuesta
 
-```mermaid
-flowchart LR
-    Socket --> Parser[parse_http_request]
-    Parser --> Request[Request]
-    Request --> App[App.dispatch]
-    App --> Handler[Handler]
-    Handler --> Response[Response]
-    Response --> Writer[send_http_response]
-```
+<div class="diagram">
+<div class="diagram-title">HTTP y respuesta</div>
+<div class="diagram-track">
+<div class="diagram-node">Socket</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">parse_http_request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Response</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">La entrada se parsea, pasa por la app y termina como texto, JSON, HTML o stream.</div>
+</div>
 
 ## Request
 

@@ -4,30 +4,42 @@
 
 ## Vista general
 
-```mermaid
-flowchart TD
-    Client[Cliente HTTP o WS] --> Server[HTTPServer]
-    Server --> Parser[parse_http_request]
-    Parser --> App[App.dispatch]
-    App --> Security[SecurityPolicy]
-    App --> Router[Router]
-    App --> Cache[Cache / ViewResponseCache]
-    App --> Metrics[AppMetrics]
-    App --> Tasks[TaskManager]
-    Router --> HTTPHandler[Handler HTTP]
-    Router --> WSUpgrade[Handshake WS]
-    HTTPHandler --> ORM[ORM SQLite]
-    HTTPHandler --> DBR[DatabaseReplicaPool]
-    HTTPHandler --> DNS[LocalDNSServer]
-    HTTPHandler --> Util[Cookies / Headers]
-    WSUpgrade --> WS[WebSocket]
-    WS --> Metrics
-    ORM --> SQLite[(SQLite)]
-    DBR --> SQLite
-    Cache --> SQLite
-    Metrics --> /api/metrics[/api/metrics]
-    Tasks --> Background[Trabajo en background]
-```
+<div class="diagram">
+<div class="diagram-title">Vista general</div>
+<div class="diagram-track">
+<div class="diagram-node">Cliente HTTP o WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">parse_http_request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler</div>
+</div>
+<div class="diagram-rows" style="margin-top: 1rem;">
+<div class="diagram-row">
+<div class="diagram-step">SecurityPolicy</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Cache / Metrics / Tasks</div>
+<div class="diagram-note">Capas transversales que se activan antes o despues del handler.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Handler HTTP</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">ORM / Replicas / DNS / Cookies</div>
+<div class="diagram-note">El handler resuelve negocio y usa utilidades segun el caso.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Handshake WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">WebSocket</div>
+<div class="diagram-note">Cuando la ruta es WebSocket, el flujo cambia a frames persistentes.</div>
+</div>
+</div>
+</div>
 
 La idea es simple:
 
@@ -37,47 +49,67 @@ La idea es simple:
 
 ## Flujo HTTP
 
-```mermaid
-sequenceDiagram
-    participant C as Cliente
-    participant S as HTTPServer
-    participant H as parse_http_request
-    participant A as App.dispatch
-    participant R as Router
-    participant P as Policy / Cache / Metrics
-    participant U as Handler
-    participant W as send_http_response
-
-    C->>S: Conexion TCP
-    S->>H: leer request
-    H-->>S: method, path, headers, body
-    S->>A: Request
-    A->>P: seguridad / cache / metricas
-    A->>R: resolver ruta
-    R-->>A: Route
-    A->>U: ejecutar handler
-    U-->>A: Response / dict / text
-    A-->>W: Response final
-    W-->>C: bytes HTTP
-```
+<div class="diagram">
+<div class="diagram-title">Flujo HTTP</div>
+<div class="diagram-lanes">
+<div class="diagram-lane">Cliente</div>
+<div class="diagram-lane">HTTPServer</div>
+<div class="diagram-lane">App.dispatch</div>
+<div class="diagram-lane">Router</div>
+<div class="diagram-lane">Handler</div>
+<div class="diagram-lane">Response</div>
+</div>
+<div class="diagram-stack">
+<div class="diagram-row">
+<div class="diagram-step">Cliente</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">HTTPServer</div>
+<div class="diagram-note">Conexion TCP y lectura de cabeceras.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">App.dispatch</div>
+<div class="diagram-note">Convierte bytes en una `Request` utilizable.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Router / Policy</div>
+<div class="diagram-note">Evalua seguridad, cache y ruta.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Handler</div>
+<div class="diagram-note">Ejecuta la logica de negocio.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Handler</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Response</div>
+<div class="diagram-note">Serializa JSON, texto, HTML o stream.</div>
+</div>
+</div>
+</div>
 
 ## Flujo WebSocket
 
-```mermaid
-sequenceDiagram
-    participant C as Cliente
-    participant S as HTTPServer
-    participant A as App.dispatch
-    participant W as handshake_websocket_with_options
-    participant H as Handler WS
-
-    C->>S: HTTP Upgrade
-    S->>A: Request
-    A->>W: validar upgrade
-    W-->>A: WebSocket
-    A->>H: ejecutar handler
-    H-->>C: frames ping/pong/text/binario
-```
+<div class="diagram">
+<div class="diagram-title">Flujo WebSocket</div>
+<div class="diagram-track">
+<div class="diagram-node">Cliente</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTP Upgrade</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handshake WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler WS</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Cuando el upgrade es valido, el canal deja de ser request/response y pasa a ser una sesion persistente por frames.</div>
+</div>
 
 ## Modulos principales
 
@@ -290,22 +322,40 @@ Interacciones:
 
 ## Como interactuan entre si
 
-```mermaid
-flowchart LR
-    A[Request] --> B[HTTPServer]
-    B --> C[Request model]
-    C --> D[SecurityPolicy]
-    D --> E[Router]
-    E --> F{Tipo de ruta}
-    F -->|api| G[JSON/Response]
-    F -->|view| H[Texto/HTML/Stream]
-    F -->|ws| I[WebSocket]
-    G --> J[Metrics]
-    H --> K[Cache]
-    I --> J
-    H --> L[ORM / Tasks / DNS / Headers]
-    G --> L
-```
+<div class="diagram">
+<div class="diagram-title">Como interactuan entre si</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">SecurityPolicy</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler</div>
+</div>
+<div class="diagram-rows" style="margin-top: 1rem;">
+<div class="diagram-row">
+<div class="diagram-step">API</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">JSON / Response</div>
+<div class="diagram-note">Ideal para endpoints publicos o internos.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">View</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Texto / HTML / Stream</div>
+<div class="diagram-note">Bueno para UI o respuestas progresivas.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">WebSocket</div>
+<div class="diagram-note">Conecta una sesion persistente.</div>
+</div>
+</div>
+</div>
 
 La secuencia real cambia segun la ruta:
 
@@ -321,16 +371,19 @@ La secuencia real cambia segun la ruta:
 
 `view()` puede usar un pool dedicado de threads por ruta.
 
-```mermaid
-flowchart TD
-    Request --> Pool[RouteThreadPool]
-    Pool --> W1[Worker 1]
-    Pool --> W2[Worker 2]
-    Pool --> W3[Worker 3]
-    W1 --> H[Handler]
-    W2 --> H
-    W3 --> H
-```
+<div class="diagram">
+<div class="diagram-title">Rutas `view()` con workers</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">RouteThreadPool</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Worker 1</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">La ruta puede distribuir carga entre workers para aislar endpoints pesados y controlar concurrencia.</div>
+</div>
 
 Esto sirve cuando quieres:
 
@@ -342,23 +395,35 @@ Esto sirve cuando quieres:
 
 La cache de respuestas no reemplaza al ORM ni al almacenamiento de dominio.
 
-```mermaid
-flowchart LR
-    Req[Request GET/HEAD] --> Lookup[ViewResponseCache]
-    Lookup -->|hit| Resp[Response cacheada]
-    Lookup -->|miss| Handler[Handler]
-    Handler --> Store[Store response]
-    Store --> Resp
-```
+<div class="diagram">
+<div class="diagram-title">Cache declarativa</div>
+<div class="diagram-track">
+<div class="diagram-node">Request GET/HEAD</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">ViewResponseCache</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Hit o Miss</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Response</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">En hit, responde de inmediato. En miss, ejecuta el handler y guarda el resultado si aplica.</div>
+</div>
 
 ### Seguridad antes del negocio
 
-```mermaid
-flowchart LR
-    Req[Request] --> Policy[SecurityPolicy]
-    Policy -->|allow| Biz[Handler]
-    Policy -->|deny| Denied[Response 401/403/429]
-```
+<div class="diagram">
+<div class="diagram-title">Seguridad antes del negocio</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">SecurityPolicy</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Allow / Deny</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler o Error</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">La política decide si la request llega al dominio o se corta con 401, 403 o 429.</div>
+</div>
 
 ## Cierre y ciclo de vida
 

@@ -1,12 +1,20 @@
 # Avanzado
 
-```mermaid
-flowchart LR
-    Write[Write] --> Primary[(Principal)]
-    Read[Read] --> ReplicaPool[DatabaseReplicaPool]
-    ReplicaPool --> Replica[(Replica)]
-    Replica --> SQLite[(SQLite)]
-```
+<div class="diagram">
+<div class="diagram-title">Avanzado</div>
+<div class="diagram-track">
+<div class="diagram-node">Write</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Principal</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Read</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">ReplicaPool</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">SQLite</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Separa lecturas y escrituras cuando la carga de consulta empieza a dominar el servicio.</div>
+</div>
 
 Esta pagina cubre piezas utilitarias que no forman parte del flujo basico HTTP, pero si de la API publica.
 

@@ -1,14 +1,20 @@
 # ORM
 
-```mermaid
-flowchart LR
-    Model[Model] --> Table[create_table]
-    Table --> DB[(Database)]
-    Model --> QS[QuerySet]
-    QS --> DB
-    DB --> TX[Transaction]
-    TX --> DB
-```
+<div class="diagram">
+<div class="diagram-title">ORM</div>
+<div class="diagram-track">
+<div class="diagram-node">Model</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">create_table</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Database</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">QuerySet</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Transaction</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Modelos declarativos y consultas expresivas sobre SQLite sin perder control del SQL.</div>
+</div>
 
 El ORM de `wsbuilder` esta pensado para SQLite y modelos declarativos simples, con un coste de aprendizaje bajo.
 

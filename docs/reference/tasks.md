@@ -1,13 +1,20 @@
 # Tareas en background
 
-```mermaid
-flowchart LR
-    Request --> Spawn[TaskManager.spawn]
-    Spawn --> Handle[TaskHandle]
-    Handle --> Worker[Thread worker]
-    Worker --> Result[Result / Exception]
-    Result --> Snapshot[snapshot()]
-```
+<div class="diagram">
+<div class="diagram-title">Tareas en background</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">spawn</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">TaskHandle</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Worker</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Result</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">La tarea se ejecuta aparte y luego deja un snapshot con estado, resultado o error.</div>
+</div>
 
 `TaskManager` permite ejecutar trabajo asincrono con control de concurrencia, cancelacion y estados.
 

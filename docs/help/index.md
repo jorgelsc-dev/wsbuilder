@@ -12,15 +12,21 @@ Esta seccion agrupa guias practicas para usar `wsbuilder` en escenarios reales, 
 
 ## Mapa de ayuda
 
-```mermaid
-flowchart LR
-    A[Idea de arquitectura] --> B[Definir servicios]
-    B --> C[Separar datos]
-    C --> D[Exponer contrato HTTP]
-    D --> E[Agregar seguridad y metricas]
-    E --> F[Operar y escalar]
-    F --> G[Revisar puntos de fallo]
-```
+<div class="diagram">
+<div class="diagram-title">Mapa de ayuda</div>
+<div class="diagram-track">
+<div class="diagram-node">Idea</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Servicios</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Datos</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Contrato</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Operar</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">La ayuda sigue un orden simple: diseña, separa, expone y luego opera.</div>
+</div>
 
 ## Rutas recomendadas
 

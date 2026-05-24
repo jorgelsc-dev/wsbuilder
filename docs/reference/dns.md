@@ -1,12 +1,18 @@
 # DNS local
 
-```mermaid
-flowchart LR
-    Client --> DNS[LocalDNSServer]
-    DNS --> Localhost[localhost]
-    DNS --> Custom[Registros custom]
-    DNS --> NX[NXDOMAIN]
-```
+<div class="diagram">
+<div class="diagram-title">DNS local</div>
+<div class="diagram-track">
+<div class="diagram-node">Client</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">LocalDNSServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">localhost</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Custom / NXDOMAIN</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Pensado para laboratorio, desarrollo y demos sin infraestructura externa.</div>
+</div>
 
 `LocalDNSServer` expone un servidor DNS UDP minimo pensado para entornos locales.
 

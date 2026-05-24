@@ -18,19 +18,21 @@ from wsbuilder import (
 
 ## Mapa de modulos
 
-```mermaid
-flowchart LR
-    Core[App / HTTPServer] --> HTTP[HTTP y respuesta]
-    Core --> WS[WebSocket]
-    Core --> Cache[Cache]
-    Core --> Sec[Seguridad]
-    Core --> Metrics[Metricas]
-    Core --> Tasks[Tareas]
-    Core --> ORM[ORM]
-    Core --> DNS[DNS]
-    Core --> Advanced[Avanzado]
-    HTTP --> Util[Utilidades HTTP]
-```
+<div class="diagram">
+<div class="diagram-title">Mapa de modulos</div>
+<div class="diagram-track">
+<div class="diagram-node">App / HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTP y respuesta</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">WebSocket</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Cache / Seguridad</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Metricas / Tareas / ORM</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Cada bloque de la API resuelve una parte distinta del servicio y se puede leer por separado.</div>
+</div>
 
 ## Guia rapida por modulo
 
@@ -86,20 +88,34 @@ flowchart LR
 
 ## Como se conectan en una app
 
-```mermaid
-flowchart TD
-    Request --> App
-    App --> Security
-    App --> Router
-    Router --> Handler
-    Handler --> ORM
-    Handler --> Cache
-    Handler --> Tasks
-    Handler --> Utilities
-    App --> Metrics
-    ORM --> DB[(SQLite)]
-    Cache --> DB
-```
+<div class="diagram">
+<div class="diagram-title">Como se conectan en una app</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Response</div>
+</div>
+<div class="diagram-rows" style="margin-top: 1rem;">
+<div class="diagram-row">
+<div class="diagram-step">Security / Metrics</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Cache / Tasks / Utilities</div>
+<div class="diagram-note">Se activan como capas transversales durante la ejecucion.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">ORM</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">SQLite</div>
+<div class="diagram-note">La persistencia queda aislada del transporte.</div>
+</div>
+</div>
+</div>
 
 La regla practica es:
 

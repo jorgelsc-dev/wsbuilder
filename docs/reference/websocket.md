@@ -1,13 +1,20 @@
 # WebSocket
 
-```mermaid
-flowchart TD
-    HTTP[HTTP Upgrade] --> HS[Handshake]
-    HS --> WS[WebSocket]
-    WS --> PING[ping/pong]
-    WS --> FRAMES[frames]
-    FRAMES --> CLOSE[cierre]
-```
+<div class="diagram">
+<div class="diagram-title">WebSocket</div>
+<div class="diagram-track">
+<div class="diagram-node">HTTP Upgrade</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handshake</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">WebSocket</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Frames</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Cierre</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">El upgrade cambia la conexion a un canal persistente con ping/pong y frames.</div>
+</div>
 
 `wsbuilder` implementa handshake y framing WebSocket sin dependencias externas.
 
