@@ -58,7 +58,7 @@ from .db_replicas import (
 )
 from .predicts import Predictor
 
-__version__ = "0.1.0"
+__version__ = "0.9.1.dev0"
 
 __all__ = [
     "App",
