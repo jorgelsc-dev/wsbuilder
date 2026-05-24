@@ -1,13 +1,18 @@
 # Cache
 
-```mermaid
-flowchart LR
-    Request --> Lookup[Lookup]
-    Lookup -->|hit| Hit[Response cacheada]
-    Lookup -->|miss| Handler[Handler]
-    Handler --> Store[Store]
-    Store --> StoreDB[(SQLiteMemoryCache)]
-```
+<div class="diagram">
+<div class="diagram-title">Cache</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Lookup</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Hit o Miss</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Store</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Un hit evita recomputar; un miss ejecuta el handler y guarda la respuesta para despues.</div>
+</div>
 
 ## Cache en memoria
 

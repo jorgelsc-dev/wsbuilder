@@ -8,24 +8,34 @@ Libreria Python para construir servidores HTTP, WebSocket y utilidades de infrae
 
 ## Mapa de plataforma
 
-```mermaid
-flowchart TD
-    Cliente --> HTTPServer
-    HTTPServer --> App
-    App --> Router
-    App --> Security
-    App --> Cache
-    App --> Metrics
-    App --> Tasks
-    Router --> HTTP[HTTP / HTML / JSON]
-    Router --> WS[WebSocket]
-    HTTP --> ORM
-    HTTP --> Headers[Headers / Cookies]
-    HTTP --> DBReplicas[SQLite replicas]
-    HTTP --> DNS[Local DNS]
-    ORM --> SQLite[(SQLite)]
-    Cache --> SQLite
-```
+<div class="diagram">
+<div class="diagram-title">Mapa de plataforma</div>
+<div class="diagram-track">
+<div class="diagram-node">Cliente</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTP / WS</div>
+</div>
+<div class="diagram-rows" style="margin-top: 1rem;">
+<div class="diagram-row">
+<div class="diagram-step">Security / Cache / Metrics / Tasks</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">ORM / Headers / DNS</div>
+<div class="diagram-note">Capas auxiliares que acompañan al flujo principal.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">ORM</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">SQLite</div>
+<div class="diagram-note">Persistencia local y determinista.</div>
+</div>
+</div>
+</div>
 
 ## Bloques principales
 
@@ -38,23 +48,35 @@ flowchart TD
 
 ## Flujo mental
 
-```mermaid
-sequenceDiagram
-    participant C as Cliente
-    participant S as HTTPServer
-    participant A as App.dispatch
-    participant P as Security / Cache / Metrics
-    participant H as Handler
-    participant R as Response
-
-    C->>S: request
-    S->>A: Request
-    A->>P: validar y preparar
-    A->>H: ejecutar ruta
-    H-->>A: Response o datos
-    A-->>R: serializar
-    R-->>C: respuesta final
-```
+<div class="diagram">
+<div class="diagram-title">Flujo mental</div>
+<div class="diagram-stack">
+<div class="diagram-row">
+<div class="diagram-step">Cliente</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">HTTPServer</div>
+<div class="diagram-note">Recibe la peticion.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">App.dispatch</div>
+<div class="diagram-note">Convierte bytes en request utilizable.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Handler</div>
+<div class="diagram-note">Ejecuta el negocio y produce datos.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Handler</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Response</div>
+<div class="diagram-note">Serializa y responde.</div>
+</div>
+</div>
+</div>
 
 ## Casos de uso principales
 

@@ -1,12 +1,20 @@
 # Metricas
 
-```mermaid
-flowchart TD
-    Event[Eventos HTTP / WS] --> Collector[AppMetrics]
-    Collector --> Snapshot[Snapshot JSON]
-    Collector --> Stream[NDJSON stream]
-    Stream --> Dashboard[Dashboard / CLI]
-```
+<div class="diagram">
+<div class="diagram-title">Metricas</div>
+<div class="diagram-track">
+<div class="diagram-node">Eventos</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">AppMetrics</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Snapshot</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Stream</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Dashboard</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Convierte eventos internos en una vista operativa clara para observacion y diagnostico.</div>
+</div>
 
 ## Collector
 
