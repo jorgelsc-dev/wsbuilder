@@ -17,6 +17,17 @@ El handshake valida:
 - `Upgrade: websocket`
 - `Sec-WebSocket-Version: 13`
 
+## Flujo de vida
+
+```text
+socket TCP
+  -> request HTTP
+  -> upgrade WebSocket
+  -> bucle de frames
+  -> ping/pong
+  -> close
+```
+
 ## WebSocket
 
 `WebSocket` expone operaciones de alto nivel y callbacks de ciclo de vida.
@@ -56,6 +67,13 @@ def ws_handler(ws, _request):
             ws.send_text(frame.payload.decode("utf-8", errors="ignore"))
 ```
 
+## Casos de uso
+
+- Chat en tiempo real.
+- Notificaciones push desde el servidor.
+- Consolas remotas o paneles de operacion.
+- Telemetria con actualizaciones continuas.
+
 ## Errores del protocolo
 
 - `WebSocketProtocolError`
@@ -73,3 +91,9 @@ def ws_handler(ws, _request):
 - `masked`
 - `mask`
 
+## Helpers utiles
+
+- `is_ws_request(headers)` para detectar upgrade.
+- `handshake_websocket(...)` para hacer el upgrade basico.
+- `handshake_websocket_with_options(...)` para controlar subprotocolos y timeouts.
+- `make_ws_frame_bytes(...)` para generar frames manualmente.

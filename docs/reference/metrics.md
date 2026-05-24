@@ -36,9 +36,21 @@ Parametros:
 - `limit`
 - `follow`
 
+## Flujo tipico
+
+1. Tomas una instantanea con `GET /api/metrics`.
+2. Observas tendencias con `GET /api/metrics/stream`.
+3. Conectas el stream a dashboards o terminales.
+
 Ejemplo:
 
 ```bash
 curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&follow=1"
 ```
 
+## Casos de uso
+
+- Ver carga y salud del servidor.
+- Auditar rutas mas utilizadas.
+- Detectar errores recientes.
+- Alimentar dashboards simples sin dependencia adicional.

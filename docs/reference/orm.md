@@ -1,6 +1,6 @@
 # ORM
 
-El ORM de `wsbuilder` esta pensado para SQLite y modelos simples.
+El ORM de `wsbuilder` esta pensado para SQLite y modelos declarativos simples, con un coste de aprendizaje bajo.
 
 ## Tipos principales
 
@@ -35,6 +35,14 @@ u = User(username="alice", email="alice@example.com")
 u.save(db)
 ```
 
+## Flujo de trabajo
+
+1. Defines un `Model`.
+2. Creas o abres una `Database`.
+3. Llamas `create_table()` o `create_tables()`.
+4. Consultas con `objects(db)` y `QuerySet`.
+5. Escribes con `save()`, `update()` o `delete()`.
+
 ## QuerySet
 
 Soporta:
@@ -44,9 +52,13 @@ Soporta:
 - `order_by()`
 - `limit()`
 - `offset()`
+- `paginate()`
+- `values()`
 - `count()`
+- `exists()`
 - `update()`
 - `delete()`
+- `create()`
 
 ## Utilidades SQL
 
@@ -60,4 +72,11 @@ Soporta:
 - Usa nombres de columnas estables y validables.
 - No construyas SQL dinamico sin pasar por `validate_identifier()`.
 - Usa `Transaction` para agrupar escrituras cuando necesites atomicidad.
+- Manten los modelos pequenos y expresivos.
 
+## Casos de uso
+
+- CRUD local con SQLite.
+- Paneles admin simples sin ORM pesado.
+- Servicios embebidos con persistencia determinista.
+- Lecturas razonadas con filtros por campo y operador.

@@ -1,43 +1,35 @@
 # wsbuilder
 
-`wsbuilder` es un paquete Python para construir servidores HTTP + WebSocket sin dependencias externas.
+`wsbuilder` es una libreria Python para construir servidores HTTP, WebSocket y utilidades de infraestructura en un unico paquete.
 
-Lightweight Python HTTP + WebSocket framework for building real-time APIs and custom servers.
+Se apoya en la biblioteca estandar y expone bloques pequenos y composables para:
 
-**Keywords:** `python`, `http-server`, `websocket`, `framework`, `real-time`, `api`, `socket`.
+- routing HTTP y respuestas tipadas.
+- WebSocket de bajo nivel con control de frames.
+- ORM ligero para SQLite.
+- cache, seguridad, metricas y tareas en background.
+- DNS local y replicas SQLite optimizadas.
 
-## Incluye
+## Por que destaca
 
-- `wsbuilder.framework`: router, request/response, servidor HTTP, handshake WS y utilidades de frames.
-- `wsbuilder.orm`: ORM flexible para SQLite3 (modelos, QuerySet, filtros, transacciones anidadas).
-- `wsbuilder.dns`: DNS UDP local minimo para registros `localhost`.
-- `wsbuilder.cookies` / `wsbuilder.headers`: utilidades para cookies y headers HTTP.
-- `wsbuilder.ws_demo`: demo completo HTTP + WebSocket + REST + SQLite.
+- Menos superficie de dependencia en runtime.
+- Flujo explicito: request, dispatch, respuesta y cierre.
+- Modulos separados que puedes activar solo cuando los necesitas.
+- API publica uniforme: `App`, `Response`, `Database`, `TaskManager`, `LocalDNSServer`.
 
-## Documentacion completa
-
-- Sitio de docs para GitHub Pages: `mkdocs.yml` + contenido en `docs/`.
-- Vista local:
-
-```bash
-python -m pip install -r requirements-docs.txt
-mkdocs serve
-```
-
-- La guia tecnica por secciones vive en el sitio MkDocs y cubre arquitectura, HTTP, WebSocket, ORM, cache, seguridad, metricas, DNS y despliegue.
-
-## Instalacion local
+## Instalacion
 
 ```bash
 python -m pip install -e .
 ```
 
-## Uso rapido del framework
+## Inicio rapido
 
 ```python
-from wsbuilder import App, Response, parse_close_payload
+from wsbuilder import App, Response
 
-app = App()
+app = App(cors_allow_origin="*")
+app.enable_metrics()
 
 @app.view("/")
 def home(_request):
@@ -47,171 +39,50 @@ def home(_request):
 def health(_request):
     return {"ok": True}
 
-@app.ws("/ws/")
-def ws_handler(ws, _request):
-    while True:
-        fin, opcode, payload, _masked, _mask = ws.recv_frame()
-        if opcode == 0x8:
-            code, reason = parse_close_payload(payload)
-            ws.close(code or 1000, reason or "")
-            break
-        if opcode == 0x9:
-            ws.send_pong(payload)
-            continue
-        if opcode == 0x1:
-            ws.send_text(payload.decode("utf-8", errors="ignore"))
-        elif opcode == 0x2:
-            ws.send_binary(payload)
-
 app.run("0.0.0.0", 8765)
 ```
 
-Para CORS sin variables de entorno:
+## Mapa de la libreria
 
-```python
-app = App(cors_allow_origin="*")
-```
+- `wsbuilder.framework`: fachada publica con `App`, `Request`, `Response`, `HTTPServer`, `WebSocket` y helpers.
+- `wsbuilder.http`: parseo HTTP, request/response y streaming.
+- `wsbuilder.ws`: handshake, frames y errores WebSocket.
+- `wsbuilder.orm`: modelos SQLite, `QuerySet`, transacciones y helpers SQL.
+- `wsbuilder.cache` y `wsbuilder.caches`: cache en memoria y cache declarativa de respuestas.
+- `wsbuilder.security`: ACL, rate limiting y decision engine.
+- `wsbuilder.metrics`: snapshot y stream de observabilidad.
+- `wsbuilder.tasks`: trabajo asincrono controlado por `TaskManager`.
+- `wsbuilder.dns`: servidor DNS UDP local.
+- `wsbuilder.db_replicas`: lectura optimizada y pool de replicas SQLite.
+- `wsbuilder.cookies` y `wsbuilder.headers`: utilidades HTTP de bajo nivel.
+- `wsbuilder.predicts`: utilidad matematica `Predictor`.
 
-## Thread Pool en Views
+## Casos de uso
 
-Las `view` por defecto se ejecutan en el hilo padre (`thread_count=0`).
-Puedes configurar un pool por ruta con min/max de hilos y limite de requests por hilo:
+1. APIs REST pequenas con respuestas JSON y HTML.
+2. Chat, notificaciones y telemetria sobre WebSocket.
+3. Persistencia local con SQLite y modelo declarativo.
+4. Cache de rutas o contenido calculado.
+5. Control de acceso, bloqueo temporal y observabilidad interna.
+6. Procesos de background y lectura optimizada sobre SQLite.
 
-```python
-from wsbuilder import App
+## Documentacion
 
-app = App()
+- [Inicio](docs/index.md)
+- [Arquitectura](docs/architecture.md)
+- [Referencia](docs/reference/index.md)
 
-@app.view("/jobs", min_threads=1, max_threads=4, requests_per_thread=0)
-def jobs(_request):
-    return "ok"
-```
+## Contribucion y soporte
 
-- `min_threads`: workers iniciales para la `view`.
-- `max_threads`: tope de workers para esa `view` (`0` deshabilita pool).
-- `requests_per_thread`: capacidad por worker (`0` = sin limite).
-- Distribucion: siempre por `least_busy` (worker menos ocupado).
-- Se expone metadata de worker en headers y metrics (`/api/metrics`, `/api/metrics/stream`).
+- Crea ramas desde `main` usando `feat/<nombre>` o `fix/<nombre>`.
+- Mantiene los cambios enfocados en un solo tema por PR.
+- Abre el pull request hacia `main` con una descripcion corta y notas de riesgo.
+- Si encuentras un problema de seguridad, reportalo de forma privada.
 
-## ORM SQLite3 rapido
+### Soporte opcional
 
-```python
-from wsbuilder import Database, IntegerField, Model, TextField
+Si `wsbuilder` te resulta util y quieres apoyar el mantenimiento del proyecto, puedes donar en BTC:
 
-class User(Model):
-    id = IntegerField(primary_key=True, auto_increment=True)
-    username = TextField(unique=True, index=True, null=False)
-    email = TextField(null=False)
+`bc1q3lhxpr9yantvefmvhpd2h4lu0ykf3t45zvuve2`
 
-db = Database("app.db")
-User.create_table(db)
-
-u = User(username="alice", email="alice@example.com")
-u.save(db)
-
-admins = User.objects(db).filter(username__contains="ali").order_by("-id").all()
-print([x.to_dict() for x in admins])
-```
-
-## Metrics (JSON stream)
-
-```python
-from wsbuilder import App
-
-app = App()
-app.enable_metrics()  # crea /api/metrics y /api/metrics/stream
-```
-
-Probar snapshot:
-
-```bash
-curl http://127.0.0.1:8765/api/metrics
-```
-
-Probar stream NDJSON:
-
-```bash
-curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&limit=5"
-```
-
-Modo continuo (no termina solo):
-
-```bash
-curl -N "http://127.0.0.1:8765/api/metrics/stream?interval=1&follow=1"
-```
-
-## DNS local minimo
-
-```python
-from wsbuilder import LocalDNSServer
-
-dns = LocalDNSServer()  # default: 127.0.0.1:5533
-dns.start()
-# ...
-dns.close()
-```
-
-## HTTP streaming (chunked)
-
-```python
-import time
-from wsbuilder import App, Response
-
-app = App()
-
-@app.view("/stream")
-def stream(_request):
-    def chunks():
-        for i in range(5):
-            yield f"chunk {i}\n"
-            time.sleep(1)
-    return Response.stream(chunks(), content_type="text/plain; charset=utf-8")
-```
-
-## Ejecutar demo incluido
-
-```bash
-python -m wsbuilder --host 0.0.0.0 --port 8765
-# o
-wsbuilder --host 0.0.0.0 --port 8765
-```
-
-## Documentacion en navegador
-
-Si activas GitHub Pages en el repo, el workflow `docs-pages.yml` publica la documentacion automaticamente desde `main`.
-
-Para ver el sitio antes de subirlo:
-
-```bash
-mkdocs serve
-```
-
-Y abre `http://127.0.0.1:8000`.
-
-## Configuracion CORS
-
-- Usa `App(cors_allow_origin="https://tu-dominio.com")`.
-- Usa `App(cors_allow_origin="*")` para permitir cualquier origen.
-
-## CI/CD (GitHub Actions)
-
-- `package-build.yml`: construye `sdist` + `wheel`, valida metadata y prueba instalacion/import.
-- `release-from-main.yml` en push a `main`: calcula `semver` automaticamente, crea rama `release/v<version>` desde `main`, actualiza version del paquete, crea tag `v<version>` y publica GitHub Release.
-- `publish-packages.yml` en push de tag `v*`: construye y publica a PyPI/TestPyPI (instalable con `pip`).
-- `publish-packages.yml` en tags `v*`: adjunta los paquetes al GitHub Release.
-- `main-only-from-develop.yml` (workflow `main-pr-source-check`): valida metadata minima del PR hacia `main`.
-
-### Reglas de versionado automatico
-
-- `major`: si algun commit trae `BREAKING CHANGE`, `type(scope)!:` o ramas/commits marcados como `breaking`/`major`.
-- `minor`: si hay suficiente peso de `feat`/`feature` (proporcional frente a cambios `patch`) y no hay `major`.
-- `patch`: cualquier otro caso.
-
-Recomendado usar Conventional Commits para que el calculo de version sea preciso.
-
-### Secrets requeridos
-
-- `RELEASE_BOT_TOKEN` (recomendado): PAT/fine-grained token para crear rama `release/*`, crear tag y publicar GitHub Release.
-- `RULESET_ADMIN_TOKEN` (fallback): usado automaticamente si no existe `RELEASE_BOT_TOKEN`.
-- `PYPI_API_TOKEN`: token de publicacion para PyPI.
-- `TEST_PYPI_API_TOKEN` (opcional): token de publicacion para TestPyPI.
+Red: `BTC mainnet` (Native SegWit).

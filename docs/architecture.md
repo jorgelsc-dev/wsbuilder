@@ -1,29 +1,47 @@
 # Arquitectura
 
-`wsbuilder` esta organizado como una capa HTTP central con integraciones opcionales alrededor.
+`wsbuilder` esta organizado como un nucleo HTTP/WebSocket pequeno con modulos opcionales alrededor.
 
 ## Flujo general
 
-1. `App` registra rutas HTTP, API y WebSocket.
-2. `HTTPServer` acepta conexiones TCP, aplica timeouts y parsea la request.
-3. La request entra en `App.dispatch()`.
-4. Si la ruta es `api`, la respuesta se serializa a JSON cuando el handler devuelve `dict` o `list`.
-5. Si la ruta es `view`, el handler devuelve texto, HTML o un objeto `Response`.
-6. Si la ruta es WebSocket, se hace handshake y se entrega un objeto `WebSocket` al handler.
+```text
+Cliente
+  -> HTTPServer
+  -> parse_http_request()
+  -> App.dispatch()
+  -> Router.resolve()
+  -> opcional: cache / security / task hooks
+  -> handler
+  -> Response / dict / list / str
+  -> send_http_response()
+```
+
+Para WebSocket el flujo cambia en el ultimo tramo:
+
+```text
+Cliente WS
+  -> HTTPServer
+  -> is_ws_request()
+  -> handshake_websocket_with_options()
+  -> WebSocket
+  -> recv_frame() / send_*()
+  -> cierre con parse_close_payload()
+```
 
 ## Componentes clave
 
-- `wsbuilder.app`: router, `App`, pool por ruta y cierre ordenado.
-- `wsbuilder.server`: socket server, limites de lectura y timeout.
-- `wsbuilder.http`: `Request`, `Response`, parser y writer HTTP.
-- `wsbuilder.ws`: handshake y protocolo WebSocket.
-- `wsbuilder.metrics`: snapshot y stream NDJSON.
-- `wsbuilder.security`: ACL, rate limiting y bloqueo temporal.
-- `wsbuilder.cache` y `wsbuilder.caches`: cache de respuesta y cache SQLite en memoria.
-- `wsbuilder.orm`: ORM SQLite.
-- `wsbuilder.dns`: servidor DNS local.
-- `wsbuilder.db_replicas`: lectura optimizada y pool de replicas.
-- `wsbuilder.predicts`: utilidades matematicas / predictor.
+- `wsbuilder.app`: registro de rutas, dispatch, CORS y pools por ruta.
+- `wsbuilder.server`: socket server, limites de lectura, timeout y cierre.
+- `wsbuilder.http`: `Request`, `Response`, parseo y escritura HTTP.
+- `wsbuilder.ws`: handshake, frames, errores y helpers de bajo nivel.
+- `wsbuilder.metrics`: snapshot, stream NDJSON y metadatos del servidor.
+- `wsbuilder.security`: ACL, rate limiting, listas y bloqueos temporales.
+- `wsbuilder.cache` y `wsbuilder.caches`: cache en memoria y cache declarativa de respuestas.
+- `wsbuilder.tasks`: ejecucion en background con control de capacidad y estados.
+- `wsbuilder.orm`: ORM SQLite con `QuerySet`, transacciones y filtros.
+- `wsbuilder.dns`: DNS UDP local.
+- `wsbuilder.db_replicas`: optimizacion de lectura y replicas SQLite.
+- `wsbuilder.predicts`: utilidad matematica `Predictor`.
 
 ## Views con workers
 
@@ -41,7 +59,7 @@ Puntos importantes:
 - `max_threads` limita el crecimiento.
 - `requests_per_thread=0` desactiva el limite por worker.
 - La distribucion es `least_busy`.
-- La respuesta incluye metadatos del worker en headers y cookie firmada.
+- La respuesta puede incluir metadatos del worker en headers y cookie firmada.
 
 ## Integraciones opcionales
 
@@ -49,6 +67,7 @@ Puntos importantes:
 - `install_cache(app, ...)` expone cache simple en memoria.
 - `install_caches(app, ...)` activa reglas de cache de respuesta.
 - `install_security(app, ...)` conecta el motor de seguridad.
+- `TaskManager` da una cola de trabajos con cancelacion, grupos y estados.
 
 ## Cierre
 
@@ -56,6 +75,13 @@ Puntos importantes:
 
 - caches instaladas.
 - pools de workers por ruta.
+- tareas en background vinculadas al `TaskManager`.
 
 `HTTPServer.serve_forever()` tambien invoca `app.close()` durante el apagado.
 
+## Por que este diseño funciona bien
+
+- Separa protocolos de negocio.
+- Te deja usar solo el modulo que necesitas.
+- Permite extender desde el nivel alto (`App`) o el nivel bajo (`Request`, `Response`, frames WS).
+- Hace visible el camino completo de una request, lo que simplifica diagnostico y pruebas.

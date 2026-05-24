@@ -23,3 +23,8 @@ dns.start()
 - Acepta registros personalizados.
 - Devuelve `NXDOMAIN` para nombres desconocidos.
 
+## Casos de uso
+
+- Resolver nombres locales en desarrollo.
+- Simular dominios de prueba sin infraestructura externa.
+- Montar un resolver pequeno para demos o laboratorios.
