@@ -221,6 +221,10 @@
   color: var(--ws-code-text) !important;
 }
 
+.md-typeset .highlight span {
+  color: var(--ws-code-text) !important;
+}
+
 .md-typeset pre {
   border: 1px solid var(--ws-code-border);
   border-radius: 1rem;
@@ -267,7 +271,9 @@
 .md-typeset .highlight .k,
 .md-typeset .highlight .kd,
 .md-typeset .highlight .kn,
-.md-typeset .highlight .kt {
+.md-typeset .highlight .kt,
+.md-typeset .highlight .kr,
+.md-typeset .highlight .kc {
   color: #7dd3fc;
 }
 
@@ -287,8 +293,28 @@
 .md-typeset .highlight .m,
 .md-typeset .highlight .mi,
 .md-typeset .highlight .mf,
-.md-typeset .highlight .mh {
+.md-typeset .highlight .mh,
+.md-typeset .highlight .mb,
+.md-typeset .highlight .mo {
   color: #fbbf24;
+}
+
+.md-typeset .highlight .n,
+.md-typeset .highlight .na,
+.md-typeset .highlight .nb,
+.md-typeset .highlight .nc,
+.md-typeset .highlight .nd,
+.md-typeset .highlight .ne,
+.md-typeset .highlight .nf,
+.md-typeset .highlight .ni,
+.md-typeset .highlight .nl,
+.md-typeset .highlight .nn,
+.md-typeset .highlight .no,
+.md-typeset .highlight .nt,
+.md-typeset .highlight .nv,
+.md-typeset .highlight .fm,
+.md-typeset .highlight .bp {
+  color: #dbeafe !important;
 }
 
 .md-typeset .highlight .o,
