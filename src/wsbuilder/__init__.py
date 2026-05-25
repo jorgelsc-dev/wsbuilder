@@ -8,6 +8,19 @@ from .framework import (
     Route,
     Router,
     WebSocket,
+    TASK_CANCELLED,
+    TASK_COMPLETED,
+    TASK_FAILED,
+    TASK_PENDING,
+    TASK_REJECTED,
+    TASK_RUNNING,
+    TaskCancelledError,
+    TaskClosedError,
+    TaskContext,
+    TaskError,
+    TaskHandle,
+    TaskManager,
+    TaskRejectedError,
     parse_close_payload,
     parse_query_string,
 )
@@ -43,8 +56,9 @@ from .db_replicas import (
     OptimizedDatabase,
     SQLite3OptimizationConfig,
 )
+from .predicts import Predictor
 
-__version__ = "0.1.0"
+__version__ = "0.9.1.dev0"
 
 __all__ = [
     "App",
@@ -54,6 +68,19 @@ __all__ = [
     "Route",
     "Router",
     "WebSocket",
+    "TaskError",
+    "TaskClosedError",
+    "TaskCancelledError",
+    "TaskRejectedError",
+    "TaskContext",
+    "TaskHandle",
+    "TaskManager",
+    "TASK_PENDING",
+    "TASK_RUNNING",
+    "TASK_COMPLETED",
+    "TASK_FAILED",
+    "TASK_CANCELLED",
+    "TASK_REJECTED",
     "LocalDNSServer",
     "normalize_header_name",
     "get_header",
@@ -92,9 +119,11 @@ __all__ = [
     "quote_identifier",
     "validate_identifier",
     "parse_close_payload",
+    "handshake_websocket_with_options",
     "parse_query_string",
     "DatabaseReplica",
     "DatabaseReplicaPool",
     "OptimizedDatabase",
     "SQLite3OptimizationConfig",
+    "Predictor",
 ]
