@@ -212,11 +212,20 @@
   word-break: break-word;
 }
 
+.md-typeset .highlight,
+.md-typeset .highlight pre,
+.md-typeset .highlight code,
+.md-typeset pre,
+.md-typeset pre code {
+  background-color: #0b1020 !important;
+  color: var(--ws-code-text) !important;
+}
+
 .md-typeset pre {
   border: 1px solid var(--ws-code-border);
   border-radius: 1rem;
   overflow: hidden;
-  background: linear-gradient(180deg, #0b1020 0%, #111827 100%);
+  background: linear-gradient(180deg, #0b1020 0%, #111827 100%) !important;
   box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
 }
 
@@ -280,6 +289,16 @@
 .md-typeset .highlight .mf,
 .md-typeset .highlight .mh {
   color: #fbbf24;
+}
+
+.md-typeset .highlight .o,
+.md-typeset .highlight .p {
+  color: #cbd5e1;
+}
+
+.md-typeset .highlight .err,
+.md-typeset .highlight .w {
+  color: #f8fafc;
 }
 
 @media screen and (max-width: 960px) {
