@@ -1,0 +1,58 @@
+site_name: wsbuilder
+site_description: Documentacion oficial de wsbuilder
+site_author: wsbuilder Authors
+repo_name: wsbuilder
+
+nav:
+  - Inicio: index.md
+  - Empezar: getting-started.md
+  - Arquitectura: architecture.md
+  - Ayuda:
+      - Resumen: help/index.md
+      - Microservicios: help/microservices.md
+  - Referencia:
+      - Resumen: reference/index.md
+      - HTTP y respuesta: reference/http.md
+      - WebSocket: reference/websocket.md
+      - ORM: reference/orm.md
+      - Cache: reference/cache.md
+      - Seguridad: reference/security.md
+      - Metricas: reference/metrics.md
+      - Tareas en background: reference/tasks.md
+      - Utilidades HTTP: reference/utilities.md
+      - DNS local: reference/dns.md
+      - Avanzado: reference/advanced.md
+
+theme:
+  name: material
+  language: es
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+plugins:
+  - search
