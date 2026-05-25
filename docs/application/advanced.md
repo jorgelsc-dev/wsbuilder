@@ -423,6 +423,262 @@ def updates(ws, _request):
 app.run("0.0.0.0", 8765)
 ```
 
+## Ejemplos por escenario
+
+=== "MS"
+
+    Este ejemplo muestra una implementacion avanzada separada por servicios: un gateway publico y servicios de dominio autonomos. Cada servicio tiene su propia seguridad, metricas, cache y base SQLite.
+
+    ### Gateway
+
+    ```python
+    from wsbuilder import App, Response, install_metrics
+
+    gateway = App(cors_allow_origin="https://dashboard.example.com")
+    install_metrics(gateway, app_name="gateway")
+
+    @gateway.api("/health")
+    def gateway_health(_request):
+        return {"ok": True, "service": "gateway"}
+
+    @gateway.api("/api/auth/login", methods=("POST",))
+    def auth_proxy(_request):
+        return {"service": "auth-service", "action": "login"}
+
+    @gateway.api("/api/orders", methods=("GET", "POST"))
+    def orders_proxy(_request):
+        return {"service": "orders-service"}
+
+    @gateway.view("/")
+    def home(_request):
+        return Response.html("<h1>Gateway</h1><p>Entrada publica del sistema.</p>")
+
+    gateway.run("0.0.0.0", 8080)
+    ```
+
+    ### Auth service
+
+    ```python
+    from wsbuilder import (
+        App,
+        Database,
+        IntegerField,
+        Model,
+        SecurityPolicy,
+        SQLiteMemoryCache,
+        TaskManager,
+        TextField,
+        install_cache,
+        install_metrics,
+        install_security,
+    )
+
+    auth = App(cors_allow_origin="https://dashboard.example.com")
+    install_metrics(auth, app_name="auth-service")
+    install_security(
+        auth,
+        SecurityPolicy(
+            acl_default="deny",
+            rate_limit_requests=90,
+            rate_limit_window_seconds=60,
+        ),
+    )
+    install_cache(auth, SQLiteMemoryCache(default_namespace="auth", default_ttl=10))
+    auth_tasks = TaskManager(auth, max_concurrent=2)
+
+    db = Database("auth.db", enable_replicas=True, replica_count=2, cache_size_mb=16)
+
+    class User(Model):
+        id = IntegerField(primary_key=True, auto_increment=True)
+        email = TextField(unique=True, index=True, null=False)
+        password_hash = TextField(null=False)
+
+    User.create_table(db)
+
+    @auth.api("/health")
+    def health(_request):
+        return {"ok": True, "service": "auth-service"}
+
+    @auth.api("/api/login", methods=("POST",))
+    def login(_request):
+        def issue_token():
+            return "token-ready"
+
+        task = auth_tasks.spawn(issue_token, name="issue-token")
+        return {"queued": True, "task_id": task.id}
+
+    @auth.api("/api/users")
+    def users(_request):
+        return {"items": []}
+    ```
+
+    ### Orders service
+
+    ```python
+    from wsbuilder import (
+        App,
+        Database,
+        IntegerField,
+        Model,
+        Response,
+        SecurityPolicy,
+        SQLiteMemoryCache,
+        TaskManager,
+        TextField,
+        install_cache,
+        install_metrics,
+        install_security,
+    )
+
+    orders = App(cors_allow_origin="https://dashboard.example.com")
+    install_metrics(orders, app_name="orders-service")
+    install_security(
+        orders,
+        SecurityPolicy(
+            acl_default="deny",
+            rate_limit_requests=180,
+            rate_limit_window_seconds=60,
+        ),
+    )
+    install_cache(orders, SQLiteMemoryCache(default_namespace="orders", default_ttl=20))
+    orders_tasks = TaskManager(orders, max_concurrent=4)
+
+    db = Database("orders.db", enable_replicas=True, replica_count=3, cache_size_mb=32)
+
+    class Order(Model):
+        id = IntegerField(primary_key=True, auto_increment=True)
+        code = TextField(unique=True, index=True, null=False)
+        status = TextField(index=True, null=False)
+
+    Order.create_table(db)
+
+    @orders.api("/health")
+    def health(_request):
+        return {"ok": True, "service": "orders-service"}
+
+    @orders.api("/api/orders")
+    def list_orders(_request):
+        rows = []
+        for row in Order.objects(db).limit(50):
+            rows.append(
+                {
+                    "id": row.id,
+                    "code": row.code,
+                    "status": row.status,
+                }
+            )
+        return {"items": rows}
+
+    @orders.view("/report", min_threads=1, max_threads=4, requests_per_thread=2)
+    def report(_request):
+        return Response.html("<h1>Reporte de pedidos</h1>")
+    ```
+
+    ### Billing service
+
+    ```python
+    from wsbuilder import (
+        App,
+        Database,
+        IntegerField,
+        Model,
+        SecurityPolicy,
+        SQLiteMemoryCache,
+        TaskManager,
+        TextField,
+        install_cache,
+        install_metrics,
+        install_security,
+    )
+
+    billing = App(cors_allow_origin="https://dashboard.example.com")
+    install_metrics(billing, app_name="billing-service")
+    install_security(
+        billing,
+        SecurityPolicy(
+            acl_default="deny",
+            rate_limit_requests=120,
+            rate_limit_window_seconds=60,
+        ),
+    )
+    install_cache(billing, SQLiteMemoryCache(default_namespace="billing", default_ttl=15))
+    billing_tasks = TaskManager(billing, max_concurrent=2)
+
+    db = Database("billing.db", enable_replicas=True, replica_count=2, cache_size_mb=16)
+
+    class Invoice(Model):
+        id = IntegerField(primary_key=True, auto_increment=True)
+        number = TextField(unique=True, index=True, null=False)
+        status = TextField(index=True, null=False)
+
+    Invoice.create_table(db)
+
+    @billing.api("/health")
+    def health(_request):
+        return {"ok": True, "service": "billing-service"}
+
+    @billing.api("/api/invoices")
+    def invoices(_request):
+        return {"items": []}
+
+    @billing.api("/api/reconcile", methods=("POST",))
+    def reconcile(_request):
+        task = billing_tasks.spawn(lambda: "reconciled", name="reconcile")
+        return {"queued": True, "task_id": task.id}
+    ```
+
+    ### Lo importante
+
+    - cada servicio tiene su propia base;
+    - cada servicio expone `health` y `metrics`;
+    - el gateway no contiene logica de dominio pesada;
+    - las tareas largas no bloquean la request;
+    - la seguridad se aplica en cada borde;
+    - el cache y las replicas se ajustan por servicio, no globalmente.
+
+=== "Servicio unico"
+
+    Si tu despliegue no es distribuido todavia, usa una sola app pero conserva las mismas capas internas.
+
+    ```python
+    from wsbuilder import (
+        App,
+        Database,
+        IntegerField,
+        Model,
+        Response,
+        SecurityPolicy,
+        SQLiteMemoryCache,
+        TaskManager,
+        TextField,
+        install_cache,
+        install_metrics,
+        install_security,
+    )
+
+    app = App(cors_allow_origin="https://dashboard.example.com")
+    install_metrics(app, app_name="monolith-service")
+    install_security(app, SecurityPolicy(rate_limit_requests=180, rate_limit_window_seconds=60))
+    install_cache(app, SQLiteMemoryCache(default_namespace="monolith", default_ttl=20))
+    tasks = TaskManager(app, max_concurrent=4)
+
+    db = Database("monolith.db", enable_replicas=True, replica_count=2)
+
+    class Item(Model):
+        id = IntegerField(primary_key=True, auto_increment=True)
+        name = TextField(unique=True, index=True, null=False)
+
+    Item.create_table(db)
+
+    @app.api("/health")
+    def health(_request):
+        return {"ok": True}
+
+    @app.view("/")
+    def home(_request):
+        return Response.html("<h1>Monolith</h1>")
+    ```
+
 ## Checklist final
 
 - [ ] Las responsabilidades estan separadas por capa.

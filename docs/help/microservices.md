@@ -180,6 +180,10 @@ Usalo si necesitas eventos o canales persistentes.
 4. `billing-service`: cobros, conciliacion y reintentos.
 5. `gateway`: una sola entrada publica, sin logica de dominio pesada.
 
+## Ejemplo completo
+
+Si quieres ver una implementacion avanzada con gateway, servicios de dominio, seguridad, metricas, cache y SQLite por servicio, ve a la pestaña [MS](../application/advanced.md#ejemplos-por-escenario) en la guia de [Aplicacion avanzada](../application/advanced.md).
+
 ## Reglas de integracion entre servicios
 
 - Usa HTTP/JSON para comandos simples.
