@@ -133,6 +133,12 @@ MONITOR_HTML = """<!doctype html>
 def build_demo_app():
     app = App()
     app.enable_metrics(app_name="wsbuilder-demo")
+    app.enable_docs(
+        path="/docs",
+        json_path="/docs.json",
+        title="wsbuilder runtime docs",
+        description="Documentacion automatica de la aplicacion demo en vivo.",
+    )
 
     @app.view("/")
     def home(_request):
@@ -140,6 +146,7 @@ def build_demo_app():
             "<h1>wsbuilder</h1>"
             "<p>Demo core server running.</p>"
             "<p>Metrics: <code>/api/metrics</code> y <code>/api/metrics/stream</code>.</p>"
+            "<p>Docs auto: <a href='/docs'>/docs</a> y <code>/docs.json</code>.</p>"
             "<p>Live monitor: <a href='/monitor'>/monitor</a>.</p>"
             "<p>Thread demo: <code>/thread-demo</code>.</p>"
         )

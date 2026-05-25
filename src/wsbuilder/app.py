@@ -1,6 +1,8 @@
+import json
 import threading
 import time
 import uuid
+from html import escape as html_escape
 
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN
 from .cookies import build_set_cookie
@@ -38,6 +40,18 @@ def _constant_time_equals(a, b):
         y = right[i] if i < len(right) else 0
         diff |= x ^ y
     return diff == 0
+
+
+def _docs_sanitize(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    if isinstance(value, dict):
+        return {str(key): _docs_sanitize(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_docs_sanitize(item) for item in value]
+    return str(value)
 
 
 class _RouteExecutionError(Exception):
@@ -310,6 +324,30 @@ class Route:
             self.thread_count = 0
             self.thread_pool = None
 
+    def describe(self):
+        handler = self.handler
+        thread_pool = self.thread_pool.describe() if self.thread_pool else []
+        return {
+            "path": self.path,
+            "methods": sorted(self.methods),
+            "kind": self.kind,
+            "handler_name": getattr(handler, "__name__", ""),
+            "handler_module": getattr(handler, "__module__", ""),
+            "thread_count": int(self.thread_count),
+            "min_threads": int(self.min_threads),
+            "max_threads": int(self.max_threads),
+            "thread_host": self.thread_host,
+            "thread_base_port": int(self.thread_base_port),
+            "max_clients": int(self.max_clients),
+            "worker_timeout_seconds": float(self.worker_timeout_seconds),
+            "requests_per_thread": int(self.requests_per_thread),
+            "affinity_ttl_seconds": float(self.affinity_ttl_seconds),
+            "affinity_max_entries": int(self.affinity_max_entries),
+            "thread_mode": "thread-pool" if self.thread_pool else "direct",
+            "thread_pool": thread_pool,
+            "cache_config": self.cache_config if self.cache_config is not None else None,
+        }
+
 
 class Router:
     def __init__(self):
@@ -544,6 +582,409 @@ class App:
         from .caches import install_caches
 
         return install_caches(self, caches=caches)
+
+    def describe(self):
+        routes = [route.describe() for route in self.router.routes]
+        ws_routes = []
+        for path, cfg in sorted(self.ws_routes.items(), key=lambda item: item[0]):
+            handler = cfg.get("handler")
+            ws_routes.append(
+                {
+                    "path": path,
+                    "handler_name": getattr(handler, "__name__", ""),
+                    "handler_module": getattr(handler, "__module__", ""),
+                    "subprotocols": list(cfg.get("subprotocols") or ()),
+                    "idle_timeout": float(cfg.get("idle_timeout") or 0.0),
+                    "keepalive_interval": float(cfg.get("keepalive_interval") or 0.0),
+                    "pong_timeout": float(cfg.get("pong_timeout") or 0.0),
+                    "auto_pong": bool(cfg.get("auto_pong")),
+                    "io_poll_interval": float(cfg.get("io_poll_interval") or 0.0),
+                    "ping_payload": (cfg.get("ping_payload") or b"").decode("utf-8", errors="ignore"),
+                }
+            )
+
+        metrics = getattr(self, "metrics", None)
+        security = getattr(self, "security", None)
+        cache = getattr(self, "cache", None)
+        caches = getattr(self, "caches", None)
+        tasks = getattr(self, "tasks", None)
+
+        view_routes = [row for row in routes if row["kind"] == "plain"]
+        api_routes = [row for row in routes if row["kind"] == "api"]
+        return _docs_sanitize({
+            "app_name": self.__class__.__name__,
+            "cors_allow_origin": self.cors_allow_origin,
+            "thread_cookie_name": self.thread_cookie_name,
+            "startup_hooks_total": len(self.startup_hooks),
+            "routes_total": len(routes),
+            "view_routes_total": len(view_routes),
+            "api_routes_total": len(api_routes),
+            "ws_routes_total": len(ws_routes),
+            "metrics_enabled": bool(metrics),
+            "security_enabled": bool(security),
+            "cache_enabled": bool(cache),
+            "caches_enabled": bool(caches),
+            "tasks_enabled": bool(tasks),
+            "metrics": metrics.snapshot() if metrics and hasattr(metrics, "snapshot") else None,
+            "security": security.snapshot() if security and hasattr(security, "snapshot") else None,
+            "cache": cache.snapshot() if cache and hasattr(cache, "snapshot") else None,
+            "http_cache": caches.snapshot() if caches and hasattr(caches, "snapshot") else None,
+            "tasks": tasks.snapshot() if tasks and hasattr(tasks, "snapshot") else None,
+            "routes": routes,
+            "ws_routes": ws_routes,
+        })
+
+    def _render_docs_html(self, data, title="wsbuilder docs", description="Documentacion automatica de la aplicacion", schema_path="/docs.json"):
+        def esc(value):
+            return html_escape("" if value is None else str(value), quote=True)
+
+        def yesno(value):
+            return "Si" if value else "No"
+
+        def render_stat(label, value):
+            return f"""
+            <div class=\"card\">
+              <div class=\"k\">{esc(label)}</div>
+              <div class=\"v\">{esc(value)}</div>
+            </div>
+            """
+
+        routes = list(data.get("routes") or [])
+        ws_routes = list(data.get("ws_routes") or [])
+        summary = data.get("routes_total", 0)
+        views_total = data.get("view_routes_total", 0)
+        api_total = data.get("api_routes_total", 0)
+        ws_total = data.get("ws_routes_total", 0)
+
+        route_rows = []
+        for row in routes:
+            route_rows.append(
+                "<tr>"
+                f"<td data-label=\"Metodos\"><code>{esc(', '.join(row.get('methods') or []))}</code></td>"
+                f"<td data-label=\"Ruta\"><code>{esc(row.get('path'))}</code></td>"
+                f"<td data-label=\"Tipo\">{esc(row.get('kind'))}</td>"
+                f"<td data-label=\"Ejecucion\">{esc(row.get('thread_mode'))}</td>"
+                f"<td data-label=\"Handler\">{esc(row.get('handler_name'))}</td>"
+                "</tr>"
+            )
+
+        ws_rows = []
+        for row in ws_routes:
+            protocols = ", ".join(row.get("subprotocols") or []) or "-"
+            ws_rows.append(
+                "<tr>"
+                f"<td data-label=\"Ruta\"><code>{esc(row.get('path'))}</code></td>"
+                f"<td data-label=\"Subprotocolos\">{esc(protocols)}</td>"
+                f"<td data-label=\"Handler\">{esc(row.get('handler_name'))}</td>"
+                f"<td data-label=\"Idle\">{esc(row.get('idle_timeout'))}</td>"
+                f"<td data-label=\"Keepalive\">{esc(row.get('keepalive_interval'))}</td>"
+                f"<td data-label=\"Pong\">{esc(row.get('pong_timeout'))}</td>"
+                f"<td data-label=\"Auto pong\">{yesno(row.get('auto_pong'))}</td>"
+                "</tr>"
+            )
+
+        raw_json = esc(json.dumps(data, ensure_ascii=False, indent=2))
+        return f"""<!doctype html>
+<html lang=\"es\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>{esc(title)}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --ink: #0f172a;
+      --muted: #475569;
+      --line: #dbe3ea;
+      --brand: #0f766e;
+      --brand-soft: rgba(15, 118, 110, 0.08);
+      --shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+    }}
+    * {{ box-sizing: border-box; }}
+    html {{ scroll-behavior: smooth; }}
+    body {{
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(20, 184, 166, 0.12), transparent 24%),
+        linear-gradient(180deg, #fff, var(--bg));
+      color: var(--ink);
+    }}
+    a {{ color: var(--brand); text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .wrap {{
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 28px 20px 56px;
+    }}
+    .hero {{
+      display: grid;
+      gap: 14px;
+      padding: 24px;
+      background: linear-gradient(135deg, rgba(15,118,110,0.12), rgba(15,23,42,0.04));
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      margin-bottom: 22px;
+    }}
+    .hero h1 {{
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 3.25rem);
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+    }}
+    .hero p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.02rem;
+      max-width: 72ch;
+    }}
+    .links {{
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }}
+    .pill {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 20px 0 28px;
+    }}
+    .card {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+      min-width: 0;
+    }}
+    .k {{
+      color: var(--muted);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+    }}
+    .v {{
+      margin-top: 8px;
+      font-size: 1.6rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }}
+    .section {{
+      margin-top: 22px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }}
+    .section h2 {{
+      margin: 0;
+      padding: 18px 20px 10px;
+      font-size: 1.2rem;
+      letter-spacing: -0.02em;
+    }}
+    .section p.lead {{
+      margin: 0;
+      padding: 0 20px 16px;
+      color: var(--muted);
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+    }}
+    th, td {{
+      text-align: left;
+      vertical-align: top;
+      padding: 12px 20px;
+      border-top: 1px solid var(--line);
+      word-break: break-word;
+    }}
+    th {{
+      background: var(--brand-soft);
+      color: var(--ink);
+      font-size: 0.86rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }}
+    code {{
+      background: rgba(15, 23, 42, 0.06);
+      padding: 0.12em 0.35em;
+      border-radius: 0.4rem;
+      color: var(--ink);
+    }}
+    pre {{
+      margin: 0;
+      padding: 18px 20px 22px;
+      background: #0b1020;
+      color: #e2e8f0;
+      overflow: auto;
+      font-size: 0.86rem;
+      line-height: 1.6;
+    }}
+    code {{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }}
+    details {{
+      border-top: 1px solid var(--line);
+      padding: 0 20px 20px;
+    }}
+    details > summary {{
+      cursor: pointer;
+      padding: 14px 0;
+      color: var(--brand);
+      font-weight: 700;
+    }}
+    .muted {{ color: var(--muted); }}
+    @media (max-width: 960px) {{
+      .grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    }}
+    @media (max-width: 680px) {{
+      .wrap {{ padding: 18px 12px 40px; }}
+      .hero {{ padding: 18px; border-radius: 18px; }}
+      .grid {{ grid-template-columns: 1fr; }}
+      table, thead, tbody, th, td, tr {{ display: block; }}
+      thead {{ display: none; }}
+      tr {{ border-top: 1px solid var(--line); }}
+      td {{ border-top: 0; padding: 10px 20px; }}
+      td::before {{
+        content: attr(data-label);
+        display: block;
+        color: var(--muted);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 4px;
+        font-weight: 700;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <div class=\"wrap\">
+    <header class=\"hero\">
+      <h1>{esc(title)}</h1>
+      <p>{esc(description)}</p>
+      <div class=\"links\">
+        <a class=\"pill\" href=\"{esc(schema_path)}\">Ver JSON</a>
+        <a class=\"pill\" href=\"#routes\">Rutas</a>
+        <a class=\"pill\" href=\"#ws\">WebSocket</a>
+        <a class=\"pill\" href=\"#estado\">Estado</a>
+      </div>
+    </header>
+
+    <section class=\"grid\" aria-label=\"Resumen\">
+      {render_stat("Rutas totales", summary)}
+      {render_stat("Views", views_total)}
+      {render_stat("APIs", api_total)}
+      {render_stat("WS", ws_total)}
+    </section>
+
+    <section id=\"estado\" class=\"section\">
+      <h2>Estado de la aplicacion</h2>
+      <p class=\"lead\">La documentacion nativa se genera directamente desde la instancia activa de `App` y se actualiza con cada ruta registrada.</p>
+      <table>
+        <tbody>
+          <tr><th>Campo</th><th>Valor</th></tr>
+          <tr><td data-label=\"Campo\">CORS</td><td data-label=\"Valor\"><code>{esc(data.get('cors_allow_origin'))}</code></td></tr>
+          <tr><td data-label=\"Campo\">Cookie de afinidad</td><td data-label=\"Valor\"><code>{esc(data.get('thread_cookie_name'))}</code></td></tr>
+          <tr><td data-label=\"Campo\">Metricas</td><td data-label=\"Valor\">{yesno(data.get('metrics_enabled'))}</td></tr>
+          <tr><td data-label=\"Campo\">Seguridad</td><td data-label=\"Valor\">{yesno(data.get('security_enabled'))}</td></tr>
+          <tr><td data-label=\"Campo\">Cache</td><td data-label=\"Valor\">{yesno(data.get('cache_enabled'))}</td></tr>
+          <tr><td data-label=\"Campo\">Cache HTTP</td><td data-label=\"Valor\">{yesno(data.get('caches_enabled'))}</td></tr>
+          <tr><td data-label=\"Campo\">Tareas</td><td data-label=\"Valor\">{yesno(data.get('tasks_enabled'))}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id=\"routes\" class=\"section\">
+      <h2>Rutas HTTP</h2>
+      <p class=\"lead\">Cada ruta expone metodo, tipo, estrategia de ejecucion y el handler que la atiende.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Metodos</th>
+            <th>Ruta</th>
+            <th>Tipo</th>
+            <th>Ejecucion</th>
+            <th>Handler</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(route_rows) or '<tr><td colspan=\"5\" class=\"muted\">No hay rutas registradas.</td></tr>'}
+        </tbody>
+      </table>
+    </section>
+
+    <section id=\"ws\" class=\"section\">
+      <h2>Rutas WebSocket</h2>
+      <p class=\"lead\">La vista incluye los detalles del handshake y del ciclo de vida del canal persistente.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Ruta</th>
+            <th>Subprotocolos</th>
+            <th>Handler</th>
+            <th>Idle</th>
+            <th>Keepalive</th>
+            <th>Pong</th>
+            <th>Auto pong</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(ws_rows) or '<tr><td colspan=\"7\" class=\"muted\">No hay rutas WebSocket registradas.</td></tr>'}
+        </tbody>
+      </table>
+    </section>
+
+    <section class=\"section\">
+      <h2>JSON completo</h2>
+      <p class=\"lead\">Este bloque es el mismo contenido que entrega el endpoint JSON, util para automatizacion o integracion con otras herramientas.</p>
+      <details open>
+        <summary>Ver payload</summary>
+        <pre>{raw_json}</pre>
+      </details>
+    </section>
+  </div>
+</body>
+</html>"""
+
+    def enable_docs(self, path="/docs", json_path="/docs.json", title=None, description=None):
+        docs_title = title or f"{self.__class__.__name__} docs"
+        docs_description = description or "Documentacion automatica y nativa de la aplicacion activa."
+
+        @self.api(json_path, methods=("GET",))
+        def _docs_json(_request):
+            return self.describe()
+
+        @self.view(path, methods=("GET",))
+        def _docs_view(_request):
+            payload = self.describe()
+            return Response.html(
+                self._render_docs_html(
+                    payload,
+                    title=docs_title,
+                    description=docs_description,
+                    schema_path=json_path,
+                )
+            )
+
+        return {"path": path, "json_path": json_path}
 
     def list_view_threads(self, path, method="GET"):
         route = self.router.resolve(path, method=method)

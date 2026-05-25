@@ -26,6 +26,8 @@ Eso levanta un servidor HTTP con:
 - `GET /api/health`
 - `GET /api/metrics`
 - `GET /api/metrics/stream`
+- `GET /docs`
+- `GET /docs.json`
 - `GET /monitor`
 - `GET /thread-demo`
 - `WS /ws/`
