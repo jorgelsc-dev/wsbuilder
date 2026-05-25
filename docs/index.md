@@ -87,6 +87,17 @@ Libreria Python para construir servidores HTTP, WebSocket y utilidades de infrae
 <div class="card"><strong>Control interno</strong>Agrega cache, seguridad, metricas y tareas sin salir de la misma API.</div>
 </div>
 
+## Guia de aplicacion
+
+<div class="cards">
+<div class="card"><strong>Facil</strong>Parte de un servicio pequeno, correlo localmente y entiende el flujo basico de HTTP, JSON y HTML.</div>
+<div class="card"><strong>Avanzada</strong>Arma una aplicacion real con seguridad, cache, metricas, tareas, WebSocket y SQLite optimizado.</div>
+</div>
+
+1. Abre [Aplicacion - Facil](application/easy.md) si quieres construir tu primer servicio completo sin perderte.
+2. Abre [Aplicacion - Avanzada](application/advanced.md) si ya sabes que vas a operar un servicio serio.
+3. Vuelve a [Arquitectura](architecture.md) si quieres entender por que cada pieza esta separada asi.
+
 ## Por que esta libreria es fuerte
 
 - Tiene fronteras claras entre transporte, negocio y observabilidad.
@@ -125,9 +136,10 @@ app.run("0.0.0.0", 8765)
 ## Como leer esta documentacion
 
 1. Empieza por [Empezar](getting-started.md) si quieres levantar algo rapido.
-2. Sigue con [Arquitectura](architecture.md) para entender el flujo interno.
-3. Abre [Ayuda](help/index.md) si estas pensando en Microservicios o topologias distribuidas.
-4. Usa [Referencia](reference/index.md) para ir directo a una clase, modulo o helper.
+2. Sigue con [Aplicacion](application/index.md) para elegir entre la guia facil o la avanzada.
+3. Abre [Arquitectura](architecture.md) para entender el flujo interno.
+4. Abre [Ayuda](help/index.md) si estas pensando en Microservicios o topologias distribuidas.
+5. Usa [Referencia](reference/index.md) para ir directo a una clase, modulo o helper.
 
 ## Contribucion y soporte
 

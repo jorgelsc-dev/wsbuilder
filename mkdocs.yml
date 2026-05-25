@@ -6,6 +6,10 @@ repo_name: wsbuilder
 nav:
   - Inicio: index.md
   - Empezar: getting-started.md
+  - Aplicacion:
+      - Resumen: application/index.md
+      - Facil: application/easy.md
+      - Avanzada: application/advanced.md
   - Arquitectura: architecture.md
   - Ayuda:
       - Resumen: help/index.md
