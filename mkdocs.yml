@@ -51,6 +51,8 @@ markdown_extensions:
   - attr_list
   - def_list
   - footnotes
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.superfences
   - toc:
       permalink: true
