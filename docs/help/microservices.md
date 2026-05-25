@@ -184,6 +184,8 @@ Usalo si necesitas eventos o canales persistentes.
 
 Si quieres ver una implementacion avanzada con gateway, servicios de dominio, seguridad, metricas, cache y SQLite por servicio, ve a la pestaña [MS](../application/advanced.md#ejemplos-por-escenario) en la guia de [Aplicacion avanzada](../application/advanced.md).
 
+Si ademas activas `app.enable_docs()`, cada servicio puede tener su propia URL `/docs` y `/docs.json` para inspeccionarlo sin sincronizar documentacion manual.
+
 ## Reglas de integracion entre servicios
 
 - Usa HTTP/JSON para comandos simples.

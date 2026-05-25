@@ -423,6 +423,38 @@ def updates(ws, _request):
 app.run("0.0.0.0", 8765)
 ```
 
+## Documentacion nativa
+
+`wsbuilder` puede exponer una vista automatica parecida a Swagger sin depender de un paquete externo. La idea es simple:
+
+- activas una URL publica;
+- el framework inspecciona rutas HTTP, WebSocket, seguridad, cache, metricas y tareas;
+- obtienes una vista HTML y un JSON automatico sincronizados con la app real.
+
+### Activacion
+
+```python
+from wsbuilder import App
+
+app = App(cors_allow_origin="https://dashboard.example.com")
+app.enable_docs(path="/docs", json_path="/docs.json")
+```
+
+### Que expone
+
+- `GET /docs` para la vista HTML;
+- `GET /docs.json` para el payload estructurado;
+- listado de rutas `view()` y `api()`;
+- rutas `ws()` con timeouts y subprotocolos;
+- informacion de seguridad, cache, metrics y tareas;
+- resumen de estado de la aplicacion en tiempo real.
+
+### Cuando usarlo
+
+- si quieres explorar la API viva sin mantener documentacion manual duplicada;
+- si operas varios servicios y cada uno necesita su propia superficie visible;
+- si quieres un panel nativo que puedas abrir por URL y que siempre refleje el estado actual.
+
 ## Ejemplos por escenario
 
 === "MS"
@@ -631,6 +663,7 @@ app.run("0.0.0.0", 8765)
 
     - cada servicio tiene su propia base;
     - cada servicio expone `health` y `metrics`;
+    - cada servicio puede exponer tambien `docs` y `docs.json` de forma nativa;
     - el gateway no contiene logica de dominio pesada;
     - las tareas largas no bloquean la request;
     - la seguridad se aplica en cada borde;
