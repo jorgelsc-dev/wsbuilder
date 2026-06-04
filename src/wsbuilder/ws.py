@@ -1,23 +1,143 @@
+import base64
+import socket
+import threading
+import time
+from dataclasses import dataclass
+
 from .constants import MAGIC_WS
 from .http import Response, send_http_response
 
+MAX_WS_FRAME_PAYLOAD_BYTES = 2 * 1024 * 1024
+
+
+class WebSocketProtocolError(Exception):
+    pass
+
+
+class WebSocketReadError(Exception):
+    pass
+
+
+class WebSocketReadTimeoutError(WebSocketReadError):
+    pass
+
+
+class WebSocketConnectionClosedError(WebSocketReadError):
+    pass
+
+
+@dataclass(slots=True)
+class WebSocketFrame:
+    fin: int
+    opcode: int
+    payload: bytes
+    masked: bool
+    mask: bytes | None
+
+    def __iter__(self):
+        yield self.fin
+        yield self.opcode
+        yield self.payload
+        yield self.masked
+        yield self.mask
+
+    def __len__(self):
+        return 5
+
+    def __getitem__(self, index):
+        values = (self.fin, self.opcode, self.payload, self.masked, self.mask)
+        return values[index]
+
+
+def _header_token_contains(raw_value, token):
+    wanted = str(token or "").strip().lower()
+    if not wanted:
+        return False
+    values = [part.strip().lower() for part in str(raw_value or "").split(",")]
+    return wanted in values
+
+
+def _is_valid_websocket_key(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        decoded = base64.b64decode(raw.encode("ascii"), validate=True)
+    except Exception:
+        return False
+    return len(decoded) == 16
+
 
 def is_ws_request(headers):
-    return headers.get("upgrade", "").lower() == "websocket"
+    upgrade_ok = str(headers.get("upgrade", "")).strip().lower() == "websocket"
+    connection_ok = _header_token_contains(headers.get("connection", ""), "upgrade")
+    return upgrade_ok and connection_ok
 
 
-def handshake_websocket(conn, addr, headers):
+def _normalize_protocols(value):
+    if not value:
+        return ()
+    if isinstance(value, str):
+        return tuple(part.strip() for part in value.split(",") if part.strip())
+    return tuple(str(part).strip() for part in value if str(part).strip())
+
+
+def handshake_websocket_with_options(
+    conn,
+    addr,
+    headers,
+    *,
+    supported_subprotocols=(),
+    idle_timeout=0.0,
+    keepalive_interval=0.0,
+    pong_timeout=0.0,
+    auto_pong=True,
+    on_close=None,
+    on_error=None,
+    on_timeout=None,
+    io_poll_interval=1.0,
+    ping_payload=b"",
+):
     key = headers.get("sec-websocket-key", "")
     if not key:
         send_http_response(conn, Response.text("Missing Sec-WebSocket-Key", status=400))
         return None
+    if not _is_valid_websocket_key(key):
+        send_http_response(conn, Response.text("Invalid Sec-WebSocket-Key", status=400))
+        return None
 
+    if not _header_token_contains(headers.get("connection", ""), "upgrade"):
+        send_http_response(conn, Response.text("Missing/invalid Connection: Upgrade", status=400))
+        return None
+    if str(headers.get("upgrade", "")).strip().lower() != "websocket":
+        send_http_response(conn, Response.text("Missing/invalid Upgrade: websocket", status=400))
+        return None
+
+    version = str(headers.get("sec-websocket-version", "")).strip()
+    if version != "13":
+        send_http_response(
+            conn,
+            Response(
+                status=426,
+                body=b"Unsupported WebSocket Version",
+                headers={"Sec-WebSocket-Version": "13"},
+            ),
+        )
+        return None
+
+    supported = _normalize_protocols(supported_subprotocols)
     subprotocol = ""
     offered = headers.get("sec-websocket-protocol", "")
     if offered:
         parts = [p.strip() for p in offered.split(",") if p.strip()]
         if parts:
-            subprotocol = parts[0]
+            if supported:
+                for part in parts:
+                    if part in supported:
+                        subprotocol = part
+                        break
+            else:
+                subprotocol = parts[0]
 
     accept_src = (key + MAGIC_WS).encode("utf-8")
     digest = sha1(accept_src)
@@ -32,21 +152,193 @@ def handshake_websocket(conn, addr, headers):
         resp_headers["Sec-WebSocket-Protocol"] = subprotocol
 
     send_http_response(conn, Response(status=101, body=b"", headers=resp_headers))
-    return WebSocket(conn, addr, subprotocol, headers)
+    return WebSocket(
+        conn,
+        addr,
+        subprotocol,
+        headers,
+        idle_timeout=idle_timeout,
+        keepalive_interval=keepalive_interval,
+        pong_timeout=pong_timeout,
+        auto_pong=auto_pong,
+        on_close=on_close,
+        on_error=on_error,
+        on_timeout=on_timeout,
+        io_poll_interval=io_poll_interval,
+        ping_payload=ping_payload.encode("utf-8") if isinstance(ping_payload, str) else ping_payload,
+        supported_subprotocols=supported,
+    )
+
+
+def handshake_websocket(conn, addr, headers):
+    return handshake_websocket_with_options(conn, addr, headers)
 
 
 class WebSocket:
-    def __init__(self, sock, addr, subprotocol, headers):
+    def __init__(
+        self,
+        sock,
+        addr,
+        subprotocol,
+        headers,
+        *,
+        idle_timeout=0.0,
+        keepalive_interval=0.0,
+        pong_timeout=0.0,
+        auto_pong=True,
+        on_close=None,
+        on_error=None,
+        on_timeout=None,
+        io_poll_interval=1.0,
+        ping_payload=b"",
+        supported_subprotocols=(),
+    ):
         self.sock = sock
         self.addr = addr
         self.subprotocol = subprotocol or ""
         self.headers = headers or {}
+        self.supported_subprotocols = tuple(supported_subprotocols or ())
+        self.idle_timeout = max(0.0, float(idle_timeout))
+        self.keepalive_interval = max(0.0, float(keepalive_interval))
+        self.pong_timeout = max(0.0, float(pong_timeout))
+        self.auto_pong = bool(auto_pong)
+        self.on_close = on_close
+        self.on_error = on_error
+        self.on_timeout = on_timeout
+        self.io_poll_interval = max(0.1, float(io_poll_interval or 1.0))
+        self.ping_payload = (
+            ping_payload.encode("utf-8")
+            if isinstance(ping_payload, str)
+            else bytes(ping_payload or b"")
+        )
+        self._send_lock = threading.Lock()
+        self._closed = False
+        self._close_reported = False
+        self._peer_close_received = False
+        self._awaiting_pong = False
+        self._last_rx_at = time.monotonic()
+        self._last_tx_at = self._last_rx_at
+        self._last_ping_at = 0.0
+
+        if self.idle_timeout > 0 or self.keepalive_interval > 0 or self.pong_timeout > 0:
+            try:
+                self.sock.settimeout(self.io_poll_interval)
+            except Exception:
+                pass
+
+    def _now(self):
+        return time.monotonic()
+
+    def _invoke_callback(self, callback, *args):
+        if not callback:
+            return
+        try:
+            callback(*args)
+        except Exception as exc:
+            print(f"[ws] callback error: {exc}")
+
+    def _mark_rx(self):
+        self._last_rx_at = self._now()
+
+    def _mark_tx(self):
+        self._last_tx_at = self._now()
+
+    def _report_close(self, code, reason):
+        if self._close_reported:
+            return
+        self._close_reported = True
+        self._invoke_callback(self.on_close, self, code, reason)
+
+    def _report_error(self, exc):
+        self._invoke_callback(self.on_error, self, exc)
+
+    def _report_timeout(self, reason):
+        self._invoke_callback(self.on_timeout, self, reason)
+
+    def _close_with_reason(self, code, reason):
+        self._closed = True
+        self._report_close(code, reason)
+
+    def _handle_idle_tick(self):
+        now = self._now()
+        if self.keepalive_interval > 0:
+            if self._awaiting_pong and self.pong_timeout > 0 and (now - self._last_ping_at) >= self.pong_timeout:
+                self._report_timeout("pong timeout")
+                self._close_with_reason(1001, "Ping timeout")
+                raise WebSocketReadTimeoutError("WebSocket pong timeout")
+
+            if not self._awaiting_pong and (now - self._last_tx_at) >= self.keepalive_interval:
+                try:
+                    self.send_ping(self.ping_payload)
+                except Exception as exc:
+                    self._report_error(exc)
+                    self._close_with_reason(1006, "Keepalive ping failed")
+                    raise WebSocketConnectionClosedError("WebSocket keepalive ping failed") from exc
+                self._awaiting_pong = True
+                self._last_ping_at = now
+                return True
+
+        if self.idle_timeout > 0 and (now - self._last_rx_at) >= self.idle_timeout:
+            self._report_timeout("idle timeout")
+            self._close_with_reason(1001, "Idle timeout")
+            raise WebSocketReadTimeoutError("WebSocket idle timeout")
+
+        return False
 
     def recv_frame(self):
-        return read_ws_frame_raw(self.sock)
+        while True:
+            try:
+                frame = read_ws_frame_raw(self.sock)
+            except (socket.timeout, TimeoutError) as exc:
+                if self._closed:
+                    raise WebSocketConnectionClosedError("WebSocket already closed") from exc
+                if self._handle_idle_tick():
+                    continue
+                self._report_timeout("read timeout")
+                raise WebSocketReadTimeoutError("WebSocket read timed out") from exc
+            except ConnectionError as exc:
+                self._close_with_reason(1006, "Connection closed")
+                raise WebSocketConnectionClosedError("WebSocket connection closed") from exc
+            except OSError as exc:
+                self._close_with_reason(1006, "Connection closed")
+                raise WebSocketConnectionClosedError("WebSocket connection error") from exc
+            except WebSocketProtocolError as exc:
+                try:
+                    self.close(1002, "Protocol Error")
+                except Exception:
+                    pass
+                self._report_error(exc)
+                raise
+
+            self._mark_rx()
+            if frame.opcode == 0x8:
+                self._peer_close_received = True
+                code, reason = parse_close_payload(frame.payload)
+                self._report_close(code or 1000, reason or "")
+            elif frame.opcode == 0x9 and self.auto_pong:
+                try:
+                    self.send_pong(frame.payload)
+                except Exception as exc:
+                    self._report_error(exc)
+                    raise
+            elif frame.opcode == 0xA:
+                self._awaiting_pong = False
+            return frame
 
     def send_frame(self, opcode, payload=b""):
-        self.sock.sendall(make_ws_frame_bytes(opcode, payload))
+        if self._closed:
+            raise WebSocketConnectionClosedError("WebSocket is closed")
+        data = make_ws_frame_bytes(opcode, payload)
+        with self._send_lock:
+            try:
+                self.sock.sendall(data)
+            except (ConnectionError, OSError) as exc:
+                self._close_with_reason(1006, "Connection closed")
+                self._report_error(exc)
+                raise WebSocketConnectionClosedError("WebSocket send failed") from exc
+        self._mark_tx()
+        if opcode == 0x8:
+            self._closed = True
 
     def send_text(self, text):
         self.send_frame(0x1, text.encode("utf-8"))
@@ -61,10 +353,16 @@ class WebSocket:
         self.send_frame(0xA, payload)
 
     def close(self, code=1000, reason=""):
+        if self._closed:
+            return
         payload = code.to_bytes(2, "big")
         if reason:
             payload += reason.encode("utf-8")
-        self.send_frame(0x8, payload)
+        try:
+            self.send_frame(0x8, payload)
+        finally:
+            self._closed = True
+            self._report_close(code, reason)
 
 
 def recv_exact(conn, n):
@@ -81,9 +379,19 @@ def read_ws_frame_raw(conn):
     hdr = recv_exact(conn, 2)
     b1, b2 = hdr[0], hdr[1]
     fin = (b1 >> 7) & 1
+    rsv = (b1 >> 4) & 0x07
     opcode = b1 & 0x0F
     masked = (b2 >> 7) & 1
     payload_len = b2 & 0x7F
+
+    if rsv != 0:
+        raise WebSocketProtocolError("RSV bits must be zero without negotiated extensions")
+
+    if opcode in {0x3, 0x4, 0x5, 0x6, 0x7, 0xB, 0xC, 0xD, 0xE, 0xF}:
+        raise WebSocketProtocolError(f"Reserved/unsupported opcode: {opcode}")
+
+    if not masked:
+        raise WebSocketProtocolError("Client-to-server frames must be masked")
 
     if payload_len == 126:
         ext = recv_exact(conn, 2)
@@ -91,6 +399,15 @@ def read_ws_frame_raw(conn):
     elif payload_len == 127:
         ext = recv_exact(conn, 8)
         payload_len = int.from_bytes(ext, "big")
+
+    if opcode >= 0x8:
+        if not fin:
+            raise WebSocketProtocolError("Control frames must not be fragmented")
+        if payload_len > 125:
+            raise WebSocketProtocolError("Control frame payload too large")
+
+    if payload_len > MAX_WS_FRAME_PAYLOAD_BYTES:
+        raise WebSocketProtocolError("Frame payload exceeds server limit")
 
     mask = None
     if masked:
@@ -101,7 +418,7 @@ def read_ws_frame_raw(conn):
         payload = recv_exact(conn, payload_len)
         if masked and mask:
             payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-    return fin, opcode, payload, bool(masked), mask
+    return WebSocketFrame(fin, opcode, payload, bool(masked), mask)
 
 
 def make_ws_frame_bytes(opcode, payload=b""):
@@ -213,4 +530,3 @@ def base64_encode(data_bytes):
         if pad:
             res[-pad:] = "=" * pad
     return "".join(res)
-

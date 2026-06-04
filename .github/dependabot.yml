@@ -4,14 +4,14 @@ updates:
     directory: "/"
     target-branch: "develop"
     schedule:
-      interval: "cron"
-      cronjob: "*/30 * * * *"
+      interval: "weekly"
+      day: "monday"
     open-pull-requests-limit: 10
 
   - package-ecosystem: "github-actions"
     directory: "/"
     target-branch: "develop"
     schedule:
-      interval: "cron"
-      cronjob: "*/30 * * * *"
+      interval: "weekly"
+      day: "monday"
     open-pull-requests-limit: 10
