@@ -1,3 +1,8 @@
+# LEGACY DEMO MODULE.
+# The package CLI (`python -m wsbuilder`) now uses `src/wsbuilder/__main__.py`
+# built on top of the modular core (`app.py`, `server.py`, `http.py`, `ws.py`).
+# This file remains as a standalone reference demo.
+#
 # enhanced_server.py (versión basada en clases Threading + ORM SQLite)
 # Servidor HTTP + WebSocket + REST con funcionalidades WebSocket ampliadas:
 # - text / binary
@@ -14,6 +19,11 @@ import uuid
 import time
 import json
 import sqlite3
+
+try:
+    from .metrics import AppMetrics, DEFAULT_STREAM_POINTS
+except Exception:
+    from metrics import AppMetrics, DEFAULT_STREAM_POINTS
 
 HOST = '0.0.0.0'
 PORT = 8765
@@ -331,6 +341,15 @@ INDEX_HTML = """<!doctype html>
   </fieldset>
 
   <fieldset>
+    <legend>Métricas en vivo</legend>
+    <button id="metrics_snapshot">Snapshot metrics</button>
+    <button id="metrics_stream_once">Stream x5</button>
+    <button id="metrics_stream_live">Stream continuo</button>
+    <button id="metrics_stream_stop">Detener stream</button>
+    <pre id="metrics_box">{}</pre>
+  </fieldset>
+
+  <fieldset>
     <legend>Cerrar conexión desde servidor</legend>
     <div>
       <label>Seleccionar cliente:
@@ -384,6 +403,7 @@ INDEX_HTML = """<!doctype html>
 
 <script>
 let ws = null;
+let metricsAbortController = null;
 
 function addMsg(s){
   const ul = document.getElementById('messages');
@@ -578,6 +598,110 @@ document.getElementById('server_chat_list').onclick = () =>
 
 document.getElementById('server_chat_clear').onclick = () =>
   callApi('/api/chat/clear', 'POST', {});
+
+function stopMetricsStream(){
+  if(metricsAbortController){
+    metricsAbortController.abort();
+    metricsAbortController = null;
+  }
+}
+
+async function startMetricsStream(url){
+  stopMetricsStream();
+  const pre = document.getElementById('metrics_box');
+  if(pre) pre.textContent = '[metrics] conectando...';
+
+  const ctrl = new AbortController();
+  metricsAbortController = ctrl;
+
+  try{
+    const r = await fetch(url, {
+      method: 'GET',
+      signal: ctrl.signal,
+      headers: {
+        'Accept': 'application/x-ndjson'
+      }
+    });
+    if(!r.ok){
+      const txt = await r.text();
+      if(pre) pre.textContent = txt || ('HTTP ' + r.status);
+      addMsg('[METRICS] error HTTP ' + r.status);
+      return;
+    }
+    if(!r.body){
+      if(pre) pre.textContent = '[metrics] stream sin body';
+      addMsg('[METRICS] stream sin body');
+      return;
+    }
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let count = 0;
+
+    while(true){
+      const part = await reader.read();
+      if(part.done){
+        break;
+      }
+      buffer += decoder.decode(part.value, {stream:true});
+
+      let idx = buffer.indexOf('\\n');
+      while(idx >= 0){
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if(line){
+          count++;
+          try{
+            const obj = JSON.parse(line);
+            if(pre) pre.textContent = JSON.stringify(obj, null, 2);
+          }catch(e){
+            if(pre) pre.textContent = line;
+          }
+        }
+        idx = buffer.indexOf('\\n');
+      }
+    }
+    addMsg('[METRICS] stream finalizado (' + count + ' eventos)');
+  }catch(e){
+    if(ctrl.signal.aborted){
+      addMsg('[METRICS] stream detenido por usuario');
+    }else{
+      addMsg('[METRICS] stream error: ' + e);
+      if(pre) pre.textContent = String(e);
+    }
+  }finally{
+    if(metricsAbortController === ctrl){
+      metricsAbortController = null;
+    }
+  }
+}
+
+document.getElementById('metrics_snapshot').onclick = async () => {
+  try{
+    const r = await fetch('/api/metrics');
+    const txt = await r.text();
+    const pre = document.getElementById('metrics_box');
+    try{
+      const jd = JSON.parse(txt);
+      if(pre) pre.textContent = JSON.stringify(jd, null, 2);
+    }catch(e){
+      if(pre) pre.textContent = txt;
+    }
+    addMsg('[METRICS] snapshot HTTP ' + r.status);
+  }catch(e){
+    addMsg('[METRICS] snapshot error: ' + e);
+  }
+};
+
+document.getElementById('metrics_stream_once').onclick = () =>
+  startMetricsStream('/api/metrics/stream?interval=1&limit=5');
+
+document.getElementById('metrics_stream_live').onclick = () =>
+  startMetricsStream('/api/metrics/stream?interval=1&follow=1');
+
+document.getElementById('metrics_stream_stop').onclick = () =>
+  stopMetricsStream();
 
 // ----- Chat UI -----
 document.getElementById('chat_save_alias').onclick = function(){
@@ -1249,9 +1373,10 @@ def parse_chat_line(text):
 # ============================================================
 
 class ClientRegistry:
-    def __init__(self):
+    def __init__(self, metrics=None):
         self._clients = {}  # client_id -> dict {sock, addr, thread, subprotocol, created}
         self._lock = threading.Lock()
+        self.metrics = metrics
 
     def register_client(self, client_id, sock, addr, thread, subprotocol):
         with self._lock:
@@ -1293,6 +1418,10 @@ class ClientRegistry:
         print(f"[WS] list_clients_info -> {len(out)} clientes")
         return out
 
+    def active_client_count(self):
+        with self._lock:
+            return len(self._clients)
+
     def send_to_client(self, client_id, opcode, payload=b''):
         with self._lock:
             info = self._clients.get(client_id)
@@ -1302,6 +1431,8 @@ class ClientRegistry:
             sock = info['sock']
         try:
             sock.sendall(make_ws_frame_bytes(opcode, payload))
+            if self.metrics:
+                self.metrics.ws_message_out(len(payload))
             print(f"[WS] send_to_client: cid={client_id} opcode={opcode} len={len(payload)}")
             return True, "sent"
         except Exception as e:
@@ -1316,6 +1447,8 @@ class ClientRegistry:
         for cid, info in items:
             try:
                 info['sock'].sendall(make_ws_frame_bytes(opcode, payload))
+                if self.metrics:
+                    self.metrics.ws_message_out(len(payload))
                 print(f"[WS]  broadcast -> cid={cid} OK")
             except Exception as e:
                 print(f"[WS]  broadcast -> cid={cid} ERROR: {e}")
@@ -1327,15 +1460,65 @@ class ClientRegistry:
 # ============================================================
 
 class ConnectionThread(threading.Thread):
-    def __init__(self, conn, addr, registry, db):
+    def __init__(self, conn, addr, registry, db, metrics):
         super().__init__(daemon=True)
         self.conn = conn
         self.addr = addr
         self.registry = registry
         self.db = db
+        self.metrics = metrics
+
+    def _send_response(self, status_code, reason, headers, body, req_meta=None):
+        send_http_response(self.conn, status_code, reason, headers, body)
+        if not self.metrics:
+            return
+        if req_meta is None:
+            return
+        started_at = req_meta.get('started_at', time.time())
+        duration_ms = (time.time() - started_at) * 1000.0
+        method = req_meta.get('method', 'GET')
+        path = req_meta.get('path', '/')
+        self.metrics.http_response_sent(
+            method,
+            path,
+            status_code,
+            body_size=len(body or b''),
+            duration_ms=duration_ms,
+        )
+
+    def _send_chunked_stream(self, headers, chunk_iterable):
+        if headers is None:
+            headers = {}
+        status_line = "HTTP/1.1 200 OK\r\n"
+        lowermap = {k.lower(): v for k, v in headers.items()}
+        if 'transfer-encoding' not in lowermap:
+            headers['Transfer-Encoding'] = 'chunked'
+        if 'connection' not in lowermap:
+            headers['Connection'] = 'close'
+        if 'server' not in lowermap:
+            headers['Server'] = 'MinimalWS/1.0'
+        hdrs = ''
+        for k, v in headers.items():
+            hdrs += f"{k}: {v}\r\n"
+        self.conn.sendall((status_line + hdrs + "\r\n").encode('utf-8'))
+        for chunk in chunk_iterable:
+            if chunk is None:
+                continue
+            if isinstance(chunk, str):
+                chunk = chunk.encode('utf-8')
+            if not isinstance(chunk, (bytes, bytearray)):
+                chunk = str(chunk).encode('utf-8')
+            if not chunk:
+                continue
+            self.conn.sendall(f"{len(chunk):X}\r\n".encode('utf-8'))
+            self.conn.sendall(chunk)
+            self.conn.sendall(b"\r\n")
+        self.conn.sendall(b"0\r\n\r\n")
 
     def run(self):
         print(f"[HTTP] Nueva conexión desde {self.addr}")
+        if self.metrics:
+            self.metrics.tcp_connection_open()
         try:
             req = parse_http_request(self.conn)
             if not req:
@@ -1350,11 +1533,23 @@ class ConnectionThread(threading.Thread):
             path, _, query = raw_path.partition('?')
             req['path'] = path
             req['query'] = query
+            req['_started_at'] = time.time()
+            req_meta = {
+                'method': method,
+                'path': path,
+                'started_at': req['_started_at'],
+            }
+            if self.metrics:
+                self.metrics.http_request_started(
+                    method,
+                    path,
+                    body_size=len(req.get('remainder', b'')),
+                )
 
             if path == '/ws/' and headers.get('upgrade','').lower() == 'websocket':
                 client_id = str(uuid.uuid4())
                 print(f"[HTTP->WS] Upgrade solicitado por {self.addr}, client_id={client_id}")
-                self.handle_ws_connection(req, client_id)
+                self.handle_ws_connection(req, client_id, req_meta)
                 return
 
             if path.startswith('/api/'):
@@ -1364,23 +1559,36 @@ class ConnectionThread(threading.Thread):
 
             if path == '/' and method == 'GET':
                 print(f"[HTTP] Sirviendo INDEX_HTML a {self.addr}")
-                send_http_response(self.conn, 200, 'OK',
-                                   {'Content-Type':'text/html; charset=utf-8'},
-                                   INDEX_HTML)
+                self._send_response(
+                    200,
+                    'OK',
+                    {'Content-Type':'text/html; charset=utf-8'},
+                    INDEX_HTML,
+                    req_meta=req_meta,
+                )
                 self.conn.close()
                 return
 
             print(f"[HTTP] 404 Not Found {path} desde {self.addr}")
-            send_http_response(self.conn, 404, 'Not Found',
-                               {'Content-Type':'text/plain; charset=utf-8'},
-                               b'Not Found')
+            self._send_response(
+                404,
+                'Not Found',
+                {'Content-Type':'text/plain; charset=utf-8'},
+                b'Not Found',
+                req_meta=req_meta,
+            )
             self.conn.close()
         except Exception as e:
             print(f"[HTTP] Excepción manejando conexión desde {self.addr}: {e}")
+            if self.metrics:
+                self.metrics.error("demo_connection", e)
             try:
                 self.conn.close()
             except Exception:
                 pass
+        finally:
+            if self.metrics:
+                self.metrics.tcp_connection_close()
 
     # ----------------------------
     # API handler (por conexión, usa ClientRegistry + ORM)
@@ -1391,6 +1599,20 @@ class ConnectionThread(threading.Thread):
         headers = req['headers']
         body = req['remainder']
         query = req.get('query','') or ''
+        req_meta = {
+            'method': method.upper(),
+            'path': path,
+            'started_at': req.get('_started_at', time.time()),
+        }
+
+        def send(status_code, reason, response_headers, response_body):
+            self._send_response(
+                status_code,
+                reason,
+                response_headers,
+                response_body,
+                req_meta=req_meta,
+            )
 
         print(f"[API] {method} {path}?{query}")
 
@@ -1410,13 +1632,11 @@ class ConnectionThread(threading.Thread):
             if method.upper() == 'GET':
                 print("[API] /api/hello GET")
                 payload = '{"message":"Hello from server"}'.encode('utf-8')
-                send_http_response(self.conn, 200, 'OK',
-                                   {'Content-Type':'application/json; charset=utf-8'},
-                                   payload)
+                send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, payload)
                 return True
             else:
                 print("[API] /api/hello método no permitido")
-                send_http_response(self.conn, 405, 'Method Not Allowed', {'Allow':'GET'}, b'')
+                send(405, 'Method Not Allowed', {'Allow':'GET'}, b'')
                 return True
 
         if path == '/api/echo':
@@ -1428,26 +1648,22 @@ class ConnectionThread(threading.Thread):
                 print(f"[API] /api/echo cuerpo={body_text[:200]!r}")
                 esc = body_text.replace('\\','\\\\').replace('"','\\"')
                 payload = ('{"received":"%s"}' % esc).encode('utf-8')
-                send_http_response(self.conn, 200, 'OK',
-                                   {'Content-Type':'application/json; charset=utf-8'},
-                                   payload)
+                send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, payload)
                 return True
             else:
-                send_http_response(self.conn, 405, 'Method Not Allowed', {'Allow':'POST'}, b'')
+                send(405, 'Method Not Allowed', {'Allow':'POST'}, b'')
                 return True
 
         if path == '/api/ws/clients':
             print("[API] /api/ws/clients listado")
             info = self.registry.list_clients_info()
             payload = json.dumps(info, default=str).encode('utf-8')
-            send_http_response(self.conn, 200, 'OK',
-                               {'Content-Type':'application/json; charset=utf-8'},
-                               payload)
+            send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, payload)
             return True
 
         if path == '/api/ws/broadcast':
             if method.upper() != 'POST':
-                send_http_response(self.conn, 405, 'Method Not Allowed', {'Allow':'POST'}, b'')
+                send(405, 'Method Not Allowed', {'Allow':'POST'}, b'')
                 return True
             try:
                 jd = json.loads(body.decode('utf-8') or '{}')
@@ -1469,18 +1685,19 @@ class ConnectionThread(threading.Thread):
             if failed:
                 print(f"[API] broadcast parcial, fallos={failed}")
                 payload = json.dumps({'status':'partial','failed': failed}).encode('utf-8')
-                send_http_response(self.conn, 500, 'Partial',
-                                   {'Content-Type':'application/json; charset=utf-8'},
-                                   payload)
+                send(500, 'Partial', {'Content-Type':'application/json; charset=utf-8'}, payload)
             else:
-                send_http_response(self.conn, 200, 'OK',
-                                   {'Content-Type':'application/json; charset=utf-8'},
-                                   json.dumps({'status':'ok'}).encode('utf-8'))
+                send(
+                    200,
+                    'OK',
+                    {'Content-Type':'application/json; charset=utf-8'},
+                    json.dumps({'status':'ok'}).encode('utf-8'),
+                )
             return True
 
         if path == '/api/ws/ping':
             if method.upper() != 'POST':
-                send_http_response(self.conn, 405, 'Method Not Allowed', {'Allow':'POST'}, b'')
+                send(405, 'Method Not Allowed', {'Allow':'POST'}, b'')
                 return True
             try:
                 jd = json.loads(body.decode('utf-8') or '{}')
@@ -1491,19 +1708,15 @@ class ConnectionThread(threading.Thread):
             failed = self.registry.broadcast(9, payload)
             if failed:
                 payload = json.dumps({'status':'partial','failed': failed}).encode('utf-8')
-                send_http_response(self.conn, 500, 'Partial',
-                                   {'Content-Type':'application/json; charset=utf-8'},
-                                   payload)
+                send(500, 'Partial', {'Content-Type':'application/json; charset=utf-8'}, payload)
             else:
                 payload = json.dumps({'status':'ok'}).encode('utf-8')
-                send_http_response(self.conn, 200, 'OK',
-                                   {'Content-Type':'application/json; charset=utf-8'},
-                                   payload)
+                send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, payload)
             return True
 
         if path == '/api/ws/close':
             if method.upper() != 'POST':
-                send_http_response(self.conn, 405, 'Method Not Allowed', {'Allow':'POST'}, b'')
+                send(405, 'Method Not Allowed', {'Allow':'POST'}, b'')
                 return True
             try:
                 jd = json.loads(body.decode('utf-8') or '{}')
@@ -1519,23 +1732,25 @@ class ConnectionThread(threading.Thread):
             if client_id:
                 ok, msg = self.registry.send_to_client(client_id, 8, payload)
                 if ok:
-                    send_http_response(self.conn, 200, 'OK',
-                                       {'Content-Type':'application/json; charset=utf-8'},
-                                       b'{"status":"ok"}')
+                    send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, b'{"status":"ok"}')
                 else:
-                    send_http_response(self.conn, 500, 'Error',
-                                       {'Content-Type':'application/json; charset=utf-8'},
-                                       json.dumps({'status':'error','msg':msg}).encode('utf-8'))
+                    send(
+                        500,
+                        'Error',
+                        {'Content-Type':'application/json; charset=utf-8'},
+                        json.dumps({'status':'error','msg':msg}).encode('utf-8'),
+                    )
             else:
                 failed = self.registry.broadcast(8, payload)
                 if failed:
-                    send_http_response(self.conn, 500, 'Partial',
-                                       {'Content-Type':'application/json; charset=utf-8'},
-                                       json.dumps({'status':'partial','failed':failed}).encode('utf-8'))
+                    send(
+                        500,
+                        'Partial',
+                        {'Content-Type':'application/json; charset=utf-8'},
+                        json.dumps({'status':'partial','failed':failed}).encode('utf-8'),
+                    )
                 else:
-                    send_http_response(self.conn, 200, 'OK',
-                                       {'Content-Type':'application/json; charset=utf-8'},
-                                       b'{"status":"ok"}')
+                    send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, b'{"status":"ok"}')
             return True
 
         # ----- API ORM: ChatMessage -----
@@ -1552,9 +1767,7 @@ class ConnectionThread(threading.Thread):
             msgs = ChatMessage.objects(self.db).order_by("id DESC").limit(limit).all()
             data = [m.to_dict() for m in msgs]
             payload = json.dumps(data).encode('utf-8')
-            send_http_response(self.conn, 200, 'OK',
-                               {'Content-Type':'application/json; charset=utf-8'},
-                               payload)
+            send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, payload)
             return True
 
         if path == '/api/chat/clear' and method.upper() == 'POST':
@@ -1562,29 +1775,82 @@ class ConnectionThread(threading.Thread):
             with self.db.transaction():
                 borrados = ChatMessage.objects(self.db).delete()
             payload = json.dumps({'status': 'ok', 'deleted': borrados}).encode('utf-8')
-            send_http_response(self.conn, 200, 'OK',
-                               {'Content-Type':'application/json; charset=utf-8'},
-                               payload)
+            send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, payload)
+            return True
+
+        if path == '/api/metrics' and method.upper() == 'GET':
+            if not self.metrics:
+                send(503, 'Service Unavailable', {'Content-Type':'application/json; charset=utf-8'}, b'{"error":"metrics-disabled"}')
+                return True
+            payload = json.dumps(self.metrics.snapshot()).encode('utf-8')
+            send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, payload)
+            return True
+
+        if path == '/api/metrics/stream' and method.upper() == 'GET':
+            if not self.metrics:
+                send(503, 'Service Unavailable', {'Content-Type':'application/json; charset=utf-8'}, b'{"error":"metrics-disabled"}')
+                return True
+            params = parse_query_string(query)
+            interval = params.get('interval', '1.0')
+            limit_txt = params.get('limit', '')
+            follow_txt = (params.get('follow', '') or '').strip().lower()
+            follow_mode = follow_txt in ('1', 'true', 'yes', 'on')
+            if limit_txt:
+                try:
+                    parsed = int(limit_txt)
+                    if parsed <= 0:
+                        max_points = None
+                    else:
+                        max_points = parsed
+                except Exception:
+                    max_points = DEFAULT_STREAM_POINTS
+            else:
+                if follow_mode:
+                    max_points = None
+                else:
+                    max_points = DEFAULT_STREAM_POINTS
+            headers_stream = {
+                'Content-Type': 'application/x-ndjson; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0',
+                'X-Accel-Buffering': 'no',
+            }
+            try:
+                self._send_chunked_stream(
+                    headers_stream,
+                    self.metrics.stream_chunks(interval_seconds=interval, max_points=max_points),
+                )
+            except Exception as e:
+                print(f"[METRICS] stream error: {e}")
+                if self.metrics:
+                    self.metrics.error("metrics_stream", e)
+            if self.metrics:
+                duration_ms = (time.time() - req_meta['started_at']) * 1000.0
+                self.metrics.http_response_sent(
+                    req_meta['method'],
+                    req_meta['path'],
+                    200,
+                    body_size=0,
+                    duration_ms=duration_ms,
+                )
             return True
 
         if path == '/' and method.upper() == 'GET':
             print("[API] GET / (INDEX_HTML) desde handle_api")
-            send_http_response(self.conn, 200, 'OK',
-                               {'Content-Type':'text/html; charset=utf-8'},
-                               INDEX_HTML)
+            send(200, 'OK', {'Content-Type':'text/html; charset=utf-8'}, INDEX_HTML)
             return True
 
         print(f"[API] 404 Not Found: {path}")
-        send_http_response(self.conn, 404, 'Not Found',
-                           {'Content-Type':'text/plain; charset=utf-8'},
-                           b'Not Found')
+        send(404, 'Not Found', {'Content-Type':'text/plain; charset=utf-8'}, b'Not Found')
         return True
 
     # ----------------------------
     # WebSocket per-connection handler
     # ----------------------------
-    def handle_ws_connection(self, initial_req, client_id):
+    def handle_ws_connection(self, initial_req, client_id, req_meta):
         headers = initial_req['headers']
+        path = initial_req.get('path', '/ws/')
 
         subprotocol = ''
         saw_proto = headers.get('sec-websocket-protocol','')
@@ -1596,9 +1862,13 @@ class ConnectionThread(threading.Thread):
         key = headers.get('sec-websocket-key', '')
         if not key:
             print(f"[WS] Handshake inválido desde {self.addr}, falta Sec-WebSocket-Key")
-            send_http_response(self.conn, 400, 'Bad Request',
-                               {'Content-Type':'text/plain; charset=utf-8'},
-                               b'Missing Sec-WebSocket-Key')
+            self._send_response(
+                400,
+                'Bad Request',
+                {'Content-Type':'text/plain; charset=utf-8'},
+                b'Missing Sec-WebSocket-Key',
+                req_meta=req_meta,
+            )
             try:
                 self.conn.close()
             except Exception:
@@ -1619,6 +1889,15 @@ class ConnectionThread(threading.Thread):
             resp_headers['Sec-WebSocket-Protocol'] = subprotocol
 
         send_http_response(self.conn, 101, 'Switching Protocols', resp_headers, b'')
+        if self.metrics:
+            self.metrics.http_response_sent(
+                req_meta.get('method', 'GET'),
+                req_meta.get('path', '/ws/'),
+                101,
+                body_size=0,
+                duration_ms=(time.time() - req_meta.get('started_at', time.time())) * 1000.0,
+            )
+            self.metrics.ws_opened(path)
 
         self.registry.register_client(client_id, self.conn, self.addr, threading.current_thread(), subprotocol)
 
@@ -1629,6 +1908,8 @@ class ConnectionThread(threading.Thread):
                 "subprotocol": subprotocol
             }).encode('utf-8')
             self.conn.sendall(make_ws_frame_bytes(1, welcome))
+            if self.metrics:
+                self.metrics.ws_message_out(len(welcome))
             print(f"[WS] Enviado mensaje welcome a {client_id}")
         except Exception as e:
             print(f"[WS] Error enviando welcome a {client_id}: {e}")
@@ -1639,6 +1920,8 @@ class ConnectionThread(threading.Thread):
             while True:
                 fin, opcode, payload, masked, mask = read_ws_frame_raw(self.conn)
                 plen = len(payload)
+                if self.metrics:
+                    self.metrics.ws_message_in(plen)
                 print(f"[WS RECV] cid={client_id} opcode={opcode} fin={fin} masked={masked} len={plen}")
 
                 if opcode == 0x8:
@@ -1647,6 +1930,8 @@ class ConnectionThread(threading.Thread):
                     try:
                         close_payload = payload if payload else b''
                         self.conn.sendall(make_ws_frame_bytes(0x8, close_payload))
+                        if self.metrics:
+                            self.metrics.ws_message_out(len(close_payload))
                     except Exception as e:
                         print(f"[WS] Error respondiendo CLOSE a {client_id}: {e}")
                     break
@@ -1654,6 +1939,8 @@ class ConnectionThread(threading.Thread):
                     print(f"[WS PING] cid={client_id} len={plen}")
                     try:
                         self.conn.sendall(make_ws_frame_bytes(0xA, payload))
+                        if self.metrics:
+                            self.metrics.ws_message_out(len(payload))
                         print(f"[WS PONG] enviado a cid={client_id}")
                     except Exception as e:
                         print(f"[WS] Error enviando PONG a {client_id}: {e}")
@@ -1682,6 +1969,8 @@ class ConnectionThread(threading.Thread):
                             print(f"[WS BIN FRAG COMPLETO] cid={client_id} len={len(full)}")
                             prefix = b"BIN ECHO:"
                             self.conn.sendall(make_ws_frame_bytes(2, prefix + full))
+                            if self.metrics:
+                                self.metrics.ws_message_out(len(prefix) + len(full))
                         fragmented_parts = []
                         fragmented_msg_opcode = None
                     else:
@@ -1696,6 +1985,8 @@ class ConnectionThread(threading.Thread):
                             print(f"[WS BIN] cid={client_id} len={plen}")
                             prefix = b"BIN ECHO:"
                             self.conn.sendall(make_ws_frame_bytes(2, prefix + payload))
+                            if self.metrics:
+                                self.metrics.ws_message_out(len(prefix) + len(payload))
                     else:
                         fragmented_msg_opcode = opcode
                         fragmented_parts = [payload]
@@ -1707,8 +1998,12 @@ class ConnectionThread(threading.Thread):
             print(f"[WS] ConnectionError en cid={client_id}")
         except Exception as e:
             print(f"[WS] Excepción en loop de cid={client_id}: {e}")
+            if self.metrics:
+                self.metrics.error("demo_ws_loop", e)
         finally:
             self.registry.unregister_client(client_id)
+            if self.metrics:
+                self.metrics.ws_closed(path)
             try:
                 self.conn.close()
             except Exception:
@@ -1733,7 +2028,10 @@ class ConnectionThread(threading.Thread):
         else:
             reply = "Server echo: " + text
         try:
-            self.conn.sendall(make_ws_frame_bytes(1, reply.encode('utf-8')))
+            payload = reply.encode('utf-8')
+            self.conn.sendall(make_ws_frame_bytes(1, payload))
+            if self.metrics:
+                self.metrics.ws_message_out(len(payload))
         except Exception as e:
             print(f"[WS] Error enviando echo a cid={client_id}: {e}")
 
@@ -1745,7 +2043,9 @@ class WebSocketHTTPServer:
     def __init__(self, host, port):
         self.host = host
         self.port = port
-        self.registry = ClientRegistry()
+        self.metrics = AppMetrics(app_name="wsbuilder-ws-demo")
+        self.registry = ClientRegistry(metrics=self.metrics)
+        self.metrics.set_extra_snapshot_provider(self._thread_metrics_snapshot)
         self._sock = None
 
         # BD en memoria compartida: file::memory:?cache=shared
@@ -1762,6 +2062,22 @@ class WebSocketHTTPServer:
         # Crear tabla de ejemplo para el chat
         ChatMessage.create_table(self.db)
 
+    def _thread_metrics_snapshot(self):
+        active_connection_threads = max(0, threading.active_count() - 1)
+        active_ws_clients = self.registry.active_client_count()
+        return {
+            "threads": {
+                "distribution": "least_busy",
+                "demo": {
+                    "min_threads": 0,
+                    "max_threads": 0,
+                    "requests_per_thread": 0,
+                    "active_connection_threads": active_connection_threads,
+                    "active_ws_clients": active_ws_clients,
+                },
+            }
+        }
+
     def serve_forever(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1773,7 +2089,7 @@ class WebSocketHTTPServer:
             while True:
                 conn, addr = s.accept()
                 print(f"[ACCEPT] Conexión aceptada desde {addr}")
-                t = ConnectionThread(conn, addr, self.registry, self.db)
+                t = ConnectionThread(conn, addr, self.registry, self.db, self.metrics)
                 t.start()
         except KeyboardInterrupt:
             print("\n[shutdown] interrupted by user (Ctrl+C). stopping server...")
@@ -1818,6 +2134,12 @@ if __name__ == '__main__':
 #
 #   - Borrar todos los mensajes de chat:
 #       curl -X POST http://0.0.0.0:8765/api/chat/clear
+#
+#   - Snapshot de métricas:
+#       curl http://0.0.0.0:8765/api/metrics
+#
+#   - Stream NDJSON de métricas:
+#       curl -N "http://0.0.0.0:8765/api/metrics/stream?interval=1&limit=10"
 #
 # WebSocket (WS):
 #   - Desde el HTML:
