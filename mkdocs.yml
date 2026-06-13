@@ -10,6 +10,7 @@ nav:
       - Resumen: application/index.md
       - Facil: application/easy.md
       - Avanzada: application/advanced.md
+      - Guia completa: guia-completa.md
   - Arquitectura: architecture.md
   - Ayuda:
       - Resumen: help/index.md

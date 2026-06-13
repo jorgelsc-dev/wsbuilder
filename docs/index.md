@@ -90,13 +90,15 @@ Libreria Python para construir servidores HTTP, WebSocket y utilidades de infrae
 ## Guia de aplicacion
 
 <div class="cards">
+<div class="card"><strong>Completa</strong>Una guia en tabs con App, ORM, proxy, DNS, seguridad, metricas y tareas para aprender todo junto en GitHub Pages.</div>
 <div class="card"><strong>Facil</strong>Parte de un servicio pequeno, correlo localmente y entiende el flujo basico de HTTP, JSON y HTML.</div>
 <div class="card"><strong>Avanzada</strong>Arma una aplicacion real con seguridad, cache, metricas, tareas, WebSocket y SQLite optimizado.</div>
 </div>
 
-1. Abre [Aplicacion - Facil](application/easy.md) si quieres construir tu primer servicio completo sin perderte.
-2. Abre [Aplicacion - Avanzada](application/advanced.md) si ya sabes que vas a operar un servicio serio.
-3. Vuelve a [Arquitectura](architecture.md) si quieres entender por que cada pieza esta separada asi.
+1. Abre [Guia completa](guia-completa.md) si quieres una vista guiada con todos los modulos y un ejemplo end to end.
+2. Abre [Aplicacion - Facil](application/easy.md) si quieres construir tu primer servicio completo sin perderte.
+3. Abre [Aplicacion - Avanzada](application/advanced.md) si ya sabes que vas a operar un servicio serio.
+4. Vuelve a [Arquitectura](architecture.md) si quieres entender por que cada pieza esta separada asi.
 
 ## Por que esta libreria es fuerte
 
@@ -136,10 +138,11 @@ app.run("0.0.0.0", 8765)
 ## Como leer esta documentacion
 
 1. Empieza por [Empezar](getting-started.md) si quieres levantar algo rapido.
-2. Sigue con [Aplicacion](application/index.md) para elegir entre la guia facil o la avanzada.
-3. Abre [Arquitectura](architecture.md) para entender el flujo interno.
-4. Abre [Ayuda](help/index.md) si estas pensando en Microservicios o topologias distribuidas.
-5. Usa [Referencia](reference/index.md) para ir directo a una clase, modulo o helper.
+2. Sigue con [Aplicacion](application/index.md) para elegir entre la guia completa, la facil o la avanzada.
+3. Si quieres estudiar todo el sistema junto, abre [Guia completa](guia-completa.md).
+4. Abre [Arquitectura](architecture.md) para entender el flujo interno.
+5. Abre [Ayuda](help/index.md) si estas pensando en Microservicios o topologias distribuidas.
+6. Usa [Referencia](reference/index.md) para ir directo a una clase, modulo o helper.
 
 ## Contribucion y soporte
 
