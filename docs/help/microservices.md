@@ -105,7 +105,7 @@ Cada servicio debe poder responder a estas preguntas:
 - cuantas respuestas fallan;
 - cuanto tarda en promedio.
 
-`app.enable_metrics()` expone una vista util para paneles o scraping.
+`app.enable_metrics()` expone una vista util para paneles o scraping. Si ademas tienes un gateway, `ProxyI` te da vhosts, balanceo y metricas por destino.
 
 ## Como encaja `wsbuilder`
 
