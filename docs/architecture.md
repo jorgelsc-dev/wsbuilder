@@ -247,6 +247,23 @@ Interacciones:
 - `app.enable_metrics()` instala endpoints de inspeccion;
 - puede mezclar informacion extra de cache, seguridad y threads.
 
+### `wsbuilder.logs`
+
+Es el writer NDJSON minimo para disco.
+
+Responsabilidades:
+
+- escribir una linea JSON por evento;
+- abrir el archivo en modo append;
+- crear el directorio padre si no existe;
+- mantener una API pequena para integrarla con `App`.
+
+Interacciones:
+
+- `App.enable_logs()` instala un writer en la instancia;
+- no reemplaza al modulo `logging` de la stdlib;
+- se usa cuando quieres trazas simples sin introducir una dependencia extra.
+
 ### `wsbuilder.tasks`
 
 Es el sistema de trabajo en background.

@@ -50,6 +50,7 @@ from .framework import (
     handshake_websocket_with_options,
 )
 from .metrics import AppMetrics, install_metrics
+from .logs import NDJSONLog, install_logs
 from .cache import Cache, SQLiteMemoryCache, install_cache
 from .caches import GlobalCacheRule, ViewResponseCache, install_caches
 from .security import ACLRule, SecurityDecision, SecurityPolicy, install_security
@@ -140,6 +141,8 @@ __all__ = [
     "build_set_cookie",
     "AppMetrics",
     "install_metrics",
+    "NDJSONLog",
+    "install_logs",
     "Cache",
     "SQLiteMemoryCache",
     "install_cache",
