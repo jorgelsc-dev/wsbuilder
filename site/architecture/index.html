@@ -1,0 +1,2207 @@
+
+<!doctype html>
+<html lang="es" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentacion oficial de wsbuilder">
+      
+      
+        <meta name="author" content="wsbuilder Authors">
+      
+      
+      
+        <link rel="prev" href="../application/advanced/">
+      
+      
+        <link rel="next" href="../help/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Arquitectura - wsbuilder</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#arquitectura" class="md-skip">
+          Saltar a contenido
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Cabecera">
+    <a href=".." title="wsbuilder" class="md-header__button md-logo" aria-label="wsbuilder" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            wsbuilder
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Arquitectura
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Búsqueda" placeholder="Búsqueda" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Buscar">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Compartir" aria-label="Compartir" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Limpiar" aria-label="Limpiar" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Inicializando búsqueda
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Pestañas" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Inicio
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Empezar
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../application/" class="md-tabs__link">
+          
+  
+  
+  Aplicacion
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Arquitectura
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../help/" class="md-tabs__link">
+          
+  
+  
+  Ayuda
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../reference/" class="md-tabs__link">
+          
+  
+  
+  Referencia
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navegación" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="wsbuilder" class="md-nav__button md-logo" aria-label="wsbuilder" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    wsbuilder
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inicio
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Empezar
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Aplicacion
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Aplicacion
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resumen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application/easy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Facil
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application/advanced/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Avanzada
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arquitectura
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arquitectura
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Tabla de contenidos">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Tabla de contenidos
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#vista-general" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vista general
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flujo-http" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flujo HTTP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flujo-websocket" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flujo WebSocket
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#modulos-principales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modulos principales
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Modulos principales">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderapp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.app
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderserver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.server
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderhttp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.http
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.ws
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderorm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.orm
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildercache-y-wsbuildercaches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.cache y wsbuilder.caches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildersecurity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.security
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildermetrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildertasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.tasks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderdns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.dns
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderdb_replicas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.db_replicas
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildercookies-y-wsbuilderheaders" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.cookies y wsbuilder.headers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderpredicts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.predicts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#como-interactuan-entre-si" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Como interactuan entre si
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#piezas-de-orquestacion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Piezas de orquestacion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Piezas de orquestacion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rutas-view-con-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rutas view() con workers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-declarativa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache declarativa
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#seguridad-antes-del-negocio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Seguridad antes del negocio
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cierre-y-ciclo-de-vida" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cierre y ciclo de vida
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resumen-operativo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resumen operativo
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cuando-este-diseno-funciona-mejor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cuando este diseño funciona mejor
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ayuda
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Ayuda
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../help/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resumen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../help/microservices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Microservicios
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Referencia
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Referencia
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resumen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/http/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP y respuesta
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/websocket/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WebSocket
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/orm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ORM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Seguridad
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metricas
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tareas en background
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/utilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilidades HTTP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/dns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DNS local
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/advanced/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Avanzado
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Tabla de contenidos">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Tabla de contenidos
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#vista-general" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Vista general
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flujo-http" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flujo HTTP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flujo-websocket" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flujo WebSocket
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#modulos-principales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modulos principales
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Modulos principales">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderapp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.app
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderserver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.server
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderhttp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.http
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.ws
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderorm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.orm
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildercache-y-wsbuildercaches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.cache y wsbuilder.caches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildersecurity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.security
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildermetrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildertasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.tasks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderdns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.dns
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderdb_replicas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.db_replicas
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuildercookies-y-wsbuilderheaders" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.cookies y wsbuilder.headers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wsbuilderpredicts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        wsbuilder.predicts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#como-interactuan-entre-si" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Como interactuan entre si
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#piezas-de-orquestacion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Piezas de orquestacion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Piezas de orquestacion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rutas-view-con-workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rutas view() con workers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-declarativa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache declarativa
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#seguridad-antes-del-negocio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Seguridad antes del negocio
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cierre-y-ciclo-de-vida" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cierre y ciclo de vida
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resumen-operativo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resumen operativo
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cuando-este-diseno-funciona-mejor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cuando este diseño funciona mejor
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="arquitectura">Arquitectura<a class="headerlink" href="#arquitectura" title="Permanent link">&para;</a></h1>
+<p><code>wsbuilder</code> esta organizado como una base pequena de transporte y orquestacion, con modulos especializados que se conectan alrededor de <code>App</code>.</p>
+<h2 id="vista-general">Vista general<a class="headerlink" href="#vista-general" title="Permanent link">&para;</a></h2>
+<div class="diagram">
+<div class="diagram-title">Vista general</div>
+<div class="diagram-track">
+<div class="diagram-node">Cliente HTTP o WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">parse_http_request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler</div>
+</div>
+<div class="diagram-rows" style="margin-top: 1rem;">
+<div class="diagram-row">
+<div class="diagram-step">SecurityPolicy</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Cache / Metrics / Tasks</div>
+<div class="diagram-note">Capas transversales que se activan antes o despues del handler.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Handler HTTP</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">ORM / Replicas / DNS / Cookies</div>
+<div class="diagram-note">El handler resuelve negocio y usa utilidades segun el caso.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Handshake WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">WebSocket</div>
+<div class="diagram-note">Cuando la ruta es WebSocket, el flujo cambia a frames persistentes.</div>
+</div>
+</div>
+</div>
+
+<p>La idea es simple:</p>
+<ul>
+<li><code>HTTPServer</code> solo acepta sockets, lee, valida y delega.</li>
+<li><code>App</code> decide que hacer con la request.</li>
+<li>Los modulos alrededor de <code>App</code> agregan seguridad, cache, metricas, tareas y persistencia.</li>
+</ul>
+<h2 id="flujo-http">Flujo HTTP<a class="headerlink" href="#flujo-http" title="Permanent link">&para;</a></h2>
+<div class="diagram">
+<div class="diagram-title">Flujo HTTP</div>
+<div class="diagram-lanes">
+<div class="diagram-lane">Cliente</div>
+<div class="diagram-lane">HTTPServer</div>
+<div class="diagram-lane">App.dispatch</div>
+<div class="diagram-lane">Router</div>
+<div class="diagram-lane">Handler</div>
+<div class="diagram-lane">Response</div>
+</div>
+<div class="diagram-stack">
+<div class="diagram-row">
+<div class="diagram-step">Cliente</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">HTTPServer</div>
+<div class="diagram-note">Conexion TCP y lectura de cabeceras.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">App.dispatch</div>
+<div class="diagram-note">Convierte bytes en una `Request` utilizable.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Router / Policy</div>
+<div class="diagram-note">Evalua seguridad, cache y ruta.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Handler</div>
+<div class="diagram-note">Ejecuta la logica de negocio.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">Handler</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Response</div>
+<div class="diagram-note">Serializa JSON, texto, HTML o stream.</div>
+</div>
+</div>
+</div>
+
+<h2 id="flujo-websocket">Flujo WebSocket<a class="headerlink" href="#flujo-websocket" title="Permanent link">&para;</a></h2>
+<div class="diagram">
+<div class="diagram-title">Flujo WebSocket</div>
+<div class="diagram-track">
+<div class="diagram-node">Cliente</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTP Upgrade</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">App.dispatch</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handshake WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler WS</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Cuando el upgrade es valido, el canal deja de ser request/response y pasa a ser una sesion persistente por frames.</div>
+</div>
+
+<h2 id="modulos-principales">Modulos principales<a class="headerlink" href="#modulos-principales" title="Permanent link">&para;</a></h2>
+<h3 id="wsbuilderapp"><code>wsbuilder.app</code><a class="headerlink" href="#wsbuilderapp" title="Permanent link">&para;</a></h3>
+<p>Es la fachada de orquestacion.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>registrar rutas HTTP con <code>view()</code> y <code>api()</code>;</li>
+<li>registrar rutas WebSocket con <code>ws()</code>;</li>
+<li>aplicar CORS;</li>
+<li>coordinar cache, seguridad, metricas y tareas;</li>
+<li>cerrar pools y recursos al apagar la aplicacion.</li>
+</ul>
+<p>Punto clave:</p>
+<ul>
+<li><code>App.dispatch()</code> es el centro de decision.</li>
+<li>ahi se evalua seguridad, se resuelve la ruta, se busca cache, se ejecuta el handler y se serializa la salida.</li>
+</ul>
+<h3 id="wsbuilderserver"><code>wsbuilder.server</code><a class="headerlink" href="#wsbuilderserver" title="Permanent link">&para;</a></h3>
+<p>Es la capa de transporte.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>aceptar conexiones TCP;</li>
+<li>aplicar timeout y limite de workers de conexion;</li>
+<li>leer HTTP y escribir respuestas;</li>
+<li>detectar upgrades WebSocket;</li>
+<li>cerrar todo de forma segura al terminar.</li>
+</ul>
+<p>Punto clave:</p>
+<ul>
+<li>no decide negocio;</li>
+<li>solo transporta bytes y llama a <code>App</code>.</li>
+</ul>
+<h3 id="wsbuilderhttp"><code>wsbuilder.http</code><a class="headerlink" href="#wsbuilderhttp" title="Permanent link">&para;</a></h3>
+<p>Es la capa de modelo y serializacion HTTP.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>representar <code>Request</code> y <code>Response</code>;</li>
+<li>parsear query strings;</li>
+<li>leer requests HTTP desde el socket;</li>
+<li>serializar respuestas y streams chunked.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li><code>Request</code> alimenta <code>App.dispatch()</code>;</li>
+<li><code>Response</code> sale hacia <code>send_http_response()</code>;</li>
+<li><code>Response.stream()</code> permite salida incremental.</li>
+</ul>
+<h3 id="wsbuilderws"><code>wsbuilder.ws</code><a class="headerlink" href="#wsbuilderws" title="Permanent link">&para;</a></h3>
+<p>Es la capa de WebSocket.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>detectar upgrades;</li>
+<li>validar handshake;</li>
+<li>leer y escribir frames;</li>
+<li>manejar ping/pong, close y errores de protocolo;</li>
+<li>exponer <code>WebSocket</code> y <code>WebSocketFrame</code>.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li><code>HTTPServer</code> detecta upgrade;</li>
+<li><code>App</code> localiza la ruta WS;</li>
+<li>el handler recibe el objeto <code>WebSocket</code> ya preparado.</li>
+</ul>
+<h3 id="wsbuilderorm"><code>wsbuilder.orm</code><a class="headerlink" href="#wsbuilderorm" title="Permanent link">&para;</a></h3>
+<p>Es la persistencia declarativa sobre SQLite.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>definir modelos con <code>Model</code> y campos;</li>
+<li>crear tablas;</li>
+<li>consultar con <code>QuerySet</code>;</li>
+<li>agrupar escritura con <code>Transaction</code>.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li>normalmente vive dentro de un handler HTTP;</li>
+<li>se apoya en <code>Database</code> o en replicas de lectura;</li>
+<li>funciona mejor cuando cada servicio posee su propia base.</li>
+</ul>
+<h3 id="wsbuildercache-y-wsbuildercaches"><code>wsbuilder.cache</code> y <code>wsbuilder.caches</code><a class="headerlink" href="#wsbuildercache-y-wsbuildercaches" title="Permanent link">&para;</a></h3>
+<p>Son dos capas distintas:</p>
+<ul>
+<li><code>cache.py</code> resuelve almacenamiento y expulsion en memoria;</li>
+<li><code>caches.py</code> resuelve cache de respuestas HTTP y reglas declarativas.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li><code>App.dispatch()</code> consulta <code>ViewResponseCache</code> antes de ejecutar una <code>view()</code>;</li>
+<li>la respuesta se guarda si la ruta lo permite;</li>
+<li>se limpian headers no reutilizables como cookies o metadatos de worker.</li>
+</ul>
+<h3 id="wsbuildersecurity"><code>wsbuilder.security</code><a class="headerlink" href="#wsbuildersecurity" title="Permanent link">&para;</a></h3>
+<p>Es la politica de acceso.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>ACL por ruta, metodo, IP y headers;</li>
+<li>listas blanca y negra;</li>
+<li>rate limiting;</li>
+<li>bloqueos temporales;</li>
+<li>decision de permitir o rechazar.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li><code>HTTPServer.handle_conn()</code> puede aplicar seguridad antes del upgrade WS;</li>
+<li><code>App.dispatch()</code> aplica seguridad al flujo HTTP general;</li>
+<li>la decision se convierte en <code>Response</code> lista para el cliente.</li>
+</ul>
+<h3 id="wsbuildermetrics"><code>wsbuilder.metrics</code><a class="headerlink" href="#wsbuildermetrics" title="Permanent link">&para;</a></h3>
+<p>Es la observabilidad interna.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>contar conexiones TCP, requests HTTP y sesiones WS;</li>
+<li>medir duracion y volumen de trafico;</li>
+<li>emitir snapshots JSON;</li>
+<li>emitir stream NDJSON para dashboards.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li><code>HTTPServer</code> y <code>App.dispatch()</code> reportan eventos;</li>
+<li><code>app.enable_metrics()</code> instala endpoints de inspeccion;</li>
+<li>puede mezclar informacion extra de cache, seguridad y threads.</li>
+</ul>
+<h3 id="wsbuildertasks"><code>wsbuilder.tasks</code><a class="headerlink" href="#wsbuildertasks" title="Permanent link">&para;</a></h3>
+<p>Es el sistema de trabajo en background.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>lanzar tareas con limite de concurrencia;</li>
+<li>controlar estados;</li>
+<li>manejar cancelacion y errores;</li>
+<li>agrupar por <code>group</code>.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li><code>App</code> crea un <code>TaskManager</code> por defecto;</li>
+<li>los handlers lo usan para trabajo que no debe bloquear la request;</li>
+<li>el cierre de <code>App</code> detiene tareas pendientes.</li>
+</ul>
+<h3 id="wsbuilderdns"><code>wsbuilder.dns</code><a class="headerlink" href="#wsbuilderdns" title="Permanent link">&para;</a></h3>
+<p>Es un resolver DNS local minimo.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>responder en entornos de laboratorio o desarrollo;</li>
+<li>resolver <code>localhost</code>;</li>
+<li>registrar nombres personalizados.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li>suele usarse fuera del flujo HTTP, pero complementa demos o topologias locales.</li>
+</ul>
+<h3 id="wsbuilderdb_replicas"><code>wsbuilder.db_replicas</code><a class="headerlink" href="#wsbuilderdb_replicas" title="Permanent link">&para;</a></h3>
+<p>Es la capa de lectura optimizada sobre SQLite.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>separar escrituras de lecturas;</li>
+<li>usar replicas para reducir contencion;</li>
+<li>ajustar pragmas y parametros de rendimiento.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li>encaja bien en servicios con muchas lecturas;</li>
+<li>normalmente se consume desde handlers HTTP o tareas.</li>
+</ul>
+<h3 id="wsbuildercookies-y-wsbuilderheaders"><code>wsbuilder.cookies</code> y <code>wsbuilder.headers</code><a class="headerlink" href="#wsbuildercookies-y-wsbuilderheaders" title="Permanent link">&para;</a></h3>
+<p>Son utilidades de protocolo.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>construir y leer cookies;</li>
+<li>normalizar nombres de header;</li>
+<li>consultar y setear cabeceras de forma consistente.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li><code>App.dispatch()</code> las usa para CORS, cookies de afinidad y respuestas de worker.</li>
+</ul>
+<h3 id="wsbuilderpredicts"><code>wsbuilder.predicts</code><a class="headerlink" href="#wsbuilderpredicts" title="Permanent link">&para;</a></h3>
+<p>Es una utilidad matematica exportada para casos especificos.</p>
+<p>Responsabilidades:</p>
+<ul>
+<li>encapsular una logica numerica sencilla reutilizable.</li>
+</ul>
+<p>Interacciones:</p>
+<ul>
+<li>no forma parte del camino HTTP principal;</li>
+<li>se usa solo si tu app necesita esa utilidad.</li>
+</ul>
+<h2 id="como-interactuan-entre-si">Como interactuan entre si<a class="headerlink" href="#como-interactuan-entre-si" title="Permanent link">&para;</a></h2>
+<div class="diagram">
+<div class="diagram-title">Como interactuan entre si</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">HTTPServer</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">SecurityPolicy</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Router</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler</div>
+</div>
+<div class="diagram-rows" style="margin-top: 1rem;">
+<div class="diagram-row">
+<div class="diagram-step">API</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">JSON / Response</div>
+<div class="diagram-note">Ideal para endpoints publicos o internos.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">View</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">Texto / HTML / Stream</div>
+<div class="diagram-note">Bueno para UI o respuestas progresivas.</div>
+</div>
+<div class="diagram-row">
+<div class="diagram-step">WS</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-step">WebSocket</div>
+<div class="diagram-note">Conecta una sesion persistente.</div>
+</div>
+</div>
+</div>
+
+<p>La secuencia real cambia segun la ruta:</p>
+<ul>
+<li>en <code>api()</code>, el handler suele devolver <code>dict</code>, <code>list</code> o <code>Response.json()</code>;</li>
+<li>en <code>view()</code>, el handler puede devolver texto, HTML o un stream;</li>
+<li>en <code>ws()</code>, el handler vive dentro de un canal persistente;</li>
+<li>en rutas con cache, <code>ViewResponseCache</code> puede responder antes de ejecutar el handler;</li>
+<li>en rutas protegidas, <code>SecurityPolicy</code> puede cortar el flujo antes de llegar al negocio.</li>
+</ul>
+<h2 id="piezas-de-orquestacion">Piezas de orquestacion<a class="headerlink" href="#piezas-de-orquestacion" title="Permanent link">&para;</a></h2>
+<h3 id="rutas-view-con-workers">Rutas <code>view()</code> con workers<a class="headerlink" href="#rutas-view-con-workers" title="Permanent link">&para;</a></h3>
+<p><code>view()</code> puede usar un pool dedicado de threads por ruta.</p>
+<div class="diagram">
+<div class="diagram-title">Rutas `view()` con workers</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">RouteThreadPool</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Worker 1</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">La ruta puede distribuir carga entre workers para aislar endpoints pesados y controlar concurrencia.</div>
+</div>
+
+<p>Esto sirve cuando quieres:</p>
+<ul>
+<li>aislar carga pesada de una ruta;</li>
+<li>limitar concurrencia por endpoint;</li>
+<li>devolver metadatos de worker en headers o cookie.</li>
+</ul>
+<h3 id="cache-declarativa">Cache declarativa<a class="headerlink" href="#cache-declarativa" title="Permanent link">&para;</a></h3>
+<p>La cache de respuestas no reemplaza al ORM ni al almacenamiento de dominio.</p>
+<div class="diagram">
+<div class="diagram-title">Cache declarativa</div>
+<div class="diagram-track">
+<div class="diagram-node">Request GET/HEAD</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">ViewResponseCache</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Hit o Miss</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Response</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">En hit, responde de inmediato. En miss, ejecuta el handler y guarda el resultado si aplica.</div>
+</div>
+
+<h3 id="seguridad-antes-del-negocio">Seguridad antes del negocio<a class="headerlink" href="#seguridad-antes-del-negocio" title="Permanent link">&para;</a></h3>
+<div class="diagram">
+<div class="diagram-title">Seguridad antes del negocio</div>
+<div class="diagram-track">
+<div class="diagram-node">Request</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">SecurityPolicy</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Allow / Deny</div>
+<div class="diagram-arrow">→</div>
+<div class="diagram-node">Handler o Error</div>
+</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">La política decide si la request llega al dominio o se corta con 401, 403 o 429.</div>
+</div>
+
+<h2 id="cierre-y-ciclo-de-vida">Cierre y ciclo de vida<a class="headerlink" href="#cierre-y-ciclo-de-vida" title="Permanent link">&para;</a></h2>
+<p>Cuando la aplicacion termina:</p>
+<ul>
+<li><code>HTTPServer</code> cierra el socket;</li>
+<li><code>App.close()</code> detiene tareas;</li>
+<li><code>App.close()</code> libera caches;</li>
+<li>los pools de workers de las rutas se cierran;</li>
+<li>el sistema vuelve a un estado consistente.</li>
+</ul>
+<h2 id="resumen-operativo">Resumen operativo<a class="headerlink" href="#resumen-operativo" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>server</code> mueve bytes.</li>
+<li><code>http</code> modela request y response.</li>
+<li><code>ws</code> maneja upgrade y frames.</li>
+<li><code>app</code> decide y coordina.</li>
+<li><code>orm</code> guarda estado.</li>
+<li><code>cache</code> acelera lecturas.</li>
+<li><code>security</code> filtra acceso.</li>
+<li><code>metrics</code> observa.</li>
+<li><code>tasks</code> desacopla trabajo lento.</li>
+<li><code>dns</code> ayuda en entornos locales.</li>
+<li><code>db_replicas</code> optimiza lecturas.</li>
+<li><code>cookies</code> y <code>headers</code> simplifican protocolo.</li>
+</ul>
+<h2 id="cuando-este-diseno-funciona-mejor">Cuando este diseño funciona mejor<a class="headerlink" href="#cuando-este-diseno-funciona-mejor" title="Permanent link">&para;</a></h2>
+<ul>
+<li>APIs pequenas y medianas.</li>
+<li>Servicios con una frontera clara de responsabilidad.</li>
+<li>Aplicaciones que necesitan HTTP, WebSocket y utilidades de infraestructura sin depender de un framework grande.</li>
+<li>Proyectos donde la trazabilidad del flujo importa mas que una abstraccion opaca.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Volver al principio
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tabs", "navigation.sections", "navigation.top", "search.highlight", "search.share", "content.code.copy", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado al portapapeles", "clipboard.copy": "Copiar al portapapeles", "search.result.more.one": "1 m\u00e1s en esta p\u00e1gina", "search.result.more.other": "# m\u00e1s en esta p\u00e1gina", "search.result.none": "No se encontraron documentos", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Teclee para comenzar b\u00fasqueda", "search.result.term.missing": "Falta", "select.version": "Seleccionar versi\u00f3n"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
