@@ -1,13 +1,15 @@
 # Aplicacion
 
-Esta seccion agrupa dos rutas de trabajo:
+Esta seccion agrupa tres rutas de trabajo:
 
+- una guia completa para estudiar todos los modulos juntos en GitHub Pages;
 - una guia facil para construir una app funcional sin perder el hilo;
 - una guia avanzada para operar un servicio real con seguridad, observabilidad y optimizacion.
 
 ## Como elegir
 
 <div class="cards">
+<div class="card"><strong>Completa</strong>Si quieres estudiar la integracion total de la libreria, con tabs por modulo y una app completa de referencia.</div>
 <div class="card"><strong>Facil</strong>Si estas empezando, quieres una API pequena o necesitas una plantilla simple para copiar y adaptar.</div>
 <div class="card"><strong>Avanzada</strong>Si ya tienes varios modulos, carga concurrente o requisitos de operacion y rendimiento.</div>
 </div>
@@ -32,12 +34,14 @@ Esta seccion agrupa dos rutas de trabajo:
 
 ## Rutas
 
-1. Abre [Facil](easy.md) si quieres una app completa en pocos pasos.
-2. Abre [Avanzada](advanced.md) si necesitas control fino sobre el runtime.
-3. Si quieres entender el por que del flujo interno, vuelve a [Arquitectura](../architecture.md).
+1. Abre [Guia completa](../guia-completa.md) si quieres un recorrido de aprendizaje por todos los modulos.
+2. Abre [Facil](easy.md) si quieres una app completa en pocos pasos.
+3. Abre [Avanzada](advanced.md) si necesitas control fino sobre el runtime.
+4. Si quieres entender el por que del flujo interno, vuelve a [Arquitectura](../architecture.md).
 
 ## Regla practica
 
+- Si quieres estudiar la libreria completa, usa la guia completa.
 - Si solo necesitas responder requests y validar el flujo, usa la guia facil.
 - Si vas a mezclar cache, seguridad, tareas, metrics, replicas y WebSocket, usa la avanzada.
 - Si vas a exponer el proyecto a otros equipos, trata la guia avanzada como tu baseline operativa.

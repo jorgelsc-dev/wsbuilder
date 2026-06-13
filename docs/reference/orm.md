@@ -44,11 +44,13 @@ class User(Model):
     username = TextField(unique=True, index=True, null=False)
     email = TextField(null=False)
 
-db = Database("app.db")
+db = Database("app.db", enable_replicas=True, replica_count=2)
 User.create_table(db)
 
 u = User(username="alice", email="alice@example.com")
 u.save(db)
+
+rows = db.read_replica_fetchall("SELECT id, username, email FROM user")
 ```
 
 ## Flujo de trabajo
@@ -58,6 +60,15 @@ u.save(db)
 3. Llamas `create_table()` o `create_tables()`.
 4. Consultas con `objects(db)` y `QuerySet`.
 5. Escribes con `save()`, `update()` o `delete()`.
+
+## Replicas de lectura
+
+Cuando `enable_replicas=True`, `Database` crea un pool de replicas para separar lecturas de escrituras.
+
+- `replica_count=2` crea dos replicas de lectura.
+- `db.execute(...)` y `Model.save(db)` escriben en la conexion principal.
+- `db.read_replica_execute(...)`, `db.read_replica_fetchone(...)`, `db.read_replica_fetchall(...)` y `db.read_replica_scalar(...)` leen desde el pool de replicas.
+- Si quieres un servicio con lectura mas estable bajo carga, usa las replicas para listas, reportes y consultas de solo lectura.
 
 ## QuerySet
 

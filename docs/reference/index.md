@@ -52,7 +52,7 @@ from wsbuilder import (
 ### [ORM](orm.md)
 
 - `Database`, `Model`, `QuerySet` y `Transaction`.
-- ideal para servicios con SQLite local o embebido.
+- ideal para servicios con SQLite local o embebido, con escritura primaria y replicas de lectura.
 
 ### [Cache](cache.md)
 
@@ -149,6 +149,7 @@ La regla practica es:
 
 ## Seleccion rapida
 
+- Si quieres una vista guiada de toda la libreria en tabs, ve a [Guia completa](../guia-completa.md).
 - Si quieres leer una request y responder, ve a [HTTP y respuesta](http.md).
 - Si necesitas tiempo real, ve a [WebSocket](websocket.md).
 - Si necesitas datos, ve a [ORM](orm.md).
