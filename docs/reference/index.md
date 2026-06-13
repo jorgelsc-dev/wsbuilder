@@ -10,6 +10,7 @@ from wsbuilder import (
     Response,
     Database,
     Model,
+    ProxyI,
     LocalDNSServer,
     TaskManager,
     SQLiteMemoryCache,
@@ -67,6 +68,13 @@ from wsbuilder import (
 
 - `AppMetrics` y `install_metrics()`.
 - expone snapshot JSON y stream NDJSON.
+
+### [Proxy / VHost](proxyi.md)
+
+- `ProxyI`, `ProxyRule`, `ProxyTarget` y `install_proxyi()`.
+- matching por vhost, path y headers.
+- balanceo round robin, ponderado, least connections y best.
+- dashboard y metricas por destino.
 
 ### [Tareas en background](tasks.md)
 
@@ -133,6 +141,7 @@ La regla practica es:
 - `SQLiteMemoryCache`, `install_cache`, `install_caches`
 - `SecurityPolicy`, `ACLRule`, `install_security`
 - `AppMetrics`, `install_metrics`
+- `ProxyI`, `ProxyRule`, `ProxyTarget`, `install_proxyi`
 - `TaskManager`, `TaskHandle`, `TaskContext`
 - `LocalDNSServer`
 - `DatabaseReplica`, `DatabaseReplicaPool`, `OptimizedDatabase`, `SQLite3OptimizationConfig`
@@ -144,5 +153,6 @@ La regla practica es:
 - Si necesitas tiempo real, ve a [WebSocket](websocket.md).
 - Si necesitas datos, ve a [ORM](orm.md).
 - Si necesitas observabilidad, ve a [Metricas](metrics.md).
+- Si necesitas enrutamiento y balanceo por vhost, ve a [Proxy / VHost](proxyi.md).
 - Si necesitas trabajo diferido, ve a [Tareas en background](tasks.md).
 - Si estas montando una topologia distribuida, ve a [Ayuda](../help/index.md).

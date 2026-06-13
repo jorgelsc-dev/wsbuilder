@@ -293,6 +293,23 @@ Interacciones:
 - encaja bien en servicios con muchas lecturas;
 - normalmente se consume desde handlers HTTP o tareas.
 
+### `wsbuilder.proxyi`
+
+Es el motor de reverse proxy y vhost routing.
+
+Responsabilidades:
+
+- resolver vhosts, locations y headers;
+- elegir upstreams con varios modos de balanceo;
+- guardar metricas por target y por regla;
+- exponer un dashboard y stream de metricas para operacion.
+
+Interacciones:
+
+- puede funcionar como proxy independiente;
+- puede instalar su bloque de metricas dentro de `App`;
+- se alimenta de `Request` y devuelve `Response` como el resto del framework.
+
 ### `wsbuilder.cookies` y `wsbuilder.headers`
 
 Son utilidades de protocolo.

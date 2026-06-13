@@ -236,6 +236,62 @@ install_security(app, policy)
 install_metrics(app, path="/metrics", stream_path="/metrics/stream", app_name="orders-service")
 ```
 
+## Proxy y balanceo
+
+`ProxyI` te deja declarar vhosts y destinos con una sintaxis cercana a nginx, pero integrada con el resto del paquete.
+
+### Ejemplo minimo
+
+```python
+from wsbuilder import App, ProxyI, install_proxyi
+
+app = App()
+proxy = ProxyI(name="gateway")
+
+proxy.vhost("api.test.local").location("/api").header("x-env", equals="prod").upstream(
+    "http://127.0.0.1:8080",
+    name="api-backend",
+)
+
+install_proxyi(app, proxy=proxy)
+app.proxyi = proxy
+```
+
+### Que guarda
+
+- requests y responses por target;
+- bytes in y out;
+- latencia media;
+- desviacion estandar;
+- incertidumbre y rango de confianza al 95%;
+- score compuesto para seleccionar el mejor destino.
+
+### Balanceo disponible
+
+- round robin;
+- round robin ponderado;
+- random;
+- least connections;
+- least response time;
+- least requests;
+- least bytes in;
+- least bytes out;
+- ip hash;
+- consistent hash;
+- first available;
+- power of two choices;
+- best.
+
+### Area de metricas
+
+El proxy expone:
+
+- `GET /__proxyi__`
+- `GET /__proxyi__/metrics`
+- `GET /__proxyi__/metrics/stream`
+
+`App.enable_metrics()` y `App.enable_docs()` incluyen el bloque `proxyi` cuando la instancia esta adjunta a la aplicacion.
+
 ## Tareas en background
 
 `TaskManager` sirve para trabajo local que no quieres ejecutar dentro del handler.

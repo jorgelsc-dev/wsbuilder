@@ -40,3 +40,4 @@ Esta seccion agrupa guias practicas para usar `wsbuilder` en escenarios reales, 
 - Usa `Database` por servicio, no una base compartida para todos.
 - Usa `TaskManager` para trabajo local, no para coordinar procesos distribuidos.
 - Usa `AppMetrics` y `SecurityPolicy` en cada servicio expuesto.
+- Usa `ProxyI` si necesitas un gateway con vhosts, balanceo y metricas por destino.

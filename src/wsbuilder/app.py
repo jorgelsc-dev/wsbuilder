@@ -378,6 +378,7 @@ class App:
         self.cors_allow_origin = (cors_allow_origin or "").strip()
         self.metrics = None
         self.security = None
+        self.proxyi = None
         self.caches = None
         self.tasks = TaskManager(app=self)
 
@@ -563,6 +564,12 @@ class App:
             security = getattr(self, "security", None)
             if security:
                 data["security"] = security.snapshot()
+            proxyi = getattr(self, "proxyi", None)
+            if proxyi:
+                try:
+                    data["proxyi"] = proxyi.snapshot() if hasattr(proxyi, "snapshot") else proxyi.metrics_snapshot()
+                except Exception as e:
+                    data["proxyi_metrics_error"] = str(e)
             return data
 
         return install_metrics(
@@ -605,6 +612,7 @@ class App:
 
         metrics = getattr(self, "metrics", None)
         security = getattr(self, "security", None)
+        proxyi = getattr(self, "proxyi", None)
         cache = getattr(self, "cache", None)
         caches = getattr(self, "caches", None)
         tasks = getattr(self, "tasks", None)
@@ -622,11 +630,13 @@ class App:
             "ws_routes_total": len(ws_routes),
             "metrics_enabled": bool(metrics),
             "security_enabled": bool(security),
+            "proxyi_enabled": bool(proxyi),
             "cache_enabled": bool(cache),
             "caches_enabled": bool(caches),
             "tasks_enabled": bool(tasks),
             "metrics": metrics.snapshot() if metrics and hasattr(metrics, "snapshot") else None,
             "security": security.snapshot() if security and hasattr(security, "snapshot") else None,
+            "proxyi": proxyi.snapshot() if proxyi and hasattr(proxyi, "snapshot") else None,
             "cache": cache.snapshot() if cache and hasattr(cache, "snapshot") else None,
             "http_cache": caches.snapshot() if caches and hasattr(caches, "snapshot") else None,
             "tasks": tasks.snapshot() if tasks and hasattr(tasks, "snapshot") else None,
@@ -905,6 +915,7 @@ class App:
           <tr><td data-label=\"Campo\">Cookie de afinidad</td><td data-label=\"Valor\"><code>{esc(data.get('thread_cookie_name'))}</code></td></tr>
           <tr><td data-label=\"Campo\">Metricas</td><td data-label=\"Valor\">{yesno(data.get('metrics_enabled'))}</td></tr>
           <tr><td data-label=\"Campo\">Seguridad</td><td data-label=\"Valor\">{yesno(data.get('security_enabled'))}</td></tr>
+          <tr><td data-label=\"Campo\">ProxyI</td><td data-label=\"Valor\">{yesno(data.get('proxyi_enabled'))}</td></tr>
           <tr><td data-label=\"Campo\">Cache</td><td data-label=\"Valor\">{yesno(data.get('cache_enabled'))}</td></tr>
           <tr><td data-label=\"Campo\">Cache HTTP</td><td data-label=\"Valor\">{yesno(data.get('caches_enabled'))}</td></tr>
           <tr><td data-label=\"Campo\">Tareas</td><td data-label=\"Valor\">{yesno(data.get('tasks_enabled'))}</td></tr>
@@ -1048,6 +1059,12 @@ class App:
         if caches and hasattr(caches, "close"):
             try:
                 caches.close()
+            except Exception:
+                pass
+        proxyi = getattr(self, "proxyi", None)
+        if proxyi and hasattr(proxyi, "close"):
+            try:
+                proxyi.close()
             except Exception:
                 pass
         for route in self.router.routes:
