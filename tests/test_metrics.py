@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from wsbuilder import App, Request
+from wsbuilder import App, ProxyI, Request
 from wsbuilder.metrics import AppMetrics, install_metrics
 
 
@@ -126,6 +126,25 @@ class TestMetrics(unittest.TestCase):
         stream_data = json.loads(first.decode("utf-8"))
         self.assertIn("threads", stream_data)
         self.assertEqual(stream_data["threads"]["distribution"], "least_busy")
+
+    def test_app_enable_metrics_includes_proxyi_snapshot(self):
+        app = App()
+        app.proxyi = ProxyI(name="proxy-metrics")
+        app.enable_metrics(app_name="with-proxy")
+
+        req_snapshot = Request(
+            method="GET",
+            path="/api/metrics",
+            query_string="",
+            headers={},
+            body=b"",
+            client=("127.0.0.1", 1234),
+            tls={},
+        )
+        resp_snapshot = app.dispatch(req_snapshot)
+        data = json.loads(resp_snapshot.body.decode("utf-8"))
+        self.assertIn("proxyi", data)
+        self.assertEqual(data["proxyi"]["name"], "proxy-metrics")
 
 
 if __name__ == "__main__":

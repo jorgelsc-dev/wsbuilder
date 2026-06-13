@@ -43,7 +43,7 @@ Libreria Python para construir servidores HTTP, WebSocket y utilidades de infrae
 <div class="card"><strong>HTTP</strong>Router, request/response, stream chunked y parseo de query string.</div>
 <div class="card"><strong>WebSocket</strong>Handshake, frames, control de ping/pong y errores de protocolo.</div>
 <div class="card"><strong>Persistencia</strong>Modelos SQLite, `QuerySet`, transacciones y replicas de lectura.</div>
-<div class="card"><strong>Infra</strong>Cache, seguridad, metricas, tareas, DNS local y utilidades de protocolo.</div>
+<div class="card"><strong>Infra</strong>Cache, seguridad, metricas, proxy vhost, balanceo, tareas, DNS local y utilidades de protocolo.</div>
 </div>
 
 ## Flujo mental
