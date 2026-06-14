@@ -8,7 +8,7 @@ Esta pagina resume la forma mas rapida de arrancar `wsbuilder` en local y entend
 python -m pip install -e .
 ```
 
-## Ejecutar el demo integrado
+## Ejecutar el ejemplo integrado
 
 ```bash
 python -m wsbuilder --host 0.0.0.0 --port 8765
@@ -29,7 +29,6 @@ Eso levanta un servidor HTTP con:
 - `GET /docs`
 - `GET /docs.json`
 - `GET /monitor`
-- `GET /thread-demo`
 - `WS /ws/`
 
 ## Primer app
@@ -73,7 +72,7 @@ app = App(cors_allow_origin="https://tu-dominio.com")
 
 ## Flujo de lectura recomendado
 
-1. Ejecuta el demo incluido y prueba `GET /api/health`.
+1. Ejecuta el ejemplo incluido y prueba `GET /api/health`.
 2. Si quieres una ruta guiada de construccion, abre [Aplicacion - Facil](application/easy.md).
 3. Lee [Arquitectura](architecture.md) para entender como se resuelve una request.
 4. Abre [Ayuda](help/index.md) si quieres adaptar `wsbuilder` a Microservicios.

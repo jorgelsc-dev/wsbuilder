@@ -51,7 +51,7 @@ Esta pagina esta pensada para GitHub Pages y MkDocs Material. Usa tabs para que 
     <div class="diagram-arrow">→</div>
     <div class="diagram-node">Metrics / Docs</div>
     </div>
-    <div class="diagram-note" style="margin-top: 0.85rem;">La idea es aprender una topologia real, no solo una demo aislada.</div>
+    <div class="diagram-note" style="margin-top: 0.85rem;">La idea es aprender una topologia real, no solo un ejemplo aislado.</div>
     </div>
 
     ### Codigo completo
@@ -492,7 +492,7 @@ Esta pagina esta pensada para GitHub Pages y MkDocs Material. Usa tabs para que 
 
     - laboratorios locales;
     - dominios de prueba para el proxy;
-    - demos sin infraestructura externa.
+    - pruebas sin infraestructura externa.
 
     ### Mas detalle
 
