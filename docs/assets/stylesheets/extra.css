@@ -15,6 +15,11 @@
   --ws-code-text: #e2e8f0;
 }
 
+.md-typeset {
+  font-size: 0.96rem;
+  line-height: 1.65;
+}
+
 .md-content .hero,
 .md-content .card,
 .md-content .diagram,

@@ -293,7 +293,7 @@ Responsabilidades:
 
 Interacciones:
 
-- suele usarse fuera del flujo HTTP, pero complementa demos o topologias locales.
+- suele usarse fuera del flujo HTTP, pero complementa pruebas o topologias locales.
 
 ### `wsbuilder.db_replicas`
 
