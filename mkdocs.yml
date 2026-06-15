@@ -8,29 +8,6 @@ edit_uri: edit/main/docs/
 
 nav:
   - Inicio: index.md
-  - Empezar: getting-started.md
-  - Aplicacion:
-      - Resumen: application/index.md
-      - Facil: application/easy.md
-      - Avanzada: application/advanced.md
-      - Guia completa: guia-completa.md
-  - Arquitectura: architecture.md
-  - Ayuda:
-      - Resumen: help/index.md
-      - Microservicios: help/microservices.md
-  - Referencia:
-      - Resumen: reference/index.md
-      - HTTP y respuesta: reference/http.md
-      - WebSocket: reference/websocket.md
-      - ORM: reference/orm.md
-      - Cache: reference/cache.md
-      - Seguridad: reference/security.md
-      - Metricas: reference/metrics.md
-      - Logs: reference/logs.md
-      - Tareas en background: reference/tasks.md
-      - Utilidades HTTP: reference/utilities.md
-      - DNS local: reference/dns.md
-      - Avanzado: reference/advanced.md
 
 theme:
   name: material
@@ -56,9 +33,6 @@ markdown_extensions:
   - pymdownx.superfences
   - toc:
       permalink: true
-
-extra_css:
-  - assets/stylesheets/extra.css
 
 plugins:
   - search
