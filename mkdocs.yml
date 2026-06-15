@@ -1,7 +1,10 @@
-site_name: wsbuilder
-site_description: Documentacion oficial de wsbuilder
-site_author: wsbuilder Authors
-repo_name: wsbuilder
+site_name: PortHound Docs
+site_description: Documentacion oficial de PortHound
+site_author: PortHound Authors
+site_url: https://porthound.jorgelsc.dev/
+repo_url: https://github.com/jorgelsc-dev/wsbuilder
+repo_name: PortHound
+edit_uri: edit/main/docs/
 
 nav:
   - Inicio: index.md
@@ -32,18 +35,13 @@ theme:
   name: material
   language: es
   features:
-    - navigation.instant
     - navigation.tabs
     - navigation.sections
     - navigation.top
     - search.highlight
-    - search.share
+    - search.suggest
     - content.code.copy
-    - content.tabs.link
-  palette:
-    - scheme: default
-      primary: teal
-      accent: amber
+    - content.action.edit
   icon:
     repo: fontawesome/brands/github
 

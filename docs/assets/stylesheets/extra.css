@@ -1,10 +1,10 @@
 :root {
-  --md-primary-fg-color: #0f766e;
-  --md-primary-fg-color--light: #14b8a6;
-  --md-primary-fg-color--dark: #115e59;
-  --md-accent-fg-color: #ca8a04;
+  --md-primary-fg-color: #4051b5;
+  --md-primary-fg-color--light: #536dfe;
+  --md-primary-fg-color--dark: #303f9f;
+  --md-accent-fg-color: #526cfe;
   --ws-surface: var(--md-default-bg-color);
-  --ws-surface-alt: rgba(15, 23, 42, 0.03);
+  --ws-surface-alt: rgba(64, 81, 181, 0.03);
   --ws-surface-elevated: rgba(255, 255, 255, 0.92);
   --ws-border: var(--md-default-fg-color--lightest);
   --ws-text: var(--md-default-fg-color);
@@ -42,9 +42,9 @@
   margin: 1rem 0 1.5rem;
   color: var(--md-primary-bg-color);
   background:
-    radial-gradient(circle at top right, rgba(20, 184, 166, 0.2), transparent 34%),
-    linear-gradient(135deg, #0f766e 0%, #115e59 52%, #0f172a 100%);
-  box-shadow: 0 18px 45px rgba(15, 118, 110, 0.24);
+    radial-gradient(circle at top right, rgba(83, 109, 254, 0.18), transparent 34%),
+    linear-gradient(135deg, #4051b5 0%, #303f9f 52%, #0f172a 100%);
+  box-shadow: 0 18px 45px rgba(64, 81, 181, 0.24);
   overflow: hidden;
 }
 
@@ -88,7 +88,7 @@
   border-radius: 1rem;
   border: 1px solid var(--ws-border);
   background:
-    radial-gradient(circle at top left, rgba(20, 184, 166, 0.12), transparent 36%),
+    radial-gradient(circle at top left, rgba(83, 109, 254, 0.12), transparent 36%),
     linear-gradient(180deg, var(--ws-surface-alt), rgba(15, 23, 42, 0.015));
   box-shadow: var(--ws-shadow);
 }
