@@ -294,7 +294,7 @@ INDEX_HTML = """<!doctype html>
   <h1>Servidor HTTP + WebSocket (avanzado)</h1>
   <p>Pruebas WebSocket + ORM SQLite (mensajes de chat persistidos).</p>
   <p>
-    Support PortHound (optional): BTC
+    Support WSBuilder (optional): BTC
     <code id="btc_address">bc1q3lhxpr9yantvefmvhpd2h4lu0ykf3t45zvuve2</code>
     <button id="copy_btc" type="button">Copiar BTC</button>
   </p>
