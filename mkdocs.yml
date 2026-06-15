@@ -1,9 +1,9 @@
-site_name: PortHound Docs
-site_description: Documentacion oficial de PortHound
-site_author: PortHound Authors
-site_url: https://porthound.jorgelsc.dev/
+site_name: WSBuilder Docs
+site_description: Documentacion oficial de WSBuilder
+site_author: WSBuilder Authors
+site_url: https://wsbuilder.jorgelsc.dev/
 repo_url: https://github.com/jorgelsc-dev/wsbuilder
-repo_name: PortHound
+repo_name: WSBuilder
 edit_uri: edit/main/docs/
 
 nav:
