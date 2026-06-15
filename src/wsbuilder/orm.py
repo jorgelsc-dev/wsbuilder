@@ -20,6 +20,7 @@ _WRITE_PREFIXES = {
     "VACUUM",
     "REINDEX",
 }
+_DATABASE_ALIASES = {"default", "replica"}
 
 
 def _to_snake_case(name: str) -> str:
@@ -521,6 +522,7 @@ class QuerySet:
         order_by_clauses: list[str] | None = None,
         limit_value: int | None = None,
         offset_value: int | None = None,
+        db_alias: str = "default",
     ):
         self.db = db
         self.model = model
@@ -529,6 +531,7 @@ class QuerySet:
         self.order_by_clauses = order_by_clauses or []
         self.limit_value = limit_value
         self.offset_value = offset_value
+        self.db_alias = db_alias
 
     def _clone(self, **overrides):
         data = {
@@ -539,6 +542,7 @@ class QuerySet:
             "order_by_clauses": list(self.order_by_clauses),
             "limit_value": self.limit_value,
             "offset_value": self.offset_value,
+            "db_alias": self.db_alias,
         }
         data.update(overrides)
         return QuerySet(**data)
@@ -611,6 +615,36 @@ class QuerySet:
         clone.where_clauses.append(f"({clause})")
         clone.params.extend(params)
         return clone
+
+    def using(self, alias: str):
+        alias = alias.lower()
+        if alias not in _DATABASE_ALIASES:
+            raise ValueError(f"Unsupported database alias: {alias}")
+        return self._clone(db_alias=alias)
+
+    def _read_execute(self, sql: str, params=None):
+        if self.db_alias == "replica":
+            return self.db.read_replica_execute(sql, params)
+        return self.db.execute(sql, params)
+
+    def _read_fetchone(self, sql: str, params=None):
+        if self.db_alias == "replica":
+            return self.db.read_replica_fetchone(sql, params)
+        return self.db.fetchone(sql, params)
+
+    def _read_fetchall(self, sql: str, params=None):
+        if self.db_alias == "replica":
+            return self.db.read_replica_fetchall(sql, params)
+        return self.db.fetchall(sql, params)
+
+    def _read_scalar(self, sql: str, params=None, default=None):
+        if self.db_alias == "replica":
+            return self.db.read_replica_scalar(sql, params, default)
+        return self.db.scalar(sql, params, default)
+
+    def _assert_writable(self):
+        if self.db_alias == "replica":
+            raise RuntimeError("Replica querysets are read-only")
 
     def filter(self, **kwargs):
         clone = self._clone()
@@ -685,12 +719,12 @@ class QuerySet:
 
     def all(self):
         sql, params = self._build_select()
-        rows = self.db.execute(sql, params).fetchall()
+        rows = self._read_fetchall(sql, params)
         return [self.model.from_row(row) for row in rows]
 
     def first(self):
         sql, params = self.limit(1)._build_select()
-        row = self.db.execute(sql, params).fetchone()
+        row = self._read_fetchone(sql, params)
         if row is None:
             return None
         return self.model.from_row(row)
@@ -711,7 +745,7 @@ class QuerySet:
             selected = list(self.model._meta["fields"].keys())
             columns = [quote_identifier(name) for name in selected]
         sql, params = self._build_select(columns=columns)
-        rows = self.db.execute(sql, params).fetchall()
+        rows = self._read_fetchall(sql, params)
         out = []
         for row in rows:
             item = {}
@@ -726,12 +760,13 @@ class QuerySet:
         params = list(self.params)
         if self.where_clauses:
             sql += " WHERE " + " AND ".join(self.where_clauses)
-        return int(self.db.scalar(sql, params, default=0))
+        return int(self._read_scalar(sql, params, default=0))
 
     def exists(self) -> bool:
         return self.limit(1).count() > 0
 
     def update(self, **kwargs) -> int:
+        self._assert_writable()
         if not kwargs:
             return 0
         table = quote_identifier(self.model._meta["table"])
@@ -751,6 +786,7 @@ class QuerySet:
         return cur.rowcount
 
     def delete(self) -> int:
+        self._assert_writable()
         table = quote_identifier(self.model._meta["table"])
         sql = f"DELETE FROM {table}"
         params = list(self.params)
@@ -760,6 +796,7 @@ class QuerySet:
         return cur.rowcount
 
     def create(self, **kwargs):
+        self._assert_writable()
         obj = self.model(**kwargs)
         obj.save(self.db)
         return obj

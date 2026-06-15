@@ -18,6 +18,8 @@
 
 El ORM de `wsbuilder` esta pensado para SQLite y modelos declarativos simples, con un coste de aprendizaje bajo.
 
+La lectura habitual se hace con `objects()` y `values()`. Si quieres apuntar a replicas, usa `using("replica")` sobre el `QuerySet`.
+
 ## Tipos principales
 
 - `Database`
@@ -50,7 +52,7 @@ User.create_table(db)
 u = User(username="alice", email="alice@example.com")
 u.save(db)
 
-rows = db.read_replica_fetchall("SELECT id, username, email FROM user")
+rows = User.objects(db).using("replica").order_by("-id").values("id", "username", "email")
 ```
 
 ## Flujo de trabajo
@@ -67,13 +69,15 @@ Cuando `enable_replicas=True`, `Database` crea un pool de replicas para separar 
 
 - `replica_count=2` crea dos replicas de lectura.
 - `db.execute(...)` y `Model.save(db)` escriben en la conexion principal.
-- `db.read_replica_execute(...)`, `db.read_replica_fetchone(...)`, `db.read_replica_fetchall(...)` y `db.read_replica_scalar(...)` leen desde el pool de replicas.
+- `User.objects(db).using("replica")` manda las lecturas del `QuerySet` al pool de replicas cuando existe.
+- `db.read_replica_execute(...)`, `db.read_replica_fetchone(...)`, `db.read_replica_fetchall(...)` y `db.read_replica_scalar(...)` siguen disponibles como escape hatch para SQL manual.
 - Si quieres un servicio con lectura mas estable bajo carga, usa las replicas para listas, reportes y consultas de solo lectura.
 
 ## QuerySet
 
 Soporta:
 
+- `using()`
 - `filter()`
 - `exclude()`
 - `order_by()`

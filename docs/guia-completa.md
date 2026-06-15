@@ -142,12 +142,11 @@ Esta pagina esta pensada para GitHub Pages y MkDocs Material. Usa tabs para que 
     def list_users(request):
         limit = int(request.query.get("limit", "20") or 20)
         # Las lecturas van al pool de replicas.
-        rows = db.read_replica_fetchall(
-            "SELECT id, username, email, role FROM user ORDER BY id DESC LIMIT ?",
-            (limit,),
+        rows = User.objects(db).using("replica").order_by("-id").limit(limit).values(
+            "id", "username", "email", "role"
         )
         return {
-            "items": [dict(row) for row in rows],
+            "items": rows,
             "source": "read-replica",
             "replicas": 2,
         }
@@ -207,7 +206,7 @@ Esta pagina esta pensada para GitHub Pages y MkDocs Material. Usa tabs para que 
     - `SecurityPolicy` para control de acceso y rate limiting.
     - `SQLiteMemoryCache` para cache de respuesta.
     - `Database` con una escritura primaria y dos replicas de lectura.
-    - lectura por replicas con `read_replica_fetchall()`.
+    - lectura por replicas con `User.objects(db).using("replica")`.
     - `ProxyI` para vhosts, locations, headers y balanceo `best`.
     - `TaskManager` para trabajo que no debe bloquear la request.
     - `LocalDNSServer` para dominios de prueba.
@@ -216,7 +215,7 @@ Esta pagina esta pensada para GitHub Pages y MkDocs Material. Usa tabs para que 
     ### Como usarla para aprender
 
     1. Arranca con la app y confirma `GET /api/health`.
-    2. Inserta un usuario y luego lee con `read_replica_fetchall()` para ver el split write/read.
+    2. Inserta un usuario y luego lee con `User.objects(db).using("replica")` para ver el split write/read.
     3. Prueba `api.test.local`, `auth.test.local` y `app.test.local` para validar VHOST.
     4. Abre `GET /__proxyi__` para ver la capa de proxy y el balanceo.
     5. Abre `GET /api/metrics` para revisar el snapshot operativo.
@@ -306,13 +305,13 @@ Esta pagina esta pensada para GitHub Pages y MkDocs Material. Usa tabs para que 
     User.create_table(db)
     User.create(db, username="alice", email="alice@example.com")
 
-    rows = db.read_replica_fetchall("SELECT id, username, email FROM user ORDER BY id DESC")
+    rows = User.objects(db).using("replica").order_by("-id").values("id", "username", "email")
     ```
 
     ### Puntos clave
 
     - `db.execute(...)` escribe sobre la conexion principal.
-    - `db.read_replica_fetchall(...)` lee desde el pool de replicas cuando existe.
+    - `User.objects(db).using("replica")` lee desde el pool de replicas cuando existe.
     - `User.objects(db).filter(...)` construye consultas expresivas.
     - `with db.transaction():` agrupa escrituras.
 
