@@ -69,6 +69,12 @@ from wsbuilder import (
 - `AppMetrics` y `install_metrics()`.
 - expone snapshot JSON y stream NDJSON.
 
+### [Logs](logs.md)
+
+- `NDJSONLog`, `append_ndjson()` y `install_logs()`.
+- escribe eventos NDJSON en disco con `open(..., "a")`.
+- `App.enable_logs()` deja el writer instalado en la instancia.
+
 ### [Proxy / VHost](proxyi.md)
 
 - `ProxyI`, `ProxyRule`, `ProxyTarget` y `install_proxyi()`.
@@ -141,6 +147,7 @@ La regla practica es:
 - `SQLiteMemoryCache`, `install_cache`, `install_caches`
 - `SecurityPolicy`, `ACLRule`, `install_security`
 - `AppMetrics`, `install_metrics`
+- `NDJSONLog`, `append_ndjson`, `install_logs`
 - `ProxyI`, `ProxyRule`, `ProxyTarget`, `install_proxyi`
 - `TaskManager`, `TaskHandle`, `TaskContext`
 - `LocalDNSServer`

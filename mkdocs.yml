@@ -26,6 +26,7 @@ nav:
       - Cache: reference/cache.md
       - Seguridad: reference/security.md
       - Metricas: reference/metrics.md
+      - Logs: reference/logs.md
       - Tareas en background: reference/tasks.md
       - Utilidades HTTP: reference/utilities.md
       - DNS local: reference/dns.md

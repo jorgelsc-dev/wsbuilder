@@ -152,7 +152,36 @@ def test_database_with_replicas():
         # Read from main connection
         all_users = TestUser.objects(db).all()
         assert len(all_users) == 2
-        
+
+        replica_calls = {"fetchall": 0, "scalar": 0}
+        original_fetchall = db.read_replica_fetchall
+        original_scalar = db.read_replica_scalar
+
+        def tracked_fetchall(sql, params=None):
+            replica_calls["fetchall"] += 1
+            return original_fetchall(sql, params)
+
+        def tracked_scalar(sql, params=None, default=None):
+            replica_calls["scalar"] += 1
+            return original_scalar(sql, params, default)
+
+        db.read_replica_fetchall = tracked_fetchall
+        db.read_replica_scalar = tracked_scalar
+
+        replica_rows = TestUser.objects(db).using("replica").order_by("-id").values("id", "name", "email")
+        assert [row["name"] for row in replica_rows] == ["Diana", "Charlie"]
+        assert replica_calls["fetchall"] == 1
+
+        replica_count = TestUser.objects(db).using("replica").count()
+        assert replica_count == 2
+        assert replica_calls["scalar"] == 1
+
+        try:
+            TestUser.objects(db).using("replica").filter(id=user1.id).update(name="Eve")
+            raise AssertionError("Replica querysets must be read-only")
+        except RuntimeError:
+            pass
+
         # Read from replica
         count = db.read_replica_scalar("SELECT COUNT(*) FROM test_users")
         assert count == 2

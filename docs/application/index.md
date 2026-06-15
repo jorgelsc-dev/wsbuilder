@@ -1,47 +1,35 @@
 # Aplicacion
 
-Esta seccion agrupa tres rutas de trabajo:
+Tres formas de trabajar una app segun el alcance que necesites.
 
-- una guia completa para estudiar todos los modulos juntos en GitHub Pages;
-- una guia facil para construir una app funcional sin perder el hilo;
-- una guia avanzada para operar un servicio real con seguridad, observabilidad y optimizacion.
-
-## Como elegir
+## Opciones
 
 <div class="cards">
-<div class="card"><strong>Completa</strong>Si quieres estudiar la integracion total de la libreria, con tabs por modulo y una app completa de referencia.</div>
-<div class="card"><strong>Facil</strong>Si estas empezando, quieres una API pequena o necesitas una plantilla simple para copiar y adaptar.</div>
-<div class="card"><strong>Avanzada</strong>Si ya tienes varios modulos, carga concurrente o requisitos de operacion y rendimiento.</div>
+<div class="card"><strong>Completa</strong><br>Ruta: <code>docs/guia-completa.md</code><br><a href="../guia-completa/">Abrir guia completa</a></div>
+<div class="card"><strong>Facil</strong><br>Ruta: <code>docs/application/easy.md</code><br><a href="easy/">Abrir guia facil</a></div>
+<div class="card"><strong>Avanzada</strong><br>Ruta: <code>docs/application/advanced.md</code><br><a href="advanced/">Abrir guia avanzada</a></div>
 </div>
 
-## Que cubren
+## Flujo visual
 
 <div class="diagram">
-<div class="diagram-title">Mapa de aplicacion</div>
+<div class="diagram-title">Como usar esta seccion</div>
 <div class="diagram-track">
-<div class="diagram-node">Instalar</div>
+<div class="diagram-node">Elegir</div>
 <div class="diagram-arrow">→</div>
-<div class="diagram-node">Crear app</div>
+<div class="diagram-node">Abrir guia</div>
 <div class="diagram-arrow">→</div>
-<div class="diagram-node">Agregar rutas</div>
+<div class="diagram-node">Copiar fichero</div>
 <div class="diagram-arrow">→</div>
-<div class="diagram-node">Activar capas</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Operar</div>
+<div class="diagram-node">Ejecutar</div>
 </div>
-<div class="diagram-note" style="margin-top: 0.85rem;">La guia facil recorre este flujo con una sola app. La avanzada lo desglosa por capas y decisiones de arquitectura.</div>
+<div class="diagram-note" style="margin-top: 0.85rem;">Cada guia termina con una ruta sugerida y un fichero Python completo para copiar.</div>
 </div>
-
-## Rutas
-
-1. Abre [Guia completa](../guia-completa.md) si quieres un recorrido de aprendizaje por todos los modulos.
-2. Abre [Facil](easy.md) si quieres una app completa en pocos pasos.
-3. Abre [Avanzada](advanced.md) si necesitas control fino sobre el runtime.
-4. Si quieres entender el por que del flujo interno, vuelve a [Arquitectura](../architecture.md).
 
 ## Regla practica
 
-- Si quieres estudiar la libreria completa, usa la guia completa.
-- Si solo necesitas responder requests y validar el flujo, usa la guia facil.
-- Si vas a mezclar cache, seguridad, tareas, metrics, replicas y WebSocket, usa la avanzada.
-- Si vas a exponer el proyecto a otros equipos, trata la guia avanzada como tu baseline operativa.
+<div class="cards">
+<div class="card"><strong>Aprender</strong><a href="../guia-completa/">Usa la guia completa</a> si quieres ver la integracion total.</div>
+<div class="card"><strong>Arrancar</strong>Usa la guia facil si necesitas un archivo unico y directo.</div>
+<div class="card"><strong>Operar</strong>Usa la avanzada si vas a mezclar cache, seguridad, tareas, replicas y proxy.</div>
+</div>

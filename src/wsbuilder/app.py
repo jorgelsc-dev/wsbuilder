@@ -380,6 +380,7 @@ class App:
         self.security = None
         self.proxyi = None
         self.caches = None
+        self.logs = None
         self.tasks = TaskManager(app=self)
 
         raw_secret = str(thread_cookie_secret or "").strip()
@@ -590,6 +591,16 @@ class App:
 
         return install_caches(self, caches=caches)
 
+    def enable_logs(self, path="logs/wsbuilder.ndjson", attr_name="logs", ensure_parent=True):
+        from .logs import install_logs
+
+        return install_logs(
+            self,
+            path=path,
+            attr_name=attr_name,
+            ensure_parent=ensure_parent,
+        )
+
     def describe(self):
         routes = [route.describe() for route in self.router.routes]
         ws_routes = []
@@ -615,6 +626,7 @@ class App:
         proxyi = getattr(self, "proxyi", None)
         cache = getattr(self, "cache", None)
         caches = getattr(self, "caches", None)
+        logs = getattr(self, "logs", None)
         tasks = getattr(self, "tasks", None)
 
         view_routes = [row for row in routes if row["kind"] == "plain"]
@@ -633,12 +645,14 @@ class App:
             "proxyi_enabled": bool(proxyi),
             "cache_enabled": bool(cache),
             "caches_enabled": bool(caches),
+            "logs_enabled": bool(logs),
             "tasks_enabled": bool(tasks),
             "metrics": metrics.snapshot() if metrics and hasattr(metrics, "snapshot") else None,
             "security": security.snapshot() if security and hasattr(security, "snapshot") else None,
             "proxyi": proxyi.snapshot() if proxyi and hasattr(proxyi, "snapshot") else None,
             "cache": cache.snapshot() if cache and hasattr(cache, "snapshot") else None,
             "http_cache": caches.snapshot() if caches and hasattr(caches, "snapshot") else None,
+            "logs": logs.describe() if logs and hasattr(logs, "describe") else None,
             "tasks": tasks.snapshot() if tasks and hasattr(tasks, "snapshot") else None,
             "routes": routes,
             "ws_routes": ws_routes,
@@ -918,6 +932,7 @@ class App:
           <tr><td data-label=\"Campo\">ProxyI</td><td data-label=\"Valor\">{yesno(data.get('proxyi_enabled'))}</td></tr>
           <tr><td data-label=\"Campo\">Cache</td><td data-label=\"Valor\">{yesno(data.get('cache_enabled'))}</td></tr>
           <tr><td data-label=\"Campo\">Cache HTTP</td><td data-label=\"Valor\">{yesno(data.get('caches_enabled'))}</td></tr>
+          <tr><td data-label=\"Campo\">Logs</td><td data-label=\"Valor\">{yesno(data.get('logs_enabled'))}</td></tr>
           <tr><td data-label=\"Campo\">Tareas</td><td data-label=\"Valor\">{yesno(data.get('tasks_enabled'))}</td></tr>
         </tbody>
       </table>
@@ -1065,6 +1080,12 @@ class App:
         if proxyi and hasattr(proxyi, "close"):
             try:
                 proxyi.close()
+            except Exception:
+                pass
+        logs = getattr(self, "logs", None)
+        if logs and hasattr(logs, "close"):
+            try:
+                logs.close()
             except Exception:
                 pass
         for route in self.router.routes:
