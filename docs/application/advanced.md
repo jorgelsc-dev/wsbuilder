@@ -90,11 +90,10 @@ def health(_request):
 @app.api("/api/orders", methods=("GET",))
 def list_orders(request):
     limit = int(request.query.get("limit", "20") or 20)
-    rows = db.read_replica_fetchall(
-        'SELECT id, code, status FROM "order_record" ORDER BY id DESC LIMIT ?',
-        (limit,),
+    rows = OrderRecord.objects(db).using("replica").order_by("-id").limit(limit).values(
+        "id", "code", "status"
     )
-    return {"items": [dict(row) for row in rows], "source": "read-replica"}
+    return {"items": rows, "source": "read-replica"}
 
 @app.api("/api/orders", methods=("POST",))
 def create_order(request):

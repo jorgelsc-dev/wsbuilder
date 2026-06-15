@@ -72,9 +72,9 @@ Libreria Python para construir servidores HTTP, WebSocket y utilidades de infrae
 ## Guia de aplicacion
 
 <div class="cards">
-<div class="card"><strong>Completa</strong><br>Ruta: <code>docs/guia-completa.md</code><br><a href="guia-completa.md">Abrir guia</a></div>
-<div class="card"><strong>Facil</strong><br>Ruta: <code>docs/application/easy.md</code><br><a href="application/easy.md">Abrir guia</a></div>
-<div class="card"><strong>Avanzada</strong><br>Ruta: <code>docs/application/advanced.md</code><br><a href="application/advanced.md">Abrir guia</a></div>
+<div class="card"><strong>Completa</strong><br>Ruta: <code>docs/guia-completa.md</code><br><a href="guia-completa/">Abrir guia</a></div>
+<div class="card"><strong>Facil</strong><br>Ruta: <code>docs/application/easy.md</code><br><a href="application/easy/">Abrir guia</a></div>
+<div class="card"><strong>Avanzada</strong><br>Ruta: <code>docs/application/advanced.md</code><br><a href="application/advanced/">Abrir guia</a></div>
 </div>
 
 <div class="diagram">
