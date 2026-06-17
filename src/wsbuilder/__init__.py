@@ -82,6 +82,16 @@ from .db_replicas import (
     OptimizedDatabase,
     SQLite3OptimizationConfig,
 )
+from .ia import (
+    DataSet,
+    DataSummary,
+    DenseLayer,
+    ErrorSummary,
+    NeuralNetwork,
+    describe_data,
+    evaluate_errors,
+    submit_training_task,
+)
 from .predicts import Predictor
 
 __version__ = "0.9.1.dev0"
@@ -177,5 +187,13 @@ __all__ = [
     "DatabaseReplicaPool",
     "OptimizedDatabase",
     "SQLite3OptimizationConfig",
+    "DataSet",
+    "DataSummary",
+    "ErrorSummary",
+    "DenseLayer",
+    "NeuralNetwork",
+    "describe_data",
+    "evaluate_errors",
+    "submit_training_task",
     "Predictor",
 ]
