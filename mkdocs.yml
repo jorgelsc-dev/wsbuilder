@@ -1,5 +1,5 @@
 site_name: WSBuilder Docs
-site_description: Documentacion oficial de WSBuilder
+site_description: Documentacion oficial de WSBuilder, con guias, referencia y ejemplos.
 site_author: WSBuilder Authors
 site_url: https://wsbuilder.jorgelsc.dev/
 repo_url: https://github.com/jorgelsc-dev/wsbuilder
@@ -8,26 +8,65 @@ edit_uri: edit/main/docs/
 
 nav:
   - Inicio: index.md
+  - Guia:
+      - Empezar: getting-started.md
+      - Arquitectura: architecture.md
+      - HTTP: http.md
+      - WebSocket: websocket.md
+      - Persistencia: persistence.md
+      - Cache: cache.md
+      - Seguridad: security.md
+      - Observabilidad: observability.md
+      - Tareas: tasks.md
+      - Proxy: proxy.md
+      - DNS: dns.md
+      - IA: ia.md
+  - Referencia: reference/index.md
+  - Ayuda: help/index.md
 
 theme:
   name: material
   language: es
+  font:
+    text: Source Sans 3
+    code: JetBrains Mono
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Cambiar a modo oscuro
+    - scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Cambiar a modo claro
   features:
     - navigation.tabs
     - navigation.sections
+    - navigation.indexes
+    - navigation.expand
+    - navigation.tracking
     - navigation.top
     - search.highlight
     - search.suggest
     - content.code.copy
     - content.action.edit
+    - content.tabs.link
+    - toc.follow
   icon:
     repo: fontawesome/brands/github
+  logo: assets/wsbuilder-mark.svg
 
 markdown_extensions:
   - admonition
   - attr_list
   - def_list
   - footnotes
+  - md_in_html
+  - pymdownx.details
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.superfences
@@ -36,3 +75,6 @@ markdown_extensions:
 
 plugins:
   - search
+
+extra_css:
+  - stylesheets/extra.css

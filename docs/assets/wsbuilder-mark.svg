@@ -1,0 +1,21 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WSBuilder">
+  <defs>
+    <linearGradient id="wsbg" x1="14" y1="12" x2="114" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F766E"/>
+      <stop offset="0.55" stop-color="#0F5B8F"/>
+      <stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="wsshine" x1="26" y1="24" x2="104" y2="104" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#wsbg)"/>
+  <path d="M28 40L42 86L64 52L86 86L100 40" stroke="white" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="28" cy="40" r="6" fill="#F59E0B"/>
+  <circle cx="64" cy="52" r="6" fill="#DBEAFE"/>
+  <circle cx="100" cy="40" r="6" fill="#F59E0B"/>
+  <circle cx="42" cy="86" r="6" fill="#DBEAFE"/>
+  <circle cx="86" cy="86" r="6" fill="#DBEAFE"/>
+  <path d="M18 18H110V32C94 26 80 24 64 24C48 24 34 26 18 32V18Z" fill="url(#wsshine)"/>
+</svg>
