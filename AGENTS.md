@@ -31,6 +31,14 @@
 - Commit subjects are concise and often use conventional prefixes like `feat:`, `fix:`, `docs:`, or `chore(release):`.
 - Open PRs against `main` and include validation notes for the changed area; add screenshots or rendered-doc links when documentation changes affect the site.
 
+## Agent Workflow Procedure
+- Before starting any task, sync references from GitHub with `git fetch origin` and confirm the latest `origin/main`.
+- Do not work directly on `main`. If the local `main` has unrelated changes, use a clean branch or worktree based on `origin/main` to avoid mixing work.
+- Create the task branch from the updated `main` using the prefix that matches the change: `feat/<name>`, `fix/<name>`, `docs/<name>`, `chore/<name>`, `refactor/<name>`, or `test/<name>`.
+- Apply the requested changes only in that branch and keep the diff focused on a single logical objective.
+- Run the relevant validation for the touched area before opening a PR.
+- Open the PR against `main`, then share the branch name, validation performed, and PR summary for approval before merge.
+
 ## Security & Configuration Tips
 - Report vulnerabilities privately and avoid public exploit details until triage.
 - Keep generated artifacts out of commits (`dist/`, `.pytest_cache/`, `__pycache__/`).
