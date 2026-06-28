@@ -8,6 +8,7 @@ edit_uri: edit/main/docs/
 
 nav:
   - Inicio: index.md
+  - Instalacion: install.md
 
 theme:
   name: material

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "wsbuilder"
 version = "0.9.1.dev0"
-description = "Framework ligero HTTP + WebSocket."
+description = "Lightweight HTTP + WebSocket framework for Python."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -15,9 +15,21 @@ keywords = ["websocket", "http", "framework", "server", "python"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jorgelsc-dev/wsbuilder"
+Documentation = "https://wsbuilder.jorgelsc.dev/"
+Repository = "https://github.com/jorgelsc-dev/wsbuilder"
+Issues = "https://github.com/jorgelsc-dev/wsbuilder/issues"
 
 [project.scripts]
 wsbuilder = "wsbuilder.__main__:main"

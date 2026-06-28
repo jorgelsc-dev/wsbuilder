@@ -1,4 +1,4 @@
-name: main-pr-source-check
+name: main-pr-policy-check
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ jobs:
   enforce-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate PR source metadata
+      - name: Validate PR source branch policy
         run: |
           set -euo pipefail
           echo "base=${{ github.base_ref }} head=${{ github.head_ref }}"
@@ -21,4 +21,12 @@ jobs:
             echo "ERROR: missing pull request source branch"
             exit 1
           fi
-          echo "OK: PR hacia main con branch origen detectada."
+          if [ "${{ github.head_ref }}" = "main" ]; then
+            echo "ERROR: PR source branch cannot be main"
+            exit 1
+          fi
+          if [[ ! "${{ github.head_ref }}" =~ ^(feat|fix|docs|chore|refactor|test|perf)/[a-z0-9._-]+$ ]]; then
+            echo "ERROR: source branch must match <type>/<slug> using one of feat, fix, docs, chore, refactor, test, perf"
+            exit 1
+          fi
+          echo "OK: PR hacia main con source branch valida."

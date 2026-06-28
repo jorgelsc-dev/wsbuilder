@@ -4,10 +4,12 @@ Thanks for your interest in `wsbuilder`.
 
 ## Branching and pull requests
 
-1. Branch from `main` using `feat/<name>` or `fix/<name>`.
-2. Keep each branch focused on one logical change.
-3. Open the pull request against `main`.
-4. Include validation notes for the changes you made.
+1. Start from `main` updated with `origin/main`.
+2. Create a focused topic branch using `scripts/agent-workflow.sh prepare <type> <slug>`.
+3. Use one of these branch prefixes: `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test/`, `perf/`.
+4. Keep each branch focused on one logical change.
+5. Open the pull request against `main`. You can use `scripts/agent-workflow.sh pr`.
+6. Include validation notes for the changes you made.
 
 ## Local validation
 

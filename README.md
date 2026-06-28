@@ -38,9 +38,87 @@ Se apoya en la biblioteca estandar y expone bloques pequenos y composables para:
 
 ## Instalacion
 
+### 1. Instalar con pip
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install wsbuilder
+```
+
+Si quieres aislar la instalacion en un entorno virtual:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install wsbuilder
+```
+
+Verifica la instalacion:
+
+```bash
+python -c "import wsbuilder; print(wsbuilder.__version__)"
+wsbuilder --help
+```
+
+### 2. Compilar en local e instalar sin internet
+
+Si vas a trabajar sin conexion, usa una rueda local y desactiva el aislamiento de build.
+
+Requisitos previos:
+
+- Tener este repositorio ya descargado en la maquina.
+- Tener Python `3.11+`.
+- Tener `build`, `setuptools` y `wheel` ya instalados antes de desconectarte.
+
+Compilar el paquete localmente sin descargar nada:
+
+```bash
+python -m build --no-isolation
+```
+
+Instalar la wheel generada sin usar PyPI:
+
+```bash
+python -m pip install --no-index dist/wsbuilder-*.whl
+```
+
+Si prefieres instalar directamente desde el codigo fuente local, sin wheel:
+
+```bash
+python -m pip install --no-index --no-build-isolation --no-deps .
+```
+
+Verifica la instalacion offline:
+
+```bash
+python -c "import wsbuilder; print(wsbuilder.__version__)"
+wsbuilder --help
+```
+
+### Instalacion local o sin publicar
+
+Desde este repositorio:
+
+```bash
+python -m pip install .
+```
+
+Desde wheel ya construida:
+
+```bash
+python -m pip install dist/*.whl
+```
+
+### Desarrollo
+
+La instalacion editable queda reservada para contributors:
+
 ```bash
 python -m pip install -e .
 ```
+
+La guia completa de instalacion tambien queda documentada en [docs/install.md](docs/install.md).
 
 ## Inicio rapido
 
