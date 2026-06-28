@@ -1,5 +1,21 @@
 # Repository Guidelines
 
+## Mandatory Agent Workflow
+- Before making any file edits, the agent must move work off `main`.
+- The default workflow is:
+  1. Run `scripts/agent-workflow.sh prepare <type> <slug>`.
+  2. Apply the requested changes on the new branch.
+  3. Run the relevant validation commands.
+  4. Commit with a focused message.
+  5. Run `scripts/agent-workflow.sh pr` to push the branch and open the PR against `main`.
+- Allowed branch prefixes are `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test/`, and `perf/`.
+- If the current branch is a clean topic branch, the agent must switch back to `main`, fast-forward from `origin/main`, and create a fresh topic branch before starting a new task.
+- If the current branch is `main` and already has uncommitted changes, the agent must immediately create a topic branch from the current `HEAD` before making any further edits, then continue the task on that branch.
+- If a non-`main` branch already has uncommitted changes, the agent must not stack unrelated work on top of it.
+- Every PR opened by the agent must target `main`.
+- The agent must not leave task changes on `main`.
+- If `gh` authentication or network access is unavailable, the agent must still prepare the branch locally and report the exact `gh pr create --base main --head <branch> --fill` command needed to finish.
+
 ## Project Structure & Module Organization
 - `src/wsbuilder/` contains the package code. Public entry points are surfaced through `__init__.py` and `__main__.py`; feature modules stay split by concern (`http.py`, `ws.py`, `orm.py`, `cache.py`, `security.py`, `metrics.py`, `tasks.py`, `dns.py`, `proxyi.py`).
 - `tests/` holds the automated suite. Files follow `test_*.py` naming and usually map to one feature area.
@@ -7,6 +23,8 @@
 - `.github/workflows/` contains CI, packaging, and docs publication workflows.
 
 ## Build, Test, and Development Commands
+- `scripts/agent-workflow.sh prepare docs/example-change` is the required pre-edit helper for agent-driven work; it syncs `main` when possible and creates the task branch.
+- `scripts/agent-workflow.sh pr` pushes the current topic branch and opens or reuses a PR against `main`.
 - `python -m pip install -e .` installs the package in editable mode for local development.
 - `PYTHONPATH=src pytest -q` runs the test suite against the in-tree source layout.
 - `python -m build` creates the wheel and source distribution in `dist/`.
