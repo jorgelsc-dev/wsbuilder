@@ -3,11 +3,12 @@
 ## Mandatory Agent Workflow
 - Before making any file edits, the agent must move work off `main`.
 - The default workflow is:
-  1. Run `scripts/agent-workflow.sh prepare <type> <slug>`.
-  2. Apply the requested changes on the new branch.
-  3. Run the relevant validation commands.
-  4. Commit with a focused message.
-  5. Run `scripts/agent-workflow.sh pr` to push the branch and open the PR against `main`.
+  1. Run `git fetch origin` when network access is available and confirm the state of `origin/main`.
+  2. Create or switch to a fresh topic branch with an allowed prefix.
+  3. Apply the requested changes on that branch.
+  4. Run the relevant validation commands.
+  5. Commit with a focused message.
+  6. Push the branch and open or reuse a PR against `main`.
 - Allowed branch prefixes are `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test/`, and `perf/`.
 - If the current branch is a clean topic branch, the agent must switch back to `main`, fast-forward from `origin/main`, and create a fresh topic branch before starting a new task.
 - If the current branch is `main` and already has uncommitted changes, the agent must immediately create a topic branch from the current `HEAD` before making any further edits, then continue the task on that branch.
@@ -15,6 +16,7 @@
 - Every PR opened by the agent must target `main`.
 - The agent must not leave task changes on `main`.
 - If `gh` authentication or network access is unavailable, the agent must still prepare the branch locally and report the exact `gh pr create --base main --head <branch> --fill` command needed to finish.
+- Keep the workflow definition in this file. Do not reintroduce a helper script unless the repository explicitly decides to make the script the source of truth again.
 
 ## Project Structure & Module Organization
 - `src/wsbuilder/` contains the package code. Public entry points are surfaced through `__init__.py` and `__main__.py`; feature modules stay split by concern (`http.py`, `ws.py`, `orm.py`, `cache.py`, `security.py`, `metrics.py`, `tasks.py`, `dns.py`, `proxyi.py`).
@@ -23,8 +25,11 @@
 - `.github/workflows/` contains CI, packaging, and docs publication workflows.
 
 ## Build, Test, and Development Commands
-- `scripts/agent-workflow.sh prepare docs/example-change` is the required pre-edit helper for agent-driven work; it syncs `main` when possible and creates the task branch.
-- `scripts/agent-workflow.sh pr` pushes the current topic branch and opens or reuses a PR against `main`.
+- `git fetch origin` refreshes remote references before agent-driven work when the network is available.
+- `git switch main && git pull --ff-only origin main && git switch -c docs/example-change` is the standard clean-tree branch creation flow.
+- `git switch -c docs/example-change` is the required fallback when `main` already has uncommitted task changes that must be preserved before editing.
+- `git push -u origin <branch>` publishes the current topic branch.
+- `gh pr create --base main --head <branch> --fill` opens the PR against `main`; `gh pr view --json url --jq .url` is the preferred way to check whether a PR already exists.
 - `python -m pip install -e .` installs the package in editable mode for local development.
 - `PYTHONPATH=src pytest -q` runs the test suite against the in-tree source layout.
 - `python -m build` creates the wheel and source distribution in `dist/`.
@@ -53,9 +58,17 @@
 - Before starting any task, sync references from GitHub with `git fetch origin` and confirm the latest `origin/main`.
 - Do not work directly on `main`. If the local `main` has unrelated changes, use a clean branch or worktree based on `origin/main` to avoid mixing work.
 - Create the task branch from the updated `main` using the prefix that matches the change: `feat/<name>`, `fix/<name>`, `docs/<name>`, `chore/<name>`, `refactor/<name>`, or `test/<name>`.
+- If `main` already contains the task's uncommitted edits, immediately preserve them with `git switch -c <type>/<slug>` before changing files.
+- If a parallel spike or risky experiment is necessary, create an auxiliary branch from the current topic branch using one of the same allowed prefixes, keep it temporary, and fold it back into the primary task branch before opening the final PR unless it is reviewable on its own.
 - Apply the requested changes only in that branch and keep the diff focused on a single logical objective.
 - Run the relevant validation for the touched area before opening a PR.
+- Push with `git push -u origin <branch>`, then open or reuse the PR with `gh pr create --base main --head <branch> --fill`.
 - Open the PR against `main`, then share the branch name, validation performed, and PR summary for approval before merge.
+
+## AGENTS.md Loading
+- Compatible coding agents automatically read the repository-root `AGENTS.md` when they enter the workspace. Keep this file at the repository root and keep task-critical rules here if they must be applied automatically.
+- Git, GitHub, and Python tooling do not execute `AGENTS.md`. If the workflow must be enforced outside the agent runtime, add repository tests or CI checks that fail when this file drifts or references removed tooling.
+- When this file changes, update any tests and human-facing documentation that mirror the workflow so the repository has a single coherent protocol.
 
 ## Security & Configuration Tips
 - Report vulnerabilities privately and avoid public exploit details until triage.

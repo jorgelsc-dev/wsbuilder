@@ -45,6 +45,10 @@ python -m pip install --upgrade pip
 python -m pip install wsbuilder
 ```
 
+En Debian, Kali, Ubuntu y derivados, `pip` puede bloquear la instalacion en el
+Python del sistema con `externally-managed-environment` (PEP 668). En esos
+casos, la ruta recomendada es usar un entorno virtual.
+
 Si quieres aislar la instalacion en un entorno virtual:
 
 ```bash
@@ -83,6 +87,22 @@ Instalar la wheel generada sin usar PyPI:
 python -m pip install --no-index dist/wsbuilder-*.whl
 ```
 
+Si tu Python del sistema aplica PEP 668, crea primero un `venv` y ejecuta la
+instalacion dentro de ese entorno:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --no-index dist/wsbuilder-*.whl
+```
+
+Si de forma excepcional necesitas instalar en el Python del sistema, `pip`
+permite forzarlo con `--break-system-packages`, pero no es la ruta recomendada:
+
+```bash
+python -m pip install --break-system-packages --no-index dist/wsbuilder-*.whl
+```
+
 Si prefieres instalar directamente desde el codigo fuente local, sin wheel:
 
 ```bash
@@ -103,6 +123,9 @@ Desde este repositorio:
 ```bash
 python -m pip install .
 ```
+
+Si el entorno del sistema rechaza la instalacion, usa el mismo flujo dentro de
+un `venv`.
 
 Desde wheel ya construida:
 

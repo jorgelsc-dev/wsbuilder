@@ -9,6 +9,16 @@ edit_uri: edit/main/docs/
 nav:
   - Inicio: index.md
   - Instalacion: install.md
+  - Arquitectura: architecture.md
+  - App y HTTP: app-http.md
+  - WebSocket: websocket.md
+  - Datos y ORM: data-orm.md
+  - Cache y Seguridad: cache-security.md
+  - Observabilidad y Tareas: observability-tasks.md
+  - Red y Edge: network-edge.md
+  - IA y Prediccion: ai-predict.md
+  - API publica: api-map.md
+  - Proyecto integral: full-project.md
 
 theme:
   name: material
