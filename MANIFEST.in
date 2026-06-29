@@ -1,0 +1,8 @@
+include AGENTS.md
+include mkdocs.yml
+graft docs
+graft examples
+prune docs/site
+prune examples/full-project/data
+prune examples/full-project/logs
+global-exclude __pycache__ *.py[cod]

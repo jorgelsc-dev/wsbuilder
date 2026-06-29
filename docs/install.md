@@ -13,6 +13,11 @@ python -m pip install --upgrade pip
 python -m pip install wsbuilder
 ```
 
+En Debian, Kali, Ubuntu y otros entornos que aplican PEP 668, `pip` puede
+rechazar la instalacion sobre el Python del sistema con el error
+`externally-managed-environment`. En esos casos, instala dentro de un entorno
+virtual.
+
 ### En un entorno virtual
 
 === "Linux / macOS"
@@ -74,6 +79,23 @@ dist/wsbuilder-0.9.1.dev0.tar.gz
 python -m pip install --no-index dist/wsbuilder-*.whl
 ```
 
+Si ese comando falla con `externally-managed-environment`, el wheel esta bien y
+el bloqueo viene del Python del sistema. La ruta soportada es:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --no-index dist/wsbuilder-*.whl
+```
+
+Solo si necesitas forzar una instalacion global en ese Python gestionado por el
+sistema, `pip` ofrece `--break-system-packages`, pero queda fuera del flujo
+recomendado porque puede interferir con paquetes de la distribucion:
+
+```bash
+python -m pip install --break-system-packages --no-index dist/wsbuilder-*.whl
+```
+
 ### Instalar desde el codigo fuente local sin wheel
 
 Si no quieres pasar por `dist/`, puedes instalar directamente desde el arbol del
@@ -95,7 +117,7 @@ wsbuilder --help
 
 1. En una maquina de build, ejecuta `python -m build --no-isolation`.
 2. Copia el archivo `dist/wsbuilder-*.whl` a la maquina destino.
-3. En la maquina destino, instala con `python -m pip install --no-index dist/wsbuilder-*.whl`.
+3. En la maquina destino, instala dentro de un `venv` con `python -m pip install --no-index dist/wsbuilder-*.whl`.
 
 Ese flujo es el mas estable porque instala desde un artefacto ya construido y no
 depende de herramientas de compilacion en la maquina final.

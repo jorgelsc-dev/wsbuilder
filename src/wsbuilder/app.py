@@ -679,6 +679,8 @@ class App:
         views_total = data.get("view_routes_total", 0)
         api_total = data.get("api_routes_total", 0)
         ws_total = data.get("ws_routes_total", 0)
+        empty_routes_row = '<tr><td colspan="5" class="muted">No hay rutas registradas.</td></tr>'
+        empty_ws_row = '<tr><td colspan="7" class="muted">No hay rutas WebSocket registradas.</td></tr>'
 
         route_rows = []
         for row in routes:
@@ -707,6 +709,8 @@ class App:
                 "</tr>"
             )
 
+        route_rows_html = "".join(route_rows) or empty_routes_row
+        ws_rows_html = "".join(ws_rows) or empty_ws_row
         raw_json = esc(json.dumps(data, ensure_ascii=False, indent=2))
         return f"""<!doctype html>
 <html lang=\"es\">
@@ -952,7 +956,7 @@ class App:
           </tr>
         </thead>
         <tbody>
-          {''.join(route_rows) or '<tr><td colspan=\"5\" class=\"muted\">No hay rutas registradas.</td></tr>'}
+          {route_rows_html}
         </tbody>
       </table>
     </section>
@@ -973,7 +977,7 @@ class App:
           </tr>
         </thead>
         <tbody>
-          {''.join(ws_rows) or '<tr><td colspan=\"7\" class=\"muted\">No hay rutas WebSocket registradas.</td></tr>'}
+          {ws_rows_html}
         </tbody>
       </table>
     </section>

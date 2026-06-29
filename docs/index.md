@@ -4,12 +4,23 @@
 Eso permite una instalacion simple con `pip` en Linux, macOS y Windows siempre que
 el usuario tenga Python `3.11+`.
 
+Esta documentacion cubre la superficie publica principal del proyecto:
+
+- nucleo `App`, `HTTPServer`, `Request` y `Response`.
+- WebSocket, cache, seguridad, metricas, logs y tareas.
+- ORM SQLite, replicas de lectura y optimizacion.
+- DNS local, proxy HTTP y utilidades de borde.
+- IA, prediccion y un proyecto integral de ejemplo separado.
+
 ## Instalacion recomendada
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install wsbuilder
 ```
+
+Si tu distribucion protege el Python del sistema con PEP 668 y muestra
+`externally-managed-environment`, usa el flujo en `venv` documentado abajo.
 
 La guia completa esta en [Instalacion](install.md).
 
@@ -60,6 +71,8 @@ Si necesitas compilar e instalar localmente sin acceso a PyPI, usa:
 
 ```bash
 python -m build --no-isolation
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install --no-index dist/wsbuilder-*.whl
 ```
 
@@ -90,3 +103,16 @@ Tras instalar el paquete puedes levantar la demo:
 ```bash
 wsbuilder --host 0.0.0.0 --port 8765
 ```
+
+## Siguientes lecturas
+
+- [Arquitectura](architecture.md)
+- [App y HTTP](app-http.md)
+- [WebSocket](websocket.md)
+- [Datos y ORM](data-orm.md)
+- [Cache y Seguridad](cache-security.md)
+- [Observabilidad y Tareas](observability-tasks.md)
+- [Red y Edge](network-edge.md)
+- [IA y Prediccion](ai-predict.md)
+- [Mapa de API publica](api-map.md)
+- [Proyecto integral](full-project.md)

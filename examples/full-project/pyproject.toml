@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wsbuilder-full-project-demo"
+version = "0.1.0"
+description = "Proyecto integral de ejemplo para wsbuilder."
+requires-python = ">=3.11"
+dependencies = ["wsbuilder"]
+
+[tool.setuptools]
+py-modules = ["app", "upstream"]
