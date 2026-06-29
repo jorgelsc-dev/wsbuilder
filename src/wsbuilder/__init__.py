@@ -94,8 +94,7 @@ from .ia import (
 )
 from .predicts import Predictor
 
-__version__ = "0.9.1.dev0"
-
+__version__ = "0.25.3"
 __all__ = [
     "App",
     "HTTPServer",
