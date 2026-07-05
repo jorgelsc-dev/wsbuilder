@@ -13,7 +13,7 @@ from wsbuilder.db_replicas import (
 from wsbuilder.orm import Database, Model, TextField, IntegerField
 
 
-class TestUser(Model):
+class ReplicaUser(Model):
     """Test model for replica tests."""
     __tablename__ = "test_users"
     
@@ -33,6 +33,28 @@ def test_sqlite3_optimization_config():
     assert config.foreign_keys is True
 
 
+def test_database_cache_size_mb_uses_mebibytes():
+    """Database cache_size_mb should map to SQLite KiB units."""
+    db = Database(":memory:", cache_size_mb=10)
+    try:
+        assert db.get_pragma("cache_size") == -10240
+    finally:
+        db.close()
+
+
+def test_optimized_database_cache_size_uses_kib_budget():
+    """OptimizedDatabase cache_size keeps the documented KiB semantics."""
+    db = OptimizedDatabase(
+        ":memory:",
+        optimization_config=SQLite3OptimizationConfig(cache_size=10000),
+        enable_replicas=False,
+    )
+    try:
+        assert db.get_pragma("cache_size") == -10000
+    finally:
+        db.close()
+
+
 def test_database_replica_read_only():
     """Test that read-only replica works."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -41,8 +63,8 @@ def test_database_replica_read_only():
     try:
         # Create and populate database
         db = Database(db_path, enable_wal=True)
-        TestUser.create_table(db)
-        user = TestUser.create(db, name="Alice", email="alice@example.com")
+        ReplicaUser.create_table(db)
+        user = ReplicaUser.create(db, name="Alice", email="alice@example.com")
         db.close()
         
         # Read from replica
@@ -70,9 +92,9 @@ def test_database_replica_pool():
     try:
         # Create and populate database
         db = Database(db_path, enable_wal=True)
-        TestUser.create_table(db)
+        ReplicaUser.create_table(db)
         for i in range(5):
-            TestUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
+            ReplicaUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
         db.close()
         
         # Test pool
@@ -117,11 +139,11 @@ def test_database_with_wal_enabled():
         journal_mode = db.get_pragma("journal_mode")
         assert journal_mode.upper() == "WAL"
         
-        TestUser.create_table(db)
-        user = TestUser.create(db, name="Bob", email="bob@example.com")
+        ReplicaUser.create_table(db)
+        user = ReplicaUser.create(db, name="Bob", email="bob@example.com")
         
         # Verify data was written
-        found = TestUser.get(db, id=user.id)
+        found = ReplicaUser.get(db, id=user.id)
         assert found.name == "Bob"
         
         db.close()
@@ -144,13 +166,13 @@ def test_database_with_replicas():
     try:
         # Create with replicas
         db = Database(db_path, enable_wal=True, enable_replicas=True, replica_count=2)
-        
-        TestUser.create_table(db)
-        user1 = TestUser.create(db, name="Charlie", email="charlie@example.com")
-        user2 = TestUser.create(db, name="Diana", email="diana@example.com")
+
+        ReplicaUser.create_table(db)
+        user1 = ReplicaUser.create(db, name="Charlie", email="charlie@example.com")
+        user2 = ReplicaUser.create(db, name="Diana", email="diana@example.com")
         
         # Read from main connection
-        all_users = TestUser.objects(db).all()
+        all_users = ReplicaUser.objects(db).all()
         assert len(all_users) == 2
 
         replica_calls = {"fetchall": 0, "scalar": 0}
@@ -168,16 +190,16 @@ def test_database_with_replicas():
         db.read_replica_fetchall = tracked_fetchall
         db.read_replica_scalar = tracked_scalar
 
-        replica_rows = TestUser.objects(db).using("replica").order_by("-id").values("id", "name", "email")
+        replica_rows = ReplicaUser.objects(db).using("replica").order_by("-id").values("id", "name", "email")
         assert [row["name"] for row in replica_rows] == ["Diana", "Charlie"]
         assert replica_calls["fetchall"] == 1
 
-        replica_count = TestUser.objects(db).using("replica").count()
+        replica_count = ReplicaUser.objects(db).using("replica").count()
         assert replica_count == 2
         assert replica_calls["scalar"] == 1
 
         try:
-            TestUser.objects(db).using("replica").filter(id=user1.id).update(name="Eve")
+            ReplicaUser.objects(db).using("replica").filter(id=user1.id).update(name="Eve")
             raise AssertionError("Replica querysets must be read-only")
         except RuntimeError:
             pass
@@ -208,11 +230,11 @@ def test_database_checkpoint():
     
     try:
         db = Database(db_path, enable_wal=True)
-        TestUser.create_table(db)
+        ReplicaUser.create_table(db)
         
         # Insert some data
         for i in range(100):
-            TestUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
+            ReplicaUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
         
         # Checkpoint should not raise
         db.checkpoint("RESTART")
@@ -240,17 +262,17 @@ def test_database_optimize():
     
     try:
         db = Database(db_path)
-        TestUser.create_table(db)
+        ReplicaUser.create_table(db)
         
         # Insert and delete data
         user_ids = []
         for i in range(50):
-            user = TestUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
+            user = ReplicaUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
             user_ids.append(user.id)
         
         # Delete half
         for uid in user_ids[:25]:
-            TestUser.objects(db).filter(id=uid).delete()
+            ReplicaUser.objects(db).filter(id=uid).delete()
         
         # Optimize should not raise
         db.optimize()
@@ -279,10 +301,10 @@ def test_concurrent_reads_with_replicas():
     try:
         # Setup
         db = Database(db_path, enable_wal=True, enable_replicas=True, replica_count=3)
-        TestUser.create_table(db)
+        ReplicaUser.create_table(db)
         
         for i in range(20):
-            TestUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
+            ReplicaUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
         
         for _ in range(5):
             results = []
@@ -321,6 +343,12 @@ if __name__ == "__main__":
     # Run tests
     test_sqlite3_optimization_config()
     print("✓ test_sqlite3_optimization_config passed")
+
+    test_database_cache_size_mb_uses_mebibytes()
+    print("✓ test_database_cache_size_mb_uses_mebibytes passed")
+
+    test_optimized_database_cache_size_uses_kib_budget()
+    print("✓ test_optimized_database_cache_size_uses_kib_budget passed")
     
     test_database_replica_read_only()
     print("✓ test_database_replica_read_only passed")

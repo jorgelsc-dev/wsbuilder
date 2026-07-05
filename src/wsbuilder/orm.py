@@ -49,6 +49,13 @@ def _is_write_statement(sql: str) -> bool:
     return _first_keyword(sql) in _WRITE_PREFIXES
 
 
+def _pragma_cache_size_from_mb(size_mb: int) -> int:
+    megabytes = max(0, int(size_mb or 0))
+    if megabytes == 0:
+        return 0
+    return -(megabytes * 1024)
+
+
 class SQL:
     """Raw SQL expression helper for DDL defaults."""
 
@@ -306,7 +313,7 @@ class Database:
             base_pragmas["journal_mode"] = "WAL"
             base_pragmas["wal_autocheckpoint"] = 1000
         
-        base_pragmas["cache_size"] = -cache_size_mb
+        base_pragmas["cache_size"] = _pragma_cache_size_from_mb(cache_size_mb)
         base_pragmas["synchronous"] = "NORMAL"
         base_pragmas["temp_store"] = "MEMORY"
         base_pragmas["mmap_size"] = 30000000
@@ -739,8 +746,8 @@ class QuerySet:
 
     def values(self, *fields: str):
         if fields:
-            columns = [quote_identifier(name) for name in fields]
             selected = list(fields)
+            columns = [self._column(name) for name in selected]
         else:
             selected = list(self.model._meta["fields"].keys())
             columns = [quote_identifier(name) for name in selected]
@@ -882,6 +889,13 @@ class Model(metaclass=ModelMeta):
         pk_value = self.pk_value()
 
         if pk_name and pk_value is not None:
+            pk_field = fields[pk_name]
+            pk_db_value = pk_field.to_db(pk_value)
+            exists = db.scalar(
+                f"SELECT 1 FROM {table} WHERE {quote_identifier(pk_name)} = ? LIMIT 1",
+                (pk_db_value,),
+                default=None,
+            )
             set_parts = []
             params = []
             for name, field in fields.items():
@@ -889,13 +903,16 @@ class Model(metaclass=ModelMeta):
                     continue
                 set_parts.append(f"{quote_identifier(name)} = ?")
                 params.append(field.to_db(getattr(self, name)))
-            params.append(fields[pk_name].to_db(pk_value))
-            sql = (
-                f"UPDATE {table} SET " + ", ".join(set_parts) +
-                f" WHERE {quote_identifier(pk_name)} = ?"
-            )
-            cur = db.execute(sql, params)
-            return cur.rowcount
+            if exists is not None:
+                if not set_parts:
+                    return 1
+                params.append(pk_db_value)
+                sql = (
+                    f"UPDATE {table} SET " + ", ".join(set_parts) +
+                    f" WHERE {quote_identifier(pk_name)} = ?"
+                )
+                cur = db.execute(sql, params)
+                return cur.rowcount
 
         cols = []
         placeholders = []

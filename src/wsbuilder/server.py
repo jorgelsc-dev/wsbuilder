@@ -4,7 +4,7 @@ import threading
 import time
 
 from .http import Request, Response, parse_http_request, send_http_response
-from .ws import handshake_websocket_with_options, is_ws_request, recv_exact
+from .ws import _websocket_handshake_error_response, handshake_websocket_with_options, is_ws_request, recv_exact
 
 
 class HTTPServer:
@@ -142,9 +142,11 @@ class HTTPServer:
                 try:
                     cl = int(headers["content-length"])
                 except Exception:
-                    cl = 0
+                    send_http_response(conn, Response.text("Invalid Content-Length", status=400))
+                    return
                 if cl < 0:
-                    cl = 0
+                    send_http_response(conn, Response.text("Invalid Content-Length", status=400))
+                    return
                 if cl > self.MAX_REQUEST_BODY_BYTES:
                     send_http_response(
                         conn,
@@ -159,6 +161,8 @@ class HTTPServer:
                         except socket.timeout:
                             send_http_response(conn, Response.text("Request Timeout", status=408))
                             return
+                elif len(body) > cl:
+                    body = body[:cl]
                 if len(body) > self.MAX_REQUEST_BODY_BYTES:
                     send_http_response(
                         conn,
@@ -220,6 +224,22 @@ class HTTPServer:
                         )
                     if security:
                         security.observe_response(request, response.status)
+                    return
+                handshake_error = _websocket_handshake_error_response(headers)
+                if handshake_error is not None:
+                    send_http_response(conn, handshake_error)
+                    if metrics:
+                        elapsed = (time.time() - started) * 1000.0
+                        metrics.error("ws_handshake", handshake_error.status)
+                        metrics.http_response_sent(
+                            request.method,
+                            request.path,
+                            handshake_error.status,
+                            body_size=len(handshake_error.body),
+                            duration_ms=elapsed,
+                        )
+                    if security:
+                        security.observe_response(request, handshake_error.status)
                     return
                 ws = handshake_websocket_with_options(
                     conn,

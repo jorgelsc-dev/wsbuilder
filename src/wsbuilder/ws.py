@@ -82,6 +82,28 @@ def _normalize_protocols(value):
     return tuple(str(part).strip() for part in value if str(part).strip())
 
 
+def _websocket_handshake_error_response(headers):
+    key = headers.get("sec-websocket-key", "")
+    if not key:
+        return Response.text("Missing Sec-WebSocket-Key", status=400)
+    if not _is_valid_websocket_key(key):
+        return Response.text("Invalid Sec-WebSocket-Key", status=400)
+
+    if not _header_token_contains(headers.get("connection", ""), "upgrade"):
+        return Response.text("Missing/invalid Connection: Upgrade", status=400)
+    if str(headers.get("upgrade", "")).strip().lower() != "websocket":
+        return Response.text("Missing/invalid Upgrade: websocket", status=400)
+
+    version = str(headers.get("sec-websocket-version", "")).strip()
+    if version != "13":
+        return Response(
+            status=426,
+            body=b"Unsupported WebSocket Version",
+            headers={"Sec-WebSocket-Version": "13"},
+        )
+    return None
+
+
 def handshake_websocket_with_options(
     conn,
     addr,
@@ -98,32 +120,11 @@ def handshake_websocket_with_options(
     io_poll_interval=1.0,
     ping_payload=b"",
 ):
+    error_response = _websocket_handshake_error_response(headers)
+    if error_response is not None:
+        send_http_response(conn, error_response)
+        return None
     key = headers.get("sec-websocket-key", "")
-    if not key:
-        send_http_response(conn, Response.text("Missing Sec-WebSocket-Key", status=400))
-        return None
-    if not _is_valid_websocket_key(key):
-        send_http_response(conn, Response.text("Invalid Sec-WebSocket-Key", status=400))
-        return None
-
-    if not _header_token_contains(headers.get("connection", ""), "upgrade"):
-        send_http_response(conn, Response.text("Missing/invalid Connection: Upgrade", status=400))
-        return None
-    if str(headers.get("upgrade", "")).strip().lower() != "websocket":
-        send_http_response(conn, Response.text("Missing/invalid Upgrade: websocket", status=400))
-        return None
-
-    version = str(headers.get("sec-websocket-version", "")).strip()
-    if version != "13":
-        send_http_response(
-            conn,
-            Response(
-                status=426,
-                body=b"Unsupported WebSocket Version",
-                headers={"Sec-WebSocket-Version": "13"},
-            ),
-        )
-        return None
 
     supported = _normalize_protocols(supported_subprotocols)
     subprotocol = ""
