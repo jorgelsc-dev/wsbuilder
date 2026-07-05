@@ -19,6 +19,10 @@ db = Database(
 )
 ```
 
+`cache_size_mb` se interpreta en MiB reales y se traduce al `PRAGMA cache_size`
+de SQLite en KiB, que es la unidad esperada por SQLite cuando el valor es
+negativo.
+
 Capacidades principales:
 
 - `execute`, `executemany`, `fetchone`, `fetchall`, `scalar`.

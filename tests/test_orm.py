@@ -30,11 +30,18 @@ class Profile(Model):
     created_at = DateTimeField(default=lambda: datetime.now(UTC), null=False)
 
 
+class Session(Model):
+    __tablename__ = "sessions"
+
+    key = TextField(primary_key=True)
+
+
 class TestORM(unittest.TestCase):
     def setUp(self):
         self.db = Database(":memory:")
         User.create_table(self.db)
         Profile.create_table(self.db)
+        Session.create_table(self.db)
 
     def tearDown(self):
         self.db.close()
@@ -96,6 +103,32 @@ class TestORM(unittest.TestCase):
             for x in User.objects(self.db).exclude(active=False).order_by("username").values("username")
         ]
         self.assertEqual(usernames, ["a", "b"])
+
+    def test_save_with_explicit_primary_key_inserts_then_updates(self):
+        manual = User.create(self.db, id=10, username="manual", age=40, active=True)
+        self.assertEqual(manual.id, 10)
+        self.assertEqual(User.objects(self.db).count(), 1)
+        self.assertEqual(User.get(self.db, id=10).username, "manual")
+
+        manual.age = 41
+        updated = manual.save(self.db)
+        self.assertEqual(updated, 1)
+        self.assertEqual(User.get(self.db, id=10).age, 41)
+
+    def test_save_handles_models_with_only_primary_key(self):
+        session = Session(key="abc")
+        inserted = session.save(self.db)
+        self.assertEqual(inserted, 1)
+        self.assertEqual(Session.objects(self.db).count(), 1)
+
+        updated = session.save(self.db)
+        self.assertEqual(updated, 1)
+        self.assertEqual(Session.objects(self.db).count(), 1)
+
+    def test_values_rejects_unknown_fields(self):
+        User.create(self.db, username="alice", age=30, active=True)
+        with self.assertRaises(ValueError):
+            User.objects(self.db).values("missing")
 
 
 if __name__ == "__main__":

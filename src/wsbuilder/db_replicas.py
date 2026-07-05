@@ -16,8 +16,8 @@ class SQLite3OptimizationConfig:
     # WAL mode - enables multiple readers
     journal_mode: str = "WAL"
     
-    # Memory for query optimization
-    cache_size: int = 10000  # Pages (negative for MB)
+    # Memory budget in KiB used with PRAGMA cache_size < 0.
+    cache_size: int = 10000
     
     # Synchronization level (FULL=safer, NORMAL=faster)
     synchronous: str = "NORMAL"
@@ -168,6 +168,13 @@ class DatabaseReplicaPool:
             replica.close()
 
 
+def _pragma_cache_size_from_kib(size_kib: int) -> int:
+    kibibytes = max(0, int(size_kib or 0))
+    if kibibytes == 0:
+        return 0
+    return -kibibytes
+
+
 class OptimizedDatabase:
     """SQLite3 database with built-in optimizations."""
     
@@ -228,7 +235,7 @@ class OptimizedDatabase:
         
         base_pragmas = {
             "journal_mode": config.journal_mode,
-            "cache_size": -config.cache_size,  # Negative = MB
+            "cache_size": _pragma_cache_size_from_kib(config.cache_size),
             "synchronous": config.synchronous,
             "temp_store": config.temp_store,
             "busy_timeout": int(timeout * 1000),
@@ -259,28 +266,30 @@ class OptimizedDatabase:
     def _log(self, *parts):
         if self.debug:
             print("[DB]", *parts)
-    
+
     def _get_tx_depth(self) -> int:
         return getattr(self._tx_depth, "value", 0)
-    
+
     def _set_tx_depth(self, value: int):
         self._tx_depth.value = value
-    
+
     def in_transaction(self) -> bool:
         return self._get_tx_depth() > 0
-    
+
     def set_pragma(self, name: str, value):
         """Set a PRAGMA value."""
         from .orm import validate_identifier
+
         validate_identifier(name)
         sql = f"PRAGMA {name}={value}"
         with self._lock:
             self._log(sql)
             self._conn.execute(sql)
-    
+
     def get_pragma(self, name: str):
         """Get a PRAGMA value."""
         from .orm import validate_identifier
+
         validate_identifier(name)
         sql = f"PRAGMA {name}"
         with self._lock:
@@ -288,23 +297,23 @@ class OptimizedDatabase:
             cur = self._conn.execute(sql)
             row = cur.fetchone()
             return None if row is None else row[0]
-    
+
     def execute(self, sql: str, params=None, *, commit: bool | None = None):
         """Execute a query (write or read)."""
         from .orm import _is_write_statement
-        
+
         if params is None:
             params = ()
         if commit is None:
             commit = _is_write_statement(sql)
-        
+
         with self._lock:
             self._log("SQL:", sql.strip(), "params=", params)
             cur = self._conn.execute(sql, tuple(params))
             if commit and not self.in_transaction():
                 self._conn.commit()
             return cur
-    
+
     def executemany(
         self,
         sql: str,
@@ -314,77 +323,78 @@ class OptimizedDatabase:
     ) -> int:
         """Execute many queries."""
         from .orm import _is_write_statement
-        
+
         if commit is None:
             commit = _is_write_statement(sql)
-        
+
         with self._lock:
             self._log("SQL many:", sql.strip())
             cur = self._conn.executemany(sql, [tuple(p) for p in seq_of_params])
             if commit and not self.in_transaction():
                 self._conn.commit()
             return cur.rowcount
-    
+
     def fetchone(self, sql: str, params=None):
         """Fetch one row."""
         return self.execute(sql, params).fetchone()
-    
+
     def fetchall(self, sql: str, params=None):
         """Fetch all rows."""
         return self.execute(sql, params).fetchall()
-    
+
     def scalar(self, sql: str, params=None, default=None):
         """Fetch a scalar value."""
         row = self.fetchone(sql, params)
         if row is None:
             return default
         return row[0]
-    
+
     def read_replica_fetchone(self, sql: str, params=None):
         """Execute query on a read replica."""
         if self._replicas is None:
             return self.fetchone(sql, params)
         return self._replicas.fetchone(sql, params)
-    
+
     def read_replica_fetchall(self, sql: str, params=None):
         """Execute query on a read replica."""
         if self._replicas is None:
             return self.fetchall(sql, params)
         return self._replicas.fetchall(sql, params)
-    
+
     def read_replica_scalar(self, sql: str, params=None, default=None):
         """Execute query on a read replica."""
         if self._replicas is None:
             return self.scalar(sql, params, default)
         return self._replicas.scalar(sql, params, default)
-    
+
     def checkpoint(self, mode: str = "RESTART"):
         """Perform WAL checkpoint."""
         with self._lock:
             self._log(f"PRAGMA wal_checkpoint({mode})")
             self._conn.execute(f"PRAGMA wal_checkpoint({mode})")
-    
+
     def vacuum(self):
         """Vacuum the database."""
         with self._lock:
             self._log("VACUUM")
             self._conn.execute("VACUUM")
-    
+
     def transaction(self):
         """Get a transaction context manager."""
         from .orm import Transaction
+
         return Transaction(self)
-    
+
     def close(self):
         """Close the database and all replicas."""
         with self._lock:
             if self._replicas:
                 self._replicas.close_all()
             self._conn.close()
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc, tb):
         self.close()
         return False
