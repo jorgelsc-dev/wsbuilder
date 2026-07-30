@@ -72,6 +72,39 @@ def _normalize_methods(methods):
     return tuple(result)
 
 
+def _normalize_headers(headers):
+    return {
+        str(key or "").strip().lower(): str(value)
+        for key, value in (headers or {}).items()
+        if str(key or "").strip()
+    }
+
+
+def _header_value(headers, name, default=""):
+    return _normalize_headers(headers).get(str(name or "").lower(), default)
+
+
+def _cache_control_directives(headers):
+    raw = _header_value(headers, "cache-control", "")
+    directives = {}
+    for part in str(raw or "").split(","):
+        name, separator, value = part.strip().partition("=")
+        normalized = name.strip().lower()
+        if not normalized:
+            continue
+        directives[normalized] = value.strip().strip('"') if separator else None
+    return directives
+
+
+def _vary_names(headers):
+    raw = _header_value(headers, "vary", "")
+    return {
+        name.strip().lower()
+        for name in str(raw or "").split(",")
+        if name.strip()
+    }
+
+
 def _strip_uncacheable_headers(headers):
     clean = {}
     for key, value in (headers or {}).items():
@@ -141,7 +174,8 @@ class ViewResponseCache:
             self.store.close()
 
     def _inc_stat(self, key, step=1):
-        self._stats[key] = self._stats.get(key, 0) + int(step)
+        with self._lock:
+            self._stats[key] = self._stats.get(key, 0) + int(step)
 
     def add_global_rule(
         self,
@@ -232,27 +266,64 @@ class ViewResponseCache:
         cfg = self._route_cache_config(route)
         if cfg is not None and cfg.get("enabled") is False:
             return False
+        if not self._request_allows_cache(request, cfg):
+            return False
         if cfg is not None and cfg.get("enabled") is True:
             return True
         if self.default_ttl is not None:
             return True
         return self._global_rule_count() > 0
 
+    def _request_allows_cache(self, request, cfg):
+        headers = _normalize_headers(getattr(request, "headers", {}) or {})
+        directives = _cache_control_directives(headers)
+        if "no-cache" in directives or "no-store" in directives:
+            return False
+        if directives.get("max-age") == "0":
+            return False
+        private_names = {
+            name
+            for name in ("authorization", "cookie")
+            if headers.get(name)
+        }
+        if not private_names:
+            return True
+        return isinstance(cfg, Mapping) and cfg.get("allow_private") is True
+
+    def _vary_headers_for_key(self, request, cfg):
+        names = set()
+        if isinstance(cfg, Mapping):
+            configured = cfg.get("vary_headers")
+            if isinstance(configured, str):
+                configured = [configured]
+            if configured:
+                names.update(
+                    str(name).strip().lower()
+                    for name in configured
+                    if str(name).strip()
+                )
+            if cfg.get("allow_private") is True:
+                headers = _normalize_headers(getattr(request, "headers", {}) or {})
+                names.update(
+                    name
+                    for name in ("authorization", "cookie")
+                    if headers.get(name)
+                )
+        return names
+
     def _cache_key(self, request, route, cfg):
         method = str(getattr(request, "method", "") or "").upper()
         path = str(getattr(request, "path", "") or "")
         query_string = str(getattr(request, "query_string", "") or "")
         query = dict(getattr(request, "query", {}) or {})
-        headers = dict(getattr(request, "headers", {}) or {})
+        headers = _normalize_headers(getattr(request, "headers", {}) or {})
 
         include_query = True
         vary_query = None
-        vary_headers = None
         custom_key = None
         if isinstance(cfg, Mapping):
             include_query = bool(cfg.get("include_query", True))
             vary_query = cfg.get("vary_query")
-            vary_headers = cfg.get("vary_headers")
             custom_key = cfg.get("key")
 
         key_data = {
@@ -273,21 +344,15 @@ class ViewResponseCache:
             else:
                 key_data["query_string"] = query_string
 
-        if vary_headers:
-            if isinstance(vary_headers, str):
-                vary_header_names = [vary_headers]
-            else:
-                vary_header_names = list(vary_headers)
+        vary_header_names = self._vary_headers_for_key(request, cfg)
+        if vary_header_names:
             key_data["headers"] = {
-                str(name).lower(): str(headers.get(str(name).lower(), ""))
-                for name in sorted(str(x) for x in vary_header_names)
+                name: str(headers.get(name, ""))
+                for name in sorted(vary_header_names)
             }
 
         if callable(custom_key):
-            try:
-                key_data["custom"] = str(custom_key(request))
-            except Exception:
-                key_data["custom"] = ""
+            key_data["custom"] = str(custom_key(request))
         elif custom_key is not None:
             key_data["custom"] = str(custom_key)
 
@@ -303,7 +368,7 @@ class ViewResponseCache:
             ttl = max(0.0, _safe_float(cfg.get("ttl"), 0.0))
             return ttl if ttl > 0 else None
 
-        mimetype = _normalize_mimetype((response.headers or {}).get("Content-Type", ""))
+        mimetype = _normalize_mimetype(_header_value(response.headers, "content-type", ""))
         method = str(getattr(request, "method", "") or "").upper()
         path = str(getattr(request, "path", "") or "")
 
@@ -340,18 +405,22 @@ class ViewResponseCache:
         has_set_cookie = any(str(k).lower() == "set-cookie" for k in (response.headers or {}).keys())
         if has_set_cookie:
             return True
-        low = str((response.headers or {}).get("Cache-Control", "")).lower()
-        return "no-store" in low or "private" in low
+        directives = _cache_control_directives(response.headers)
+        if {"no-store", "private", "no-cache"} & directives.keys():
+            return True
+        return (
+            directives.get("max-age") == "0"
+            or directives.get("s-maxage") == "0"
+        )
 
     def fetch(self, request, route):
         if not self._route_allows_lookup(route, request):
             return None
 
-        cfg = self._route_cache_config(route)
-        key = self._cache_key(request, route, cfg)
-
         self._inc_stat("lookups")
         try:
+            cfg = self._route_cache_config(route)
+            key = self._cache_key(request, route, cfg)
             payload = self.store.get(key, namespace=self.namespace)
         except Exception:
             self._inc_stat("errors")
@@ -396,10 +465,18 @@ class ViewResponseCache:
         if cfg is not None and cfg.get("enabled") is False:
             self._inc_stat("skips")
             return False
+        if not self._request_allows_cache(request, cfg):
+            self._inc_stat("skips")
+            return False
         if int(response.status) not in self._cacheable_statuses(cfg):
             self._inc_stat("skips")
             return False
         if self._is_cache_control_blocked(response):
+            self._inc_stat("skips")
+            return False
+        vary_names = _vary_names(response.headers)
+        covered_vary_names = self._vary_headers_for_key(request, cfg)
+        if "*" in vary_names or not vary_names.issubset(covered_vary_names):
             self._inc_stat("skips")
             return False
 
@@ -408,14 +485,17 @@ class ViewResponseCache:
             self._inc_stat("skips")
             return False
 
-        cfg = self._route_cache_config(route)
-        key = self._cache_key(request, route, cfg)
+        try:
+            key = self._cache_key(request, route, cfg)
+        except Exception:
+            self._inc_stat("errors")
+            return False
         clean_headers = _strip_uncacheable_headers(response.headers)
         record = {
             "status": int(response.status),
             "reason": str(response.reason or ""),
             "headers": clean_headers,
-            "content_type": _normalize_mimetype(clean_headers.get("Content-Type", "")),
+            "content_type": _normalize_mimetype(_header_value(clean_headers, "content-type", "")),
             "body_b64": base64.b64encode(bytes(response.body or b"")).decode("ascii"),
             "cached_at": time.time(),
         }

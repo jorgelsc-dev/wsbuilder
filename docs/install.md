@@ -54,7 +54,7 @@ Usa esta ruta cuando ya tienes una copia local del repositorio y no quieres que
 
 - Tener el repositorio clonado o copiado en la maquina local.
 - Tener Python `3.11+`.
-- Tener disponibles en el entorno `build`, `setuptools` y `wheel`.
+- Tener disponibles en el entorno `build`, `setuptools>=77` y `wheel`.
 - Si vas a usar un `venv`, crearlo antes de desconectarte o con herramientas ya instaladas localmente.
 
 ### Compilar el wheel local sin red

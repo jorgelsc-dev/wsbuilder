@@ -39,7 +39,21 @@ def quote_identifier(name: str) -> str:
 
 
 def _first_keyword(sql: str) -> str:
-    stripped = sql.strip()
+    stripped = str(sql or "").lstrip("\ufeff \t\r\n")
+    while stripped:
+        if stripped.startswith("--"):
+            newline = stripped.find("\n", 2)
+            if newline < 0:
+                return ""
+            stripped = stripped[newline + 1:].lstrip("\ufeff \t\r\n")
+            continue
+        if stripped.startswith("/*"):
+            end = stripped.find("*/", 2)
+            if end < 0:
+                return ""
+            stripped = stripped[end + 2:].lstrip("\ufeff \t\r\n")
+            continue
+        break
     if not stripped:
         return ""
     return stripped.split(None, 1)[0].upper()
@@ -282,6 +296,7 @@ class Database:
         self._lock = threading.RLock()
         self._tx_depth = threading.local()
         self._replicas = None
+        self._savepoint_sequence = 0
 
         if shared_cache:
             dsn = "file::memory:?cache=shared" if path == ":memory:" else path
@@ -418,7 +433,22 @@ class Database:
             commit = _is_write_statement(sql)
         with self._lock:
             self._log("SQL many:", sql.strip())
-            cur = self._conn.executemany(sql, [tuple(p) for p in seq_of_params])
+            params = [tuple(p) for p in seq_of_params]
+            atomic = bool(commit) or self.in_transaction()
+            savepoint = None
+            if atomic:
+                self._savepoint_sequence += 1
+                savepoint = f"wsb_many_{self._savepoint_sequence}"
+                self._conn.execute(f"SAVEPOINT {savepoint}")
+            try:
+                cur = self._conn.executemany(sql, params)
+            except BaseException:
+                if savepoint is not None:
+                    self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                raise
+            if savepoint is not None:
+                self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             if commit and not self.in_transaction():
                 self._conn.commit()
             return cur.rowcount
@@ -468,51 +498,62 @@ class Transaction:
         self.db = db
         self._savepoint_name = None
         self._entered = False
+        self._lock_acquired = False
 
     def __enter__(self):
-        depth = self.db._get_tx_depth()
-        if depth == 0:
-            with self.db._lock:
+        if self._entered:
+            raise RuntimeError("Transaction context is already active")
+        self.db._lock.acquire()
+        self._lock_acquired = True
+        try:
+            depth = self.db._get_tx_depth()
+            if depth == 0:
                 self.db._log("BEGIN")
                 self.db._conn.execute("BEGIN")
-            self.db._set_tx_depth(1)
-        else:
-            self._savepoint_name = f"sp_{depth}"
-            with self.db._lock:
+                self.db._set_tx_depth(1)
+            else:
+                self._savepoint_name = f"sp_{depth}"
                 self.db._log("SAVEPOINT", self._savepoint_name)
                 self.db._conn.execute(f"SAVEPOINT {self._savepoint_name}")
-            self.db._set_tx_depth(depth + 1)
-        self._entered = True
-        return self
+                self.db._set_tx_depth(depth + 1)
+            self._entered = True
+            return self
+        except BaseException:
+            self._lock_acquired = False
+            self.db._lock.release()
+            raise
 
     def __exit__(self, exc_type, exc, tb):
         if not self._entered:
             return False
         depth = self.db._get_tx_depth()
-        if exc_type is None:
-            if self._savepoint_name is None:
-                with self.db._lock:
+        next_depth = 0 if self._savepoint_name is None else max(0, depth - 1)
+        try:
+            if exc_type is None:
+                if self._savepoint_name is None:
                     self.db._log("COMMIT")
-                    self.db._conn.commit()
-                self.db._set_tx_depth(0)
-            else:
-                with self.db._lock:
+                    try:
+                        self.db._conn.commit()
+                    except BaseException:
+                        self.db._conn.rollback()
+                        raise
+                else:
                     self.db._log("RELEASE", self._savepoint_name)
                     self.db._conn.execute(f"RELEASE SAVEPOINT {self._savepoint_name}")
-                self.db._set_tx_depth(depth - 1)
-        else:
-            if self._savepoint_name is None:
-                with self.db._lock:
+            else:
+                if self._savepoint_name is None:
                     self.db._log("ROLLBACK")
                     self.db._conn.rollback()
-                self.db._set_tx_depth(0)
-            else:
-                with self.db._lock:
+                else:
                     self.db._log("ROLLBACK TO", self._savepoint_name)
                     self.db._conn.execute(f"ROLLBACK TO SAVEPOINT {self._savepoint_name}")
                     self.db._conn.execute(f"RELEASE SAVEPOINT {self._savepoint_name}")
-                self.db._set_tx_depth(depth - 1)
-        self._entered = False
+        finally:
+            self.db._set_tx_depth(next_depth)
+            self._entered = False
+            if self._lock_acquired:
+                self._lock_acquired = False
+                self.db._lock.release()
         return False
 
 
@@ -719,6 +760,8 @@ class QuerySet:
         if self.limit_value is not None:
             sql += " LIMIT ?"
             params.append(self.limit_value)
+        elif self.offset_value is not None:
+            sql += " LIMIT -1"
         if self.offset_value is not None:
             sql += " OFFSET ?"
             params.append(self.offset_value)
@@ -924,10 +967,13 @@ class Model(metaclass=ModelMeta):
             cols.append(quote_identifier(name))
             placeholders.append("?")
             params.append(field.to_db(value))
-        sql = (
-            f"INSERT INTO {table} (" + ", ".join(cols) + ") VALUES (" +
-            ", ".join(placeholders) + ")"
-        )
+        if cols:
+            sql = (
+                f"INSERT INTO {table} (" + ", ".join(cols) + ") VALUES (" +
+                ", ".join(placeholders) + ")"
+            )
+        else:
+            sql = f"INSERT INTO {table} DEFAULT VALUES"
         cur = db.execute(sql, params)
         if pk_name and isinstance(fields[pk_name], IntegerField) and getattr(self, pk_name) is None:
             setattr(self, pk_name, cur.lastrowid)

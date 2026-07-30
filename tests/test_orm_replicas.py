@@ -127,6 +127,15 @@ def test_database_replica_pool():
             os.unlink(shm_path)
 
 
+def test_database_replica_pool_rejects_non_positive_size():
+    for value in (0, -1):
+        try:
+            DatabaseReplicaPool("unused.db", replica_count=value)
+        except ValueError:
+            continue
+        raise AssertionError(f"replica_count={value} must be rejected")
+
+
 def test_database_with_wal_enabled():
     """Test Database with WAL enabled."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:

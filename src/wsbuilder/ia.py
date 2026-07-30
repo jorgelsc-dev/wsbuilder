@@ -283,6 +283,20 @@ def _activation_derivative(activation, z_values, output_values=None):
     raise ValueError(f"Unsupported activation: {activation!r}")
 
 
+def _activation_backward(activation, z_values, output_values, grad_output):
+    """Return the vector-Jacobian product for an activation."""
+    if activation == "softmax":
+        weighted_gradient = _dot(grad_output, output_values)
+        return [
+            output * (gradient - weighted_gradient)
+            for output, gradient in zip(output_values, grad_output)
+        ]
+    return _hadamard(
+        grad_output,
+        _activation_derivative(activation, z_values, output_values),
+    )
+
+
 def _loss_value(prediction, target, loss):
     if len(prediction) != len(target):
         raise ValueError("prediction and target must have the same length")
@@ -406,6 +420,13 @@ def evaluate_errors(
     maximum_absolute_error = max(abs_errors)
     if permissible_error is None:
         permissible_error = maximum_absolute_error
+    else:
+        try:
+            permissible_error = float(permissible_error)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("permissible_error must be numeric") from exc
+        if not math.isfinite(permissible_error) or permissible_error < 0.0:
+            raise ValueError("permissible_error must be a finite non-negative number")
     within_permissible_error = maximum_absolute_error <= permissible_error
     return ErrorSummary(
         count=len(errors),
@@ -785,6 +806,14 @@ class NeuralNetwork:
                     target = Y_rows[sample_index]
                     epoch_loss += _loss_value(prediction, target, self.loss)
                     grad = self._output_gradient(prediction, target)
+                    if self.loss == "mse":
+                        output_layer = self.layers[-1]
+                        grad = _activation_backward(
+                            output_layer.activation,
+                            output_layer._cache_z,
+                            output_layer._cache_output,
+                            grad,
+                        )
 
                     for layer_index in range(len(self.layers) - 1, -1, -1):
                         layer = self.layers[layer_index]
@@ -831,6 +860,9 @@ class NeuralNetwork:
         class_to_index = {label: index for index, label in enumerate(classes)}
         if len(class_to_index) != len(classes):
             raise ValueError("classes must be unique")
+        for label in labels:
+            if label not in class_to_index:
+                raise ValueError(f"Unknown classification label: {label!r}")
         self.task = "classification"
         self._class_labels = classes
 
@@ -874,8 +906,17 @@ class NeuralNetwork:
     def predict_with_metrics(self, inputs, *, expected=None, permissible_error=None, confidence=_DEFAULT_CONFIDENCE):
         """Devuelve prediccion, desviacion, incertidumbre y error maximo permisible."""
         prediction = self.predict(inputs)
-        if not hasattr(self, "_calibration"):
-            self._calibration = [
+        coverage_factor = _coverage_factor(confidence)
+        if permissible_error is not None:
+            try:
+                permissible_error = float(permissible_error)
+            except (TypeError, ValueError) as exc:
+                raise TypeError("permissible_error must be numeric") from exc
+            if not math.isfinite(permissible_error) or permissible_error < 0.0:
+                raise ValueError("permissible_error must be a finite non-negative number")
+        calibration_rows = getattr(self, "_calibration", None)
+        if calibration_rows is None:
+            calibration_rows = [
                 ErrorSummary(
                     count=0,
                     mean_error=0.0,
@@ -885,7 +926,7 @@ class NeuralNetwork:
                     variance=0.0,
                     std_dev=0.0,
                     standard_uncertainty=0.0,
-                    coverage_factor=_coverage_factor(confidence),
+                    coverage_factor=coverage_factor,
                     expanded_uncertainty=0.0,
                     maximum_absolute_error=0.0,
                     maximum_permissible_error=0.0 if permissible_error is None else permissible_error,
@@ -902,13 +943,20 @@ class NeuralNetwork:
                 expected_vector = _vector_from_iterable(expected, label="expected", expected_length=len(prediction))
         metrics = []
         for output_index, value in enumerate(prediction):
-            calibration = self._calibration[min(output_index, len(self._calibration) - 1)]
+            calibration = calibration_rows[min(output_index, len(calibration_rows) - 1)]
+            maximum_permissible_error = (
+                calibration.maximum_permissible_error
+                if permissible_error is None
+                else permissible_error
+            )
             item = {
                 "prediction": value,
                 "deviation": calibration.std_dev,
-                "uncertainty": calibration.uncertainty,
+                "uncertainty": coverage_factor * calibration.standard_uncertainty,
                 "standard_uncertainty": calibration.standard_uncertainty,
-                "maximum_permissible_error": calibration.maximum_permissible_error,
+                "coverage_factor": coverage_factor,
+                "confidence": confidence,
+                "maximum_permissible_error": maximum_permissible_error,
             }
             if expected_vector is not None:
                 actual_error = value - expected_vector[output_index]

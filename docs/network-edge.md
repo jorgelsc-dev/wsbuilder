@@ -27,6 +27,15 @@ Capacidades visibles en la suite:
 - records con `TYPE####` y `rdata` crudo.
 - fallback a upstreams remotos cuando se habilita.
 
+El parser rechaza labels con tipos reservados, labels invalidos y nombres que
+superan el limite DNS. Un paquete malformado se descarta sin detener el loop del
+servidor. En respuestas wildcard, el owner sintetizado conserva el nombre
+consultado por el cliente.
+
+Cuando se usa fallback, una respuesta UDP solo se acepta si procede del
+upstream configurado, es una respuesta DNS y coincide en transaction ID y
+pregunta con la consulta original.
+
 Metodos publicos:
 
 - `add_record`
@@ -51,6 +60,10 @@ proxy.vhost("api.test.local", name="api-vhost").location("/api").upstream(
 ).build()
 ```
 
+Los targets HTTPS verifican certificados TLS por defecto. La opcion
+`verify_tls=False` queda disponible para entornos locales controlados, pero no
+debe usarse frente a upstreams no confiables.
+
 ## Construccion de reglas
 
 `ProxyRouteBuilder` soporta filtros por:
@@ -68,6 +81,11 @@ Tambien permite:
 - `hash_key(value)`
 - `default(value=True)`
 - `upstream(target, **kwargs)`
+
+Los prefijos respetan limites de segmento: `/api` coincide con `/api` y
+`/api/users`, no con `/apix`. `strip_prefix` aplica la misma regla. Si
+`preserve_host=False` se configura en una regla, el upstream recibe su propia
+autoridad como `Host`.
 
 ## Estrategias de balanceo
 
@@ -87,6 +105,10 @@ La API publica expone:
 - `power_of_two_choices`
 - `best`
 
+`ProxyI(default_balance=...)` establece el balance de las reglas que no lo
+sobrescriban. Los targets con `enabled=False` no participan en seleccion ni se
+reactivan implicitamente cuando todos estan deshabilitados.
+
 ## Instalacion sobre `App`
 
 ```python
@@ -103,6 +125,17 @@ Eso publica:
 - snapshot JSON de metricas del proxy
 - stream de metricas
 - dashboard HTML
+
+Los snapshots no consumen turnos de round-robin. Los valores de headers
+sensibles en `extra_headers` y filtros de reglas, como `Authorization`, cookies,
+tokens o API keys, se muestran como `[REDACTED]`; el valor real solo se conserva
+para el forwarding.
+
+ProxyI elimina headers hop-by-hop, incluidos los nombrados por `Connection`, y
+reconstruye `X-Forwarded-*` desde el peer, host y TLS reales. No reutiliza
+valores `Forwarded` aportados por un cliente directo. El limite
+`max_request_body_bytes` tambien se aplica al usar `dispatch()` directamente y
+responde `413` cuando el cuerpo lo supera.
 
 Para despachar trafico real, una ruta HTTP de tu aplicacion debe invocar
 `app.proxyi.dispatch(request)`.

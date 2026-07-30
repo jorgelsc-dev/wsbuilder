@@ -1,4 +1,5 @@
 import unittest
+from statistics import NormalDist
 
 from wsbuilder import DataSet, NeuralNetwork, TaskManager, describe_data, evaluate_errors, submit_training_task
 from wsbuilder.ia import DenseLayer
@@ -96,6 +97,95 @@ class TestIA(unittest.TestCase):
         self.assertEqual(task.status, "completed")
         self.assertEqual(len(async_history["loss"]), 1000)
         self.assertEqual(async_clf.predict_class([1, 0]), "yes")
+
+    def test_mse_applies_output_activation_derivative(self):
+        net = NeuralNetwork(seed=1, learning_rate=0.1, loss="mse")
+        output = net.add_dense(1, input_size=1, activation="sigmoid")
+        output.weights = [[0.0]]
+        output.biases = [0.0]
+
+        net.fit([[1.0]], [[0.0]], epochs=1, shuffle=False)
+
+        self.assertAlmostEqual(output.weights[0][0], -0.025)
+        self.assertAlmostEqual(output.biases[0], -0.025)
+
+    def test_mse_softmax_applies_full_output_jacobian(self):
+        net = NeuralNetwork(seed=1, learning_rate=0.1, loss="mse")
+        output = net.add_dense(2, input_size=1, activation="softmax")
+        output.weights = [[0.0], [0.0]]
+        output.biases = [0.0, 0.0]
+
+        net.fit([[1.0]], [[1.0, 0.0]], epochs=1, shuffle=False)
+
+        self.assertAlmostEqual(output.weights[0][0], 0.025)
+        self.assertAlmostEqual(output.weights[1][0], -0.025)
+
+    def test_categorical_cross_entropy_keeps_softmax_shortcut(self):
+        net = NeuralNetwork(
+            seed=1,
+            learning_rate=0.1,
+            loss="categorical_cross_entropy",
+            task="classification",
+        )
+        output = net.add_dense(2, input_size=1, activation="softmax")
+        output.weights = [[0.0], [0.0]]
+        output.biases = [0.0, 0.0]
+
+        net.fit([[1.0]], [[1.0, 0.0]], epochs=1, shuffle=False)
+
+        self.assertAlmostEqual(output.weights[0][0], 0.05)
+        self.assertAlmostEqual(output.weights[1][0], -0.05)
+
+    def test_predict_metrics_honors_confidence_and_permissible_error(self):
+        net = NeuralNetwork(seed=2, learning_rate=0.01, loss="mse")
+        net.add_dense(1, input_size=1, activation="linear")
+        net.fit(
+            [[0.0], [1.0], [2.0]],
+            [[0.0], [2.0], [4.0]],
+            epochs=1,
+            shuffle=False,
+        )
+
+        prediction = net.predict([1.0])[0]
+        report = net.predict_with_metrics(
+            [1.0],
+            expected=prediction + 1.0,
+            permissible_error=2.0,
+            confidence=0.5,
+        )
+        metrics = report["metrics"]
+
+        self.assertEqual(metrics["maximum_permissible_error"], 2.0)
+        self.assertTrue(metrics["within_permissible_error"])
+        self.assertEqual(metrics["confidence"], 0.5)
+        self.assertAlmostEqual(
+            metrics["coverage_factor"],
+            NormalDist().inv_cdf(0.75),
+        )
+        self.assertAlmostEqual(
+            metrics["uncertainty"],
+            metrics["coverage_factor"] * metrics["standard_uncertainty"],
+        )
+
+    def test_fit_classification_rejects_unknown_labels(self):
+        net = NeuralNetwork(
+            seed=3,
+            loss="binary_cross_entropy",
+            task="classification",
+        )
+        net.add_dense(1, input_size=1, activation="sigmoid")
+
+        with self.assertRaisesRegex(ValueError, "Unknown classification label"):
+            net.fit_classification(
+                [[0], [1]],
+                ["no", "unknown"],
+                classes=["no", "yes"],
+                epochs=1,
+            )
+
+    def test_permissible_error_must_be_non_negative(self):
+        with self.assertRaises(ValueError):
+            evaluate_errors([1.0], [1.0], permissible_error=-0.1)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ train, test = dataset.split(train_ratio=0.75, shuffle=False)
 
 Metodos utiles:
 
-- `sample_count()`, `feature_count()`, `target_count()`
+- `sample_count`, `feature_count`, `target_count`
 - `copy()`, `as_xy()`
 - `shuffle()`, `split()`, `batches()`
 - `describe_features()`, `describe_targets()`
@@ -66,12 +66,24 @@ Helpers exportados:
 - `describe_data(values)`
 - `evaluate_errors(expected, predicted, permissible_error=...)`
 
-Devuelven `DataSummary` y `ErrorSummary`, ambos con `uncertainty()`.
+Devuelven `DataSummary` y `ErrorSummary`, ambos con la propiedad `uncertainty`.
 
 ## Entrenamiento en background
 
 ```python
-from wsbuilder import TaskManager, submit_training_task
+from wsbuilder import NeuralNetwork, TaskManager, submit_training_task
+
+X = [[0, 0], [0, 1], [1, 0], [1, 1]]
+labels = ["no", "yes", "yes", "no"]
+
+net = NeuralNetwork(
+    seed=7,
+    learning_rate=0.3,
+    loss="binary_cross_entropy",
+    task="classification",
+)
+net.add_dense(6, input_size=2, activation="tanh")
+net.add_dense(1, activation="sigmoid")
 
 tasks = TaskManager(max_concurrent=1)
 task = submit_training_task(

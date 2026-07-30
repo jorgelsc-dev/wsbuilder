@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import threading
 import time
@@ -5,10 +7,10 @@ import uuid
 from html import escape as html_escape
 
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN
-from .cookies import build_set_cookie
+from .cookies import build_set_cookie, get_cookie
 from .http import Response
 from .tasks import TaskManager
-from .ws import sha1
+from .ws import _normalize_protocols, sha1
 
 THREAD_COOKIE_NAME = "wsbuilder-thread"
 THREAD_RESPONSE_ID_HEADER = "WSBuilder-Thread"
@@ -23,23 +25,11 @@ DEFAULT_AFFINITY_MAX_ENTRIES = 10000
 
 
 def _normalize_ws_protocols(value):
-    if not value:
-        return ()
-    if isinstance(value, str):
-        return tuple(part.strip() for part in value.split(",") if part.strip())
-    return tuple(str(part).strip() for part in value if str(part).strip())
+    return _normalize_protocols(value)
 
 
 def _constant_time_equals(a, b):
-    left = str(a or "").encode("utf-8")
-    right = str(b or "").encode("utf-8")
-    max_len = max(len(left), len(right))
-    diff = len(left) ^ len(right)
-    for i in range(max_len):
-        x = left[i] if i < len(left) else 0
-        y = right[i] if i < len(right) else 0
-        diff |= x ^ y
-    return diff == 0
+    return hmac.compare_digest(str(a or ""), str(b or ""))
 
 
 def _docs_sanitize(value):
@@ -67,6 +57,7 @@ class _RouteJob:
         self.done = threading.Event()
         self.result = None
         self.error = None
+        self.cancelled = False
 
 
 class _RouteThreadWorker:
@@ -105,6 +96,9 @@ class _RouteThreadWorker:
                 if not self._running and not self._jobs:
                     break
                 job = self._jobs.pop(0)
+                if job.cancelled:
+                    job.done.set()
+                    continue
                 self._active_jobs += 1
             try:
                 job.result = self.route.handler(job.request)
@@ -131,6 +125,11 @@ class _RouteThreadWorker:
         timeout = self.worker_timeout_seconds
         ok = job.done.wait(None if timeout <= 0 else timeout)
         if not ok:
+            with self._jobs_cond:
+                if job in self._jobs:
+                    self._jobs.remove(job)
+                    job.cancelled = True
+                    job.done.set()
             raise _RouteExecutionError(504, "Route worker execution timeout")
         if job.error is not None:
             raise job.error
@@ -227,8 +226,17 @@ class _RouteThreadPool:
 
     def resolve(self, request=None, cookie_thread_id=""):
         _ = request
-        _ = cookie_thread_id
         with self._lock:
+            if cookie_thread_id:
+                affinity_worker = self.by_id.get(str(cookie_thread_id))
+                if affinity_worker is not None:
+                    affinity_load = affinity_worker.load()
+                    if (
+                        self.route.requests_per_thread <= 0
+                        or affinity_load < self.route.requests_per_thread
+                    ):
+                        return affinity_worker
+
             selected = self._pick_least_busy_locked()
             if selected is not None:
                 return selected
@@ -279,8 +287,19 @@ class Route:
         affinity_max_entries=DEFAULT_AFFINITY_MAX_ENTRIES,
         cache=None,
     ):
-        self.path = path
-        self.methods = {m.upper() for m in methods}
+        self.path = str(path or "")
+        if not self.path.startswith("/") or any(
+            ord(char) < 32 for char in self.path
+        ):
+            raise ValueError("route path must start with '/' and contain no controls")
+        method_rows = (methods,) if isinstance(methods, str) else methods
+        self.methods = {
+            str(method).strip().upper()
+            for method in method_rows
+            if str(method).strip()
+        }
+        if not self.methods:
+            raise ValueError("routes must declare at least one HTTP method")
         self.handler = handler
         self.kind = kind
 
@@ -357,12 +376,28 @@ class Router:
         self.routes.append(route)
 
     def resolve(self, path, method=None):
+        normalized_method = None if method is None else str(method).upper()
         for route in self.routes:
             if route.path != path:
                 continue
-            if method is None or method.upper() in route.methods:
+            if normalized_method is None or normalized_method in route.methods:
                 return route
+        if normalized_method == "HEAD":
+            for route in self.routes:
+                if route.path == path and "GET" in route.methods:
+                    return route
         return None
+
+    def allowed_methods(self, path):
+        methods = set()
+        for route in self.routes:
+            if route.path == path:
+                methods.update(route.methods)
+        if "GET" in methods:
+            methods.add("HEAD")
+        if methods:
+            methods.add("OPTIONS")
+        return methods
 
 
 class App:
@@ -389,24 +424,61 @@ class App:
         self._thread_cookie_secret = raw_secret.encode("utf-8")
         self.thread_cookie_name = str(thread_cookie_name or THREAD_COOKIE_NAME)
 
-    def _sign_thread_cookie(self, route_path, thread_id):
-        payload = f"{route_path}|{thread_id}".encode("utf-8")
-        digest = sha1(self._thread_cookie_secret + b"|" + payload + b"|" + self._thread_cookie_secret)
-        sig = digest.hex()
-        return f"{thread_id}.{sig}"
+    def _sign_thread_cookie(self, route_path, thread_id, issued_at=None):
+        issued = int(time.time() if issued_at is None else issued_at)
+        payload = f"{route_path}|{thread_id}|{issued}".encode("utf-8")
+        sig = hmac.new(
+            self._thread_cookie_secret,
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
+        return f"{thread_id}.{issued}.{sig}"
 
-    def _verify_thread_cookie(self, route_path, raw_cookie):
+    def _verify_thread_cookie(
+        self,
+        route_path,
+        raw_cookie,
+        *,
+        ttl_seconds=DEFAULT_AFFINITY_TTL_SECONDS,
+    ):
         value = str(raw_cookie or "").strip()
         if not value or "." not in value:
             return ""
-        thread_id, sig = value.split(".", 1)
+        parts = value.split(".")
+        if len(parts) not in {2, 3}:
+            return ""
+        thread_id = parts[0]
         try:
             normalized = str(uuid.UUID(thread_id))
         except Exception:
             return ""
 
-        payload = f"{route_path}|{normalized}".encode("utf-8")
-        expected = sha1(self._thread_cookie_secret + b"|" + payload + b"|" + self._thread_cookie_secret).hex()
+        if len(parts) == 2:
+            sig = parts[1]
+            payload = f"{route_path}|{normalized}".encode("utf-8")
+            expected = sha1(
+                self._thread_cookie_secret
+                + b"|"
+                + payload
+                + b"|"
+                + self._thread_cookie_secret
+            ).hex()
+        else:
+            issued_text, sig = parts[1], parts[2]
+            try:
+                issued = int(issued_text)
+            except (TypeError, ValueError):
+                return ""
+            now = int(time.time())
+            ttl = max(0.0, float(ttl_seconds or 0.0))
+            if issued > now + 60 or (ttl > 0 and now - issued > ttl):
+                return ""
+            payload = f"{route_path}|{normalized}|{issued}".encode("utf-8")
+            expected = hmac.new(
+                self._thread_cookie_secret,
+                payload,
+                hashlib.sha256,
+            ).hexdigest()
         if not _constant_time_equals(sig, expected):
             return ""
         return normalized
@@ -511,10 +583,26 @@ class App:
         io_poll_interval=1.0,
         ping_payload=b"",
     ):
+        normalized_path = str(path or "")
+        if not normalized_path.startswith("/") or any(
+            ord(char) < 32 for char in normalized_path
+        ):
+            raise ValueError(
+                "WebSocket route path must start with '/' and contain no controls"
+            )
+        normalized_protocols = _normalize_ws_protocols(subprotocols)
+        normalized_ping_payload = (
+            ping_payload.encode("utf-8")
+            if isinstance(ping_payload, str)
+            else bytes(ping_payload or b"")
+        )
+        if len(normalized_ping_payload) > 125:
+            raise ValueError("WebSocket ping payload must be at most 125 bytes")
+
         def decorator(func):
-            self.ws_routes[path] = {
+            self.ws_routes[normalized_path] = {
                 "handler": func,
-                "subprotocols": _normalize_ws_protocols(subprotocols),
+                "subprotocols": normalized_protocols,
                 "idle_timeout": float(idle_timeout or 0.0),
                 "keepalive_interval": float(keepalive_interval or 0.0),
                 "pong_timeout": float(pong_timeout or 0.0),
@@ -523,11 +611,7 @@ class App:
                 "on_error": on_error,
                 "on_timeout": on_timeout,
                 "io_poll_interval": float(io_poll_interval or 1.0),
-                "ping_payload": (
-                    ping_payload.encode("utf-8")
-                    if isinstance(ping_payload, str)
-                    else bytes(ping_payload or b"")
-                ),
+                "ping_payload": normalized_ping_payload,
             }
             return func
 
@@ -1123,11 +1207,12 @@ class App:
                 return Response.text(decision.message, status=decision.status, headers=headers)
 
         if request.method == "OPTIONS":
-            route = self.router.resolve(request.path, method=None)
-            if route:
-                allow = sorted(route.methods | {"OPTIONS"})
+            allowed_methods = self.router.allowed_methods(request.path)
+            if allowed_methods:
                 headers = {
-                    "Access-Control-Allow-Methods": ", ".join(allow),
+                    "Access-Control-Allow-Methods": ", ".join(
+                        sorted(allowed_methods)
+                    ),
                     "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Key",
                 }
                 if cors_allow_origin:
@@ -1138,6 +1223,13 @@ class App:
 
         route = self.router.resolve(request.path, request.method)
         if not route:
+            allowed_methods = self.router.allowed_methods(request.path)
+            if allowed_methods:
+                return Response.text(
+                    "Method Not Allowed",
+                    status=405,
+                    headers={"Allow": ", ".join(sorted(allowed_methods))},
+                )
             return Response.text("Not Found", status=404)
 
         caches = getattr(self, "caches", None)
@@ -1149,7 +1241,20 @@ class App:
         selected_worker = None
         try:
             if route.thread_pool:
-                selected_worker = route.thread_pool.resolve(request=request)
+                raw_cookie = get_cookie(
+                    request.headers,
+                    self.thread_cookie_name,
+                    default="",
+                )
+                affinity_thread_id = self._verify_thread_cookie(
+                    route.path,
+                    raw_cookie,
+                    ttl_seconds=route.affinity_ttl_seconds,
+                )
+                selected_worker = route.thread_pool.resolve(
+                    request=request,
+                    cookie_thread_id=affinity_thread_id,
+                )
                 if selected_worker is None:
                     raise _RouteExecutionError(503, "No route workers available")
                 result = selected_worker.submit(request)
@@ -1194,6 +1299,11 @@ class App:
                 self.thread_cookie_name,
                 signed_cookie,
                 path=route.path or "/",
+                max_age=(
+                    int(route.affinity_ttl_seconds)
+                    if route.affinity_ttl_seconds > 0
+                    else None
+                ),
                 http_only=True,
                 secure=bool((request.tls or {}).get("enabled")),
                 same_site="Lax",

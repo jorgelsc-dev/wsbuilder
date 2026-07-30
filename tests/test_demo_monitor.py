@@ -1,7 +1,7 @@
 import unittest
 
 from wsbuilder import Request
-from wsbuilder.__main__ import build_demo_app
+from wsbuilder.__main__ import DEFAULT_HOST, build_demo_app
 
 
 class TestDemoMonitor(unittest.TestCase):
@@ -29,6 +29,9 @@ class TestDemoMonitor(unittest.TestCase):
         self.assertIn("/api/metrics/stream", html)
         self.assertIn("TextDecoderStream", html)
         self.assertIn("follow=1", html)
+
+    def test_demo_defaults_to_loopback(self):
+        self.assertEqual(DEFAULT_HOST, "127.0.0.1")
 
 
 if __name__ == "__main__":

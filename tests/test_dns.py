@@ -1,4 +1,6 @@
+import socket
 import unittest
+from unittest.mock import patch
 
 from wsbuilder import LocalDNSServer
 
@@ -55,6 +57,13 @@ def _build_query(name, qtype, txid):
         + int(qtype).to_bytes(2, byteorder="big", signed=False)
         + (1).to_bytes(2, byteorder="big", signed=False)
     )
+
+
+def _as_response(query):
+    response = bytearray(query)
+    flags = int.from_bytes(response[2:4], byteorder="big", signed=False)
+    response[2:4] = (flags | 0x8000).to_bytes(2, byteorder="big", signed=False)
+    return bytes(response)
 
 
 def _parse_first_answer(data):
@@ -225,6 +234,7 @@ class TestLocalDNSServer(unittest.TestCase):
         wildcard_response = _parse_response(dns._handle_packet(_build_query("x.dev.local", qtype=1, txid=0x6661)))
         self.assertEqual(wildcard_response["rcode"], 0)
         self.assertEqual(wildcard_response["ancount"], 1)
+        self.assertEqual(wildcard_response["answers"][0]["name"], "x.dev.local")
         self.assertEqual(wildcard_response["answers"][0]["type"], 1)
         self.assertEqual(wildcard_response["answers"][0]["rdata"], b"\x7f\x00\x00\x02")
 
@@ -246,6 +256,97 @@ class TestLocalDNSServer(unittest.TestCase):
         response = _parse_response(dns._handle_packet(_build_query("unknown.upstream.local", qtype=1, txid=0x7777)))
         self.assertEqual(response["rcode"], 2)
         self.assertEqual(response["ancount"], 0)
+
+    def test_malformed_label_types_and_oversized_names_are_rejected(self):
+        header = _build_query("x.local", qtype=1, txid=0x8888)[:12]
+        question_tail = b"\x00\x01\x00\x01"
+        reserved_label = header + b"\x40" + (b"a" * 64) + b"\x00" + question_tail
+        oversized_name = (
+            header
+            + b"".join(b"\x3f" + (bytes([letter]) * 63) for letter in b"abcd")
+            + b"\x00"
+            + question_tail
+        )
+
+        self.assertIsNone(self.server._handle_packet(reserved_label))
+        self.assertIsNone(self.server._handle_packet(oversized_name))
+
+    def test_serve_loop_continues_after_packet_handler_exception(self):
+        valid_query = _build_query("localhost", qtype=1, txid=0x8989)
+        sent = []
+        dns = LocalDNSServer(host="127.0.0.1", port=0)
+
+        class FakeSocket:
+            def __init__(self):
+                self.packets = [b"malformed", valid_query]
+
+            def recvfrom(self, _size):
+                if self.packets:
+                    return self.packets.pop(0), ("127.0.0.1", 53000)
+                dns._running.clear()
+                raise socket.timeout()
+
+            def sendto(self, data, addr):
+                sent.append((data, addr))
+
+        dns._sock = FakeSocket()
+        original_handler = dns._handle_packet
+
+        def flaky_handler(data):
+            if data == b"malformed":
+                raise ValueError("bad packet")
+            return original_handler(data)
+
+        dns._handle_packet = flaky_handler
+        dns.serve_forever()
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(int.from_bytes(sent[0][0][:2], byteorder="big"), 0x8989)
+
+    def test_upstream_response_must_match_source_transaction_and_question(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0)
+        upstream = {
+            "host": "192.0.2.53",
+            "port": 53,
+            "family": socket.AF_INET,
+            "socktype": socket.SOCK_DGRAM,
+            "proto": socket.IPPROTO_UDP,
+            "sockaddr": ("192.0.2.53", 53),
+        }
+        dns._upstreams = [upstream]
+        query = _build_query("example.local", qtype=1, txid=0x9090)
+        valid_response = _as_response(query)
+
+        class FakeSocket:
+            def __init__(self, response, source):
+                self.response = response
+                self.source = source
+
+            def settimeout(self, _value):
+                return None
+
+            def sendto(self, _data, _addr):
+                return None
+
+            def recvfrom(self, _size):
+                return self.response, self.source
+
+            def close(self):
+                return None
+
+        def forward(response, source=("192.0.2.53", 53)):
+            fake = FakeSocket(response, source)
+            with patch("wsbuilder.dns.socket.socket", return_value=fake):
+                return dns._forward_to_upstream(query)
+
+        wrong_txid = _as_response(_build_query("example.local", qtype=1, txid=0x9191))
+        wrong_question = _as_response(_build_query("other.local", qtype=1, txid=0x9090))
+
+        self.assertEqual(forward(valid_response), valid_response)
+        self.assertIsNone(forward(valid_response, source=("198.51.100.53", 53)))
+        self.assertIsNone(forward(query))
+        self.assertIsNone(forward(wrong_txid))
+        self.assertIsNone(forward(wrong_question))
 
 
 if __name__ == "__main__":

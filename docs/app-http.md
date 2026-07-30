@@ -58,6 +58,10 @@ Es la forma mas generica. Permite elegir `kind="plain"` o `kind="api"`.
 - `app`, que `App.dispatch()` rellena automaticamente.
 - helpers `text()` y `json()`.
 
+`query` decodifica percent-encoding y `+` con las reglas de formularios URL. Si
+una clave aparece varias veces conserva el ultimo valor y limita el numero de
+campos aceptados.
+
 ```python
 @app.api("/api/echo", methods=("POST",))
 def echo(request):
@@ -92,7 +96,12 @@ def stream(_request):
 Si `cors_allow_origin` esta configurado:
 
 - las rutas `api` incluyen `Access-Control-Allow-Origin`.
-- el `OPTIONS` automatico responde con metodos permitidos y cabeceras basicas.
+- el `OPTIONS` automatico responde con la union de metodos permitidos y
+  cabeceras basicas.
+
+Ademas, `HEAD` reutiliza una ruta `GET` y envia sus mismas cabeceras sin cuerpo.
+Un metodo no permitido para una ruta existente responde `405` e incluye
+`Allow`; una ruta inexistente responde `404`.
 
 ## Vistas con hilos dedicados
 
@@ -118,7 +127,11 @@ Campos relevantes:
 - `thread_host`, `thread_base_port`: metadatos de trazabilidad.
 
 Cuando una vista usa pool, la respuesta incluye cabeceras de trazabilidad y una
-cookie firmada de afinidad por ruta.
+cookie de afinidad por ruta, firmada con HMAC y limitada por
+`affinity_ttl_seconds`. Configura un `thread_cookie_secret` privado y estable en
+produccion. Si una solicitud vence mientras aun esta en cola se retira antes de
+que el handler comience; un handler que ya esta ejecutandose no puede
+interrumpirse de forma forzada.
 
 ## Startup hooks
 
@@ -154,7 +167,10 @@ Caracteristicas practicas:
 
 - limite de workers de conexion.
 - timeout de lectura de request.
-- validacion de cabeceras y cuerpo.
+- validacion estricta de linea inicial, cabeceras y cuerpo.
+- rechazo de framing ambiguo, cuerpos incompletos y `Transfer-Encoding` no
+  soportado.
+- soporte de `Expect: 100-continue` para cuerpos con `Content-Length`.
 - soporte TLS via `ssl_context`.
 - handshake WebSocket integrado.
 
@@ -167,4 +183,5 @@ python -m wsbuilder --host 0.0.0.0 --port 8765
 ```
 
 La demo habilita metricas, documentacion runtime, monitor HTML y una ruta
-WebSocket de eco.
+WebSocket de eco. El host predeterminado es `127.0.0.1`; usa `0.0.0.0`
+explicitamente solo cuando quieras exponer la demo a la red.

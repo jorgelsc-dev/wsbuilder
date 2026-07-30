@@ -30,6 +30,10 @@ Capacidades principales:
 - `read_replica_*` para lecturas balanceadas.
 - `set_pragma`, `get_pragma`, `checkpoint`, `vacuum`, `optimize`.
 
+Los lotes de escritura ejecutados con `executemany` son atomicos: si una fila
+falla, el prefijo ya procesado se revierte. `replica_count` debe ser mayor que
+cero cuando se construye un pool de replicas.
+
 ## Modelos
 
 ```python
@@ -80,7 +84,11 @@ with db.transaction():
     Article.create(db, title="B")
 ```
 
-Las transacciones se integran con `save()` y `delete()` de los modelos.
+Las transacciones se integran con `save()` y `delete()` de los modelos. Como
+`Database` comparte una conexion SQLite entre hilos, una transaccion exterior
+mantiene el bloqueo de esa conexion hasta terminar; otros hilos esperan y no
+pueden confirmar ni revertir trabajo ajeno. Las transacciones anidadas usan
+savepoints.
 
 ## Campos incluidos
 

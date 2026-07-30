@@ -73,7 +73,7 @@ Requisitos previos:
 
 - Tener este repositorio ya descargado en la maquina.
 - Tener Python `3.11+`.
-- Tener `build`, `setuptools` y `wheel` ya instalados antes de desconectarte.
+- Tener `build`, `setuptools>=77` y `wheel` ya instalados antes de desconectarte.
 
 Compilar el paquete localmente sin descargar nada:
 
@@ -290,8 +290,8 @@ label = clf.predict_class([1, 0])
 
 - [Inicio](docs/index.md)
 - [Arquitectura](docs/architecture.md)
-- [Ayuda](docs/help/index.md)
-- [Referencia](docs/reference/index.md)
+- [API publica](docs/api-map.md)
+- [Proyecto integral](docs/full-project.md)
 
 ## Contribucion y soporte
 

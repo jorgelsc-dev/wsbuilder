@@ -1,10 +1,12 @@
 """NDJSON log helpers."""
 
 import json
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 
 DEFAULT_LOG_PATH = "logs/wsbuilder.ndjson"
+_APPEND_LOCK = threading.RLock()
 
 
 def _normalize_record(record):
@@ -16,12 +18,12 @@ def _normalize_record(record):
 def append_ndjson(path, record, *, ensure_parent=True):
     target = Path(path)
     payload = _normalize_record(record)
-    if ensure_parent:
-        target.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    with target.open("a", encoding="utf-8", newline="\n") as fh:
-        fh.write(line)
-        fh.write("\n")
+    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with _APPEND_LOCK:
+        if ensure_parent:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(line)
     return payload
 
 

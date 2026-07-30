@@ -10,6 +10,12 @@ TASK_COMPLETED = "completed"
 TASK_FAILED = "failed"
 TASK_CANCELLED = "cancelled"
 TASK_REJECTED = "rejected"
+_TERMINAL_STATUSES = {
+    TASK_COMPLETED,
+    TASK_FAILED,
+    TASK_CANCELLED,
+    TASK_REJECTED,
+}
 
 
 class TaskError(Exception):
@@ -71,8 +77,9 @@ class TaskHandle:
             self.metadata.setdefault("request_path", getattr(request, "path", None))
             self.metadata.setdefault("request_client", getattr(request, "client", None))
 
+        request_app = getattr(request, "app", None)
         self.context = TaskContext(
-            app=getattr(request, "app", None),
+            app=request_app if request_app is not None else getattr(manager, "app", None),
             request=request,
             group=self.group,
             name=self.name,
@@ -141,8 +148,11 @@ class TaskHandle:
         return self
 
     def cancel(self):
-        self._cancel_requested.set()
-        return True
+        with self._state_lock:
+            if self._status in _TERMINAL_STATUSES:
+                return False
+            self._cancel_requested.set()
+            return True
 
     def wait(self, timeout=None):
         return self._finished.wait(timeout)
@@ -191,6 +201,14 @@ class TaskHandle:
             if exception is not None:
                 self._exception = exception
 
+    def _release_execution_references(self):
+        with self._state_lock:
+            self.target = None
+            self.args = ()
+            self.kwargs = {}
+            self.request = None
+            self.context.request = None
+
     def _run(self):
         gate = self.manager._task_slot
         if gate is not None:
@@ -198,44 +216,67 @@ class TaskHandle:
             acquired = False
             while not acquired:
                 if self.manager._closed.is_set() or self._cancel_requested.is_set():
-                    self._set_state(status=TASK_CANCELLED, finished_at=time.time(), exception=TaskCancelledError("Task cancelled before start"))
+                    self._set_state(
+                        status=TASK_CANCELLED,
+                        finished_at=time.time(),
+                        exception=TaskCancelledError("Task cancelled before start"),
+                    )
+                    self._release_execution_references()
                     self._finished.set()
                     self.manager._finalize_task(self)
                     return
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
-                    self._set_state(status=TASK_REJECTED, finished_at=time.time(), exception=TaskRejectedError("Task capacity reached"))
+                    self._set_state(
+                        status=TASK_REJECTED,
+                        finished_at=time.time(),
+                        exception=TaskRejectedError("Task capacity reached"),
+                    )
+                    self._release_execution_references()
                     self._finished.set()
                     self.manager._finalize_task(self)
                     return
                 acquired = gate.acquire(timeout=0.1 if remaining is None else min(0.1, remaining))
 
         try:
-            if self.manager._closed.is_set():
-                raise TaskClosedError("Task manager is closed")
             if self._cancel_requested.is_set():
                 raise TaskCancelledError("Task cancelled before start")
+            if self.manager._closed.is_set():
+                raise TaskClosedError("Task manager is closed")
 
             self._set_state(status=TASK_RUNNING, started_at=time.time())
             self._started.set()
 
+            target = self.target
             if self.pass_handle:
-                result = self.target(self, *self.args, **self.kwargs)
+                result = target(self, *self.args, **self.kwargs)
             else:
-                result = self.target(*self.args, **self.kwargs)
+                result = target(*self.args, **self.kwargs)
 
-            if self._cancel_requested.is_set():
-                raise TaskCancelledError("Task cancelled")
-
-            self._set_state(status=TASK_COMPLETED, result=result)
+            with self._state_lock:
+                if self._cancel_requested.is_set():
+                    self._set_state(
+                        status=TASK_CANCELLED,
+                        exception=TaskCancelledError("Task cancelled"),
+                    )
+                else:
+                    self._set_state(status=TASK_COMPLETED, result=result)
         except (TaskClosedError, TaskRejectedError) as exc:
             self._set_state(status=TASK_REJECTED, exception=exc)
         except TaskCancelledError as exc:
             self._set_state(status=TASK_CANCELLED, exception=exc)
         except Exception as exc:
-            self._set_state(status=TASK_FAILED, exception=exc)
+            with self._state_lock:
+                if self._cancel_requested.is_set():
+                    self._set_state(
+                        status=TASK_CANCELLED,
+                        exception=TaskCancelledError("Task cancelled"),
+                    )
+                else:
+                    self._set_state(status=TASK_FAILED, exception=exc.with_traceback(None))
         finally:
             self._set_state(finished_at=time.time())
+            self._release_execution_references()
             self._finished.set()
             if gate is not None:
                 gate.release()
@@ -265,26 +306,36 @@ class TaskManager:
         request=None,
         timeout_seconds=None,
     ):
-        if self._closed.is_set():
-            raise TaskClosedError("Task manager is closed")
-        task = TaskHandle(
-            self,
-            target,
-            args=args,
-            kwargs=kwargs,
-            name=name,
-            group=group,
-            metadata=metadata,
-            daemon=daemon,
-            pass_handle=pass_handle,
-            request=request,
-            timeout_seconds=timeout_seconds,
-        )
         with self._lock:
+            if self._closed.is_set():
+                raise TaskClosedError("Task manager is closed")
+            task = TaskHandle(
+                self,
+                target,
+                args=args,
+                kwargs=kwargs,
+                name=name,
+                group=group,
+                metadata=metadata,
+                daemon=daemon,
+                pass_handle=pass_handle,
+                request=request,
+                timeout_seconds=timeout_seconds,
+            )
             self._tasks[task.id] = task
             if task.group:
                 self._by_group.setdefault(task.group, set()).add(task.id)
-        task.start()
+            try:
+                task.start()
+            except BaseException:
+                self._tasks.pop(task.id, None)
+                if task.group:
+                    group_ids = self._by_group.get(task.group)
+                    if group_ids is not None:
+                        group_ids.discard(task.id)
+                        if not group_ids:
+                            self._by_group.pop(task.group, None)
+                raise
         return task
 
     submit = spawn
@@ -308,8 +359,7 @@ class TaskManager:
         task = self.get(task_id)
         if not task:
             return False
-        task.cancel()
-        return True
+        return task.cancel()
 
     def cancel_group(self, group):
         ids = []
@@ -374,15 +424,21 @@ class TaskManager:
             self._tasks[task.id] = task
 
     def close(self, *, wait=True, timeout=None):
-        self._closed.set()
-        self.cancel_all()
+        with self._lock:
+            self._closed.set()
+            tasks = list(self._tasks.values())
+        for task in tasks:
+            task.cancel()
         if wait:
-            deadline = None if timeout is None else (time.time() + max(0.0, float(timeout)))
-            for task in list(self._tasks.values()):
+            deadline = None if timeout is None else (time.monotonic() + max(0.0, float(timeout)))
+            current_thread = threading.current_thread()
+            for task in tasks:
+                if task._thread is current_thread:
+                    continue
                 if deadline is None:
                     task.join()
                     continue
-                remaining = deadline - time.time()
+                remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
                 task.join(timeout=remaining)

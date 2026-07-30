@@ -293,7 +293,7 @@ class SQLiteMemoryCache:
         if removed > 0:
             self._inc_stat("expired", removed)
             self._inc_stat("deletes", removed)
-            self._conn.commit()
+        self._conn.commit()
         cur.close()
         return removed
 
@@ -355,7 +355,7 @@ class SQLiteMemoryCache:
         if removed > 0:
             self._inc_stat("evictions", removed)
             self._inc_stat("deletes", removed)
-            self._conn.commit()
+        self._conn.commit()
         cur.close()
         return removed
 
@@ -387,10 +387,24 @@ class SQLiteMemoryCache:
             self._maybe_cleanup_locked()
             cur = self._conn.cursor()
             cur.execute(
-                "SELECT created_at, hits FROM cache_entries WHERE namespace = ? AND key = ?",
+                """
+                SELECT created_at, hits, expires_at
+                FROM cache_entries
+                WHERE namespace = ? AND key = ?
+                """,
                 (ns, cache_key),
             )
             existing = cur.fetchone()
+            if (
+                existing is not None
+                and existing["expires_at"] is not None
+                and float(existing["expires_at"]) <= now
+            ):
+                cur.close()
+                self._delete_row_locked(ns, cache_key)
+                self._inc_stat("expired")
+                existing = None
+                cur = self._conn.cursor()
             if only_if_absent and existing is not None:
                 cur.close()
                 return False
@@ -485,8 +499,8 @@ class SQLiteMemoryCache:
         )
         removed = int(cur.rowcount or 0)
         cur.close()
+        self._conn.commit()
         if removed > 0:
-            self._conn.commit()
             self._inc_stat("deletes", removed)
         return removed
 
@@ -631,8 +645,8 @@ class SQLiteMemoryCache:
             )
             removed = int(cur.rowcount or 0)
             cur.close()
+            self._conn.commit()
             if removed > 0:
-                self._conn.commit()
                 self._inc_stat("deletes", removed)
             return removed
 
@@ -664,8 +678,8 @@ class SQLiteMemoryCache:
                 cur.execute("DELETE FROM cache_entries WHERE namespace = ?", (ns,))
             removed = int(cur.rowcount or 0)
             cur.close()
+            self._conn.commit()
             if removed > 0:
-                self._conn.commit()
                 self._inc_stat("deletes", removed)
             return removed
 
@@ -687,8 +701,7 @@ class SQLiteMemoryCache:
             )
             changed = int(cur.rowcount or 0)
             cur.close()
-            if changed > 0:
-                self._conn.commit()
+            self._conn.commit()
             return bool(changed)
 
     def touch(self, key, *, ttl=None, namespace=None):
@@ -721,8 +734,7 @@ class SQLiteMemoryCache:
             )
             changed = int(cur.rowcount or 0)
             cur.close()
-            if changed > 0:
-                self._conn.commit()
+            self._conn.commit()
             return bool(changed)
 
     def ttl(self, key, *, namespace=None):
@@ -904,8 +916,7 @@ class SQLiteMemoryCache:
                 )
             removed = int(cur.rowcount or 0)
             cur.close()
-            if removed > 0:
-                self._conn.commit()
+            self._conn.commit()
             return removed
 
     def get_tags(self, key, *, namespace=None):
@@ -970,8 +981,8 @@ class SQLiteMemoryCache:
                 )
             removed = int(cur.rowcount or 0)
             cur.close()
+            self._conn.commit()
             if removed > 0:
-                self._conn.commit()
                 self._inc_stat("deletes", removed)
             return removed
 
