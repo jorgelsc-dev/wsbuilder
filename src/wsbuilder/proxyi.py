@@ -57,9 +57,11 @@ SUPPORTED_BALANCING_STRATEGIES = (
 _HOP_BY_HOP_REQUEST_HEADERS = {
     "connection",
     "keep-alive",
+    "proxy-connection",
     "proxy-authenticate",
     "proxy-authorization",
     "te",
+    "trailer",
     "trailers",
     "transfer-encoding",
     "upgrade",
@@ -67,13 +69,31 @@ _HOP_BY_HOP_REQUEST_HEADERS = {
 _HOP_BY_HOP_RESPONSE_HEADERS = {
     "connection",
     "keep-alive",
+    "proxy-connection",
     "proxy-authenticate",
     "proxy-authorization",
     "te",
+    "trailer",
     "trailers",
     "transfer-encoding",
     "upgrade",
 }
+_FORWARDED_REQUEST_HEADERS = {
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-port",
+    "x-forwarded-proto",
+}
+_SENSITIVE_HEADER_NAMES = {
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+}
+_REDACTED_HEADER_VALUE = "[REDACTED]"
 
 
 def _safe_int(value, default):
@@ -137,6 +157,19 @@ def _normalize_mapping(mapping, *, lower_keys=False, lower_values=False):
     return result
 
 
+def _redact_headers(headers):
+    redacted = {}
+    for key, value in (headers or {}).items():
+        name = _normalize_text(key)
+        normalized = name.lower().replace("_", "-")
+        is_sensitive = normalized in _SENSITIVE_HEADER_NAMES or any(
+            marker in normalized
+            for marker in ("api-key", "password", "secret", "token")
+        )
+        redacted[name] = _REDACTED_HEADER_VALUE if is_sensitive else value
+    return redacted
+
+
 def _normalize_host_header(value):
     text = _normalize_text(value)
     if not text:
@@ -149,8 +182,7 @@ def _normalize_host_header(value):
 
 
 def _extract_request_host(request):
-    headers = getattr(request, "headers", {}) or {}
-    host = headers.get("host", "")
+    host = _header_value(request, "host")
     if host:
         return _normalize_host_header(host)
     client = getattr(request, "client", None)
@@ -218,14 +250,27 @@ def _strip_prefix(path, prefix):
     raw_prefix = _normalize_text(prefix)
     if not raw_prefix:
         return raw_path
-    if not raw_path.startswith(raw_prefix):
+    if not _path_has_prefix(raw_path, raw_prefix):
         return raw_path
+    if raw_prefix != "/":
+        raw_prefix = raw_prefix.rstrip("/")
     remainder = raw_path[len(raw_prefix) :]
     if not remainder:
         return "/"
     if not remainder.startswith("/"):
         remainder = "/" + remainder
     return remainder
+
+
+def _path_has_prefix(path, prefix):
+    raw_path = _normalize_text(path) or "/"
+    raw_prefix = _normalize_text(prefix)
+    if not raw_prefix:
+        return True
+    if raw_prefix == "/":
+        return raw_path.startswith("/")
+    raw_prefix = raw_prefix.rstrip("/")
+    return raw_path == raw_prefix or raw_path.startswith(raw_prefix + "/")
 
 
 def _combine_query(path, query_string):
@@ -235,27 +280,51 @@ def _combine_query(path, query_string):
 
 
 def _clean_response_headers(headers):
+    connection_tokens = _connection_header_tokens(headers)
     clean = {}
     for key, value in (headers or {}).items():
         name = _normalize_text(key)
         if not name:
             continue
-        if name.lower() in _HOP_BY_HOP_RESPONSE_HEADERS:
+        normalized = name.lower()
+        if (
+            normalized in _HOP_BY_HOP_RESPONSE_HEADERS
+            or normalized in connection_tokens
+        ):
             continue
         clean[name] = _normalize_text(value)
     return clean
 
 
 def _clean_request_headers(headers):
+    connection_tokens = _connection_header_tokens(headers)
     clean = {}
     for key, value in (headers or {}).items():
         name = _normalize_text(key)
         if not name:
             continue
-        if name.lower() in _HOP_BY_HOP_REQUEST_HEADERS:
+        normalized = name.lower()
+        if (
+            normalized in _HOP_BY_HOP_REQUEST_HEADERS
+            or normalized in _FORWARDED_REQUEST_HEADERS
+            or normalized in connection_tokens
+        ):
             continue
         clean[name] = _normalize_text(value)
     return clean
+
+
+def _connection_header_tokens(headers):
+    tokens = set()
+    for key, value in (headers or {}).items():
+        if str(key).strip().lower() != "connection":
+            continue
+        tokens.update(
+            token.strip().lower()
+            for token in str(value or "").split(",")
+            if token.strip()
+        )
+    return tokens
 
 
 def _request_body_bytes(request):
@@ -281,7 +350,28 @@ def _request_query_string(request):
 
 def _header_value(request, name):
     headers = getattr(request, "headers", {}) or {}
-    return _normalize_text(headers.get(name.lower(), ""))
+    wanted = str(name or "").lower()
+    for key, value in headers.items():
+        if str(key).lower() == wanted:
+            return _normalize_text(value)
+    return ""
+
+
+def _forwarded_port_value(request):
+    host = _header_value(request, "host")
+    port_text = ""
+    if host.startswith("["):
+        closing = host.find("]")
+        if closing >= 0 and host[closing + 1 :].startswith(":"):
+            port_text = host[closing + 2 :]
+    elif host.count(":") == 1:
+        _hostname, _separator, port_text = host.rpartition(":")
+    if port_text.isascii() and port_text.isdigit():
+        port = int(port_text)
+        if 1 <= port <= 65535:
+            return str(port)
+    tls = getattr(request, "tls", {}) or {}
+    return "443" if tls.get("enabled") else "80"
 
 
 class RunningStats:
@@ -429,7 +519,7 @@ class ProxyTarget:
     timeout_seconds: float = 5.0
     preserve_host: bool = True
     enabled: bool = True
-    verify_tls: bool = False
+    verify_tls: bool = True
     extra_headers: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -510,7 +600,7 @@ class ProxyTarget:
             "preserve_host": self.preserve_host,
             "enabled": self.enabled,
             "verify_tls": self.verify_tls,
-            "extra_headers": dict(self.extra_headers),
+            "extra_headers": _redact_headers(self.extra_headers),
         }
         if include_metrics:
             metrics = self.metrics.snapshot()
@@ -599,7 +689,7 @@ class ProxyRule:
         path_value = _normalize_text(path) or "/"
         if self.path and path_value != self.path:
             return False
-        if self.path_prefix and not path_value.startswith(self.path_prefix):
+        if self.path_prefix and not _path_has_prefix(path_value, self.path_prefix):
             return False
         if self.path_contains and not any(text in path_value for text in self.path_contains):
             return False
@@ -657,8 +747,7 @@ class ProxyRule:
 
     def enabled_targets(self):
         with self._lock:
-            rows = [target for target in self.targets if getattr(target, "enabled", True)]
-            return rows or list(self.targets)
+            return [target for target in self.targets if getattr(target, "enabled", True)]
 
     def _round_robin(self, targets):
         if not targets:
@@ -811,7 +900,12 @@ class ProxyRule:
         elif mode == BALANCING_LEAST_BYTES_OUT:
             target = self._least_bytes_out(targets)
         elif mode == BALANCING_IP_HASH:
-            key = _extract_request_host(request) or getattr(request, "client", ("",))[0] or ""
+            client = getattr(request, "client", None)
+            key = ""
+            if isinstance(client, (list, tuple)) and client:
+                key = _normalize_text(client[0])
+            if not key:
+                key = _extract_request_host(request) or _request_path(request)
             target = self._consistent_hash(targets, key)
         elif mode == BALANCING_CONSISTENT_HASH:
             header_key = self.hash_key
@@ -843,9 +937,9 @@ class ProxyRule:
             "path_contains": list(self.path_contains),
             "path_regex": list(self.path_regex),
             "methods": list(self.methods),
-            "header_equals": dict(self.header_equals),
-            "header_contains": dict(self.header_contains),
-            "header_regex": dict(self.header_regex),
+            "header_equals": _redact_headers(self.header_equals),
+            "header_contains": _redact_headers(self.header_contains),
+            "header_regex": _redact_headers(self.header_regex),
             "balance": self.balance,
             "priority": self.priority,
             "strip_prefix": self.strip_prefix,
@@ -862,7 +956,7 @@ class ProxyRule:
                 targets = [target.snapshot(include_metrics=True) for target in self.targets]
             data["targets"] = targets
             data["best_target"] = None
-            selected = self.choose_target(_dummy_request(self), proxy=None)
+            selected = self._best(self.enabled_targets())
             if selected is not None:
                 data["best_target"] = selected.snapshot(include_metrics=True)
         else:
@@ -890,7 +984,10 @@ class ProxyRouteBuilder:
             "header_equals": dict(kwargs.pop("header_equals", {})),
             "header_contains": dict(kwargs.pop("header_contains", {})),
             "header_regex": dict(kwargs.pop("header_regex", {})),
-            "balance": kwargs.pop("balance", BALANCING_ROUND_ROBIN),
+            "balance": kwargs.pop(
+                "balance",
+                getattr(proxy, "default_balance", BALANCING_ROUND_ROBIN),
+            ),
             "priority": kwargs.pop("priority", 0),
             "strip_prefix": kwargs.pop("strip_prefix", False),
             "preserve_host": kwargs.pop("preserve_host", True),
@@ -1154,6 +1251,7 @@ class ProxyI:
         return rule
 
     def route(self, **kwargs):
+        kwargs.setdefault("balance", self.default_balance)
         return ProxyRouteBuilder(self, **kwargs)
 
     def vhost(self, *hosts, **kwargs):
@@ -1212,10 +1310,16 @@ class ProxyI:
         headers["X-Forwarded-For"] = self._forwarded_for_value(request)
         headers["X-Forwarded-Host"] = _header_value(request, "host") or _extract_request_host(request)
         headers["X-Forwarded-Proto"] = "https" if getattr(request, "tls", {}).get("enabled") else "http"
-        headers["X-Forwarded-Port"] = str(target.port)
+        headers["X-Forwarded-Port"] = _forwarded_port_value(request)
         headers["X-ProxyI-Rule"] = rule.name or rule.path_prefix or rule.path or "default"
         headers["X-ProxyI-Target"] = target.name
-        if target.preserve_host and _header_value(request, "host"):
+        for header_name in list(headers):
+            if header_name.lower() == "host":
+                headers.pop(header_name, None)
+        preserve_host = bool(target.preserve_host)
+        if rule is not None:
+            preserve_host = preserve_host and bool(rule.preserve_host)
+        if preserve_host and _header_value(request, "host"):
             headers["Host"] = _header_value(request, "host")
         else:
             headers["Host"] = target.authority
@@ -1231,7 +1335,10 @@ class ProxyI:
             response_headers = _clean_response_headers(dict(upstream.getheaders()))
             if request.method.upper() == "HEAD":
                 raw_body = b""
-            if "Content-Length" not in response_headers:
+            if not any(
+                name.lower() == "content-length"
+                for name in response_headers
+            ):
                 response_headers["Content-Length"] = str(len(raw_body))
             response_headers.setdefault("X-ProxyI-Rule", rule.name or rule.path_prefix or rule.path or "default")
             response_headers.setdefault("X-ProxyI-Target", target.name)
@@ -1249,10 +1356,7 @@ class ProxyI:
         ip = ""
         if client and isinstance(client, (list, tuple)) and client:
             ip = _normalize_text(client[0])
-        prior = _header_value(request, "x-forwarded-for")
-        if prior and ip:
-            return f"{prior}, {ip}"
-        return ip or prior
+        return ip
 
     def dispatch(self, request):
         path = _request_path(request)
@@ -1287,6 +1391,9 @@ class ProxyI:
         response = None
         error = None
         try:
+            if request_size > self.max_request_body_bytes:
+                response = Response.text("Payload Too Large", status=413)
+                return response
             matches = self._resolve_rules(request)
             rule = matches[0] if matches else None
             if rule is None:

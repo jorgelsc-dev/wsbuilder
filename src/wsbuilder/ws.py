@@ -1,4 +1,5 @@
 import base64
+import re
 import socket
 import threading
 import time
@@ -8,6 +9,11 @@ from .constants import MAGIC_WS
 from .http import Response, send_http_response
 
 MAX_WS_FRAME_PAYLOAD_BYTES = 2 * 1024 * 1024
+MAX_WS_MESSAGE_PAYLOAD_BYTES = 2 * 1024 * 1024
+_VALID_DATA_OPCODES = {0x0, 0x1, 0x2}
+_VALID_CONTROL_OPCODES = {0x8, 0x9, 0xA}
+_INVALID_CLOSE_CODES = {1004, 1005, 1006, 1015}
+_SUBPROTOCOL_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 class WebSocketProtocolError(Exception):
@@ -78,8 +84,16 @@ def _normalize_protocols(value):
     if not value:
         return ()
     if isinstance(value, str):
-        return tuple(part.strip() for part in value.split(",") if part.strip())
-    return tuple(str(part).strip() for part in value if str(part).strip())
+        rows = [part.strip() for part in value.split(",") if part.strip()]
+    else:
+        rows = [str(part).strip() for part in value if str(part).strip()]
+    protocols = []
+    for protocol in rows:
+        if not _SUBPROTOCOL_RE.fullmatch(protocol):
+            raise ValueError(f"Invalid WebSocket subprotocol: {protocol!r}")
+        if protocol not in protocols:
+            protocols.append(protocol)
+    return tuple(protocols)
 
 
 def _websocket_handshake_error_response(headers):
@@ -130,15 +144,20 @@ def handshake_websocket_with_options(
     subprotocol = ""
     offered = headers.get("sec-websocket-protocol", "")
     if offered:
-        parts = [p.strip() for p in offered.split(",") if p.strip()]
+        try:
+            parts = list(_normalize_protocols(offered))
+        except ValueError:
+            send_http_response(
+                conn,
+                Response.text("Invalid Sec-WebSocket-Protocol", status=400),
+            )
+            return None
         if parts:
             if supported:
                 for part in parts:
                     if part in supported:
                         subprotocol = part
                         break
-            else:
-                subprotocol = parts[0]
 
     accept_src = (key + MAGIC_WS).encode("utf-8")
     digest = sha1(accept_src)
@@ -152,8 +171,7 @@ def handshake_websocket_with_options(
     if subprotocol:
         resp_headers["Sec-WebSocket-Protocol"] = subprotocol
 
-    send_http_response(conn, Response(status=101, body=b"", headers=resp_headers))
-    return WebSocket(
+    websocket = WebSocket(
         conn,
         addr,
         subprotocol,
@@ -169,6 +187,8 @@ def handshake_websocket_with_options(
         ping_payload=ping_payload.encode("utf-8") if isinstance(ping_payload, str) else ping_payload,
         supported_subprotocols=supported,
     )
+    send_http_response(conn, Response(status=101, body=b"", headers=resp_headers))
+    return websocket
 
 
 def handshake_websocket(conn, addr, headers):
@@ -220,6 +240,11 @@ class WebSocket:
         self._last_rx_at = time.monotonic()
         self._last_tx_at = self._last_rx_at
         self._last_ping_at = 0.0
+        self._fragment_opcode = None
+        self._fragment_payload = bytearray()
+
+        if len(self.ping_payload) > 125:
+            raise ValueError("WebSocket ping payload must be at most 125 bytes")
 
         if self.idle_timeout > 0 or self.keepalive_interval > 0 or self.pong_timeout > 0:
             try:
@@ -255,6 +280,14 @@ class WebSocket:
 
     def _report_timeout(self, reason):
         self._invoke_callback(self.on_timeout, self, reason)
+
+    def _fail_protocol(self, exc, *, close_code=1002, close_reason="Protocol Error"):
+        try:
+            self.close(close_code, close_reason)
+        except Exception:
+            self._closed = True
+        self._report_error(exc)
+        raise exc
 
     def _close_with_reason(self, code, reason):
         self._closed = True
@@ -293,7 +326,12 @@ class WebSocket:
             except (socket.timeout, TimeoutError) as exc:
                 if self._closed:
                     raise WebSocketConnectionClosedError("WebSocket already closed") from exc
-                if self._handle_idle_tick():
+                managed_timeout = (
+                    self.idle_timeout > 0
+                    or self.keepalive_interval > 0
+                )
+                if managed_timeout:
+                    self._handle_idle_tick()
                     continue
                 self._report_timeout("read timeout")
                 raise WebSocketReadTimeoutError("WebSocket read timed out") from exc
@@ -313,9 +351,21 @@ class WebSocket:
 
             self._mark_rx()
             if frame.opcode == 0x8:
+                try:
+                    code, reason = parse_close_payload(frame.payload)
+                except WebSocketProtocolError as exc:
+                    try:
+                        self.close(1002, "Protocol Error")
+                    except Exception:
+                        pass
+                    self._report_error(exc)
+                    raise
                 self._peer_close_received = True
-                code, reason = parse_close_payload(frame.payload)
-                self._report_close(code or 1000, reason or "")
+                resolved_code = code or 1000
+                resolved_reason = reason or ""
+                self._report_close(resolved_code, resolved_reason)
+                if not self._closed:
+                    self.close(resolved_code, resolved_reason)
             elif frame.opcode == 0x9 and self.auto_pong:
                 try:
                     self.send_pong(frame.payload)
@@ -324,6 +374,58 @@ class WebSocket:
                     raise
             elif frame.opcode == 0xA:
                 self._awaiting_pong = False
+
+            if frame.opcode in {0x1, 0x2}:
+                if self._fragment_opcode is not None:
+                    exc = WebSocketProtocolError(
+                        "New data frame received before fragmented message completed"
+                    )
+                    self._fail_protocol(exc)
+                if not frame.fin:
+                    self._fragment_opcode = frame.opcode
+                    self._fragment_payload = bytearray(frame.payload)
+                    continue
+            elif frame.opcode == 0x0:
+                if self._fragment_opcode is None:
+                    exc = WebSocketProtocolError(
+                        "Continuation frame received without fragmented message"
+                    )
+                    self._fail_protocol(exc)
+                self._fragment_payload.extend(frame.payload)
+                if len(self._fragment_payload) > MAX_WS_MESSAGE_PAYLOAD_BYTES:
+                    exc = WebSocketProtocolError(
+                        "Fragmented message exceeds server limit"
+                    )
+                    self._fail_protocol(
+                        exc,
+                        close_code=1009,
+                        close_reason="Message Too Big",
+                    )
+                if not frame.fin:
+                    continue
+                frame = WebSocketFrame(
+                    1,
+                    self._fragment_opcode,
+                    bytes(self._fragment_payload),
+                    frame.masked,
+                    frame.mask,
+                )
+                self._fragment_opcode = None
+                self._fragment_payload = bytearray()
+
+            if frame.opcode == 0x1:
+                try:
+                    frame.payload.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    protocol_error = WebSocketProtocolError(
+                        "Text frame payload must be valid UTF-8"
+                    )
+                    self._report_error(protocol_error)
+                    try:
+                        self.close(1007, "Invalid UTF-8")
+                    except Exception:
+                        pass
+                    raise protocol_error from exc
             return frame
 
     def send_frame(self, opcode, payload=b""):
@@ -342,10 +444,10 @@ class WebSocket:
             self._closed = True
 
     def send_text(self, text):
-        self.send_frame(0x1, text.encode("utf-8"))
+        self.send_frame(0x1, str(text).encode("utf-8"))
 
     def send_binary(self, data):
-        self.send_frame(0x2, data)
+        self.send_frame(0x2, bytes(data))
 
     def send_ping(self, payload=b""):
         self.send_frame(0x9, payload)
@@ -356,9 +458,14 @@ class WebSocket:
     def close(self, code=1000, reason=""):
         if self._closed:
             return
-        payload = code.to_bytes(2, "big")
-        if reason:
-            payload += reason.encode("utf-8")
+        code = int(code)
+        if not _is_valid_close_code(code):
+            raise ValueError(f"Invalid WebSocket close code: {code}")
+        reason = str(reason or "")
+        reason_bytes = reason.encode("utf-8")
+        if len(reason_bytes) > 123:
+            raise ValueError("WebSocket close reason must be at most 123 bytes")
+        payload = code.to_bytes(2, "big") + reason_bytes
         try:
             self.send_frame(0x8, payload)
         finally:
@@ -388,7 +495,7 @@ def read_ws_frame_raw(conn):
     if rsv != 0:
         raise WebSocketProtocolError("RSV bits must be zero without negotiated extensions")
 
-    if opcode in {0x3, 0x4, 0x5, 0x6, 0x7, 0xB, 0xC, 0xD, 0xE, 0xF}:
+    if opcode not in _VALID_DATA_OPCODES | _VALID_CONTROL_OPCODES:
         raise WebSocketProtocolError(f"Reserved/unsupported opcode: {opcode}")
 
     if not masked:
@@ -397,9 +504,15 @@ def read_ws_frame_raw(conn):
     if payload_len == 126:
         ext = recv_exact(conn, 2)
         payload_len = int.from_bytes(ext, "big")
+        if payload_len < 126:
+            raise WebSocketProtocolError("Non-minimal WebSocket payload length")
     elif payload_len == 127:
         ext = recv_exact(conn, 8)
+        if ext[0] & 0x80:
+            raise WebSocketProtocolError("WebSocket payload length exceeds 63 bits")
         payload_len = int.from_bytes(ext, "big")
+        if payload_len < 65536:
+            raise WebSocketProtocolError("Non-minimal WebSocket payload length")
 
     if opcode >= 0x8:
         if not fin:
@@ -423,6 +536,20 @@ def read_ws_frame_raw(conn):
 
 
 def make_ws_frame_bytes(opcode, payload=b""):
+    opcode = int(opcode)
+    if opcode not in _VALID_DATA_OPCODES | _VALID_CONTROL_OPCODES:
+        raise ValueError(f"Unsupported WebSocket opcode: {opcode}")
+    if isinstance(payload, str):
+        payload = payload.encode("utf-8")
+    elif isinstance(payload, (bytes, bytearray, memoryview)):
+        payload = bytes(payload)
+    else:
+        raise TypeError("WebSocket payload must be bytes-like or str")
+    if opcode in _VALID_CONTROL_OPCODES and len(payload) > 125:
+        raise ValueError("WebSocket control frame payload must be at most 125 bytes")
+    if opcode == 0x8:
+        parse_close_payload(payload)
+
     fin = 0x80
     b1 = fin | (opcode & 0x0F)
     payload_len = len(payload)
@@ -439,18 +566,28 @@ def make_ws_frame_bytes(opcode, payload=b""):
 
 
 def parse_close_payload(payload):
+    payload = bytes(payload or b"")
     if not payload:
         return None, None
-    if len(payload) >= 2:
-        code = int.from_bytes(payload[:2], "big")
-        reason = ""
-        if len(payload) > 2:
-            try:
-                reason = payload[2:].decode("utf-8", errors="ignore")
-            except Exception:
-                reason = ""
-        return code, reason
-    return None, None
+    if len(payload) == 1:
+        raise WebSocketProtocolError("Close payload must be empty or at least 2 bytes")
+    code = int.from_bytes(payload[:2], "big")
+    if not _is_valid_close_code(code):
+        raise WebSocketProtocolError(f"Invalid WebSocket close code: {code}")
+    try:
+        reason = payload[2:].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise WebSocketProtocolError(
+            "WebSocket close reason must be valid UTF-8"
+        ) from exc
+    return code, reason
+
+
+def _is_valid_close_code(code):
+    code = int(code)
+    return (
+        1000 <= code <= 1014 and code not in _INVALID_CLOSE_CODES
+    ) or 3000 <= code <= 4999
 
 
 def _left_rotate(n, b):

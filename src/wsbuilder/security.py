@@ -9,6 +9,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
+from .headers import get_header
 from .http import Response
 
 DEFAULT_RATE_LIMIT_REQUESTS = 240
@@ -71,6 +72,17 @@ def _ip_in_networks(ip_text, networks):
     return False
 
 
+def _path_has_prefix(path, prefix):
+    path_text = str(path or "")
+    prefix_text = str(prefix or "").rstrip("/") or "/"
+    if prefix_text == "/":
+        return path_text.startswith("/")
+    return (
+        path_text == prefix_text
+        or path_text.startswith(prefix_text + "/")
+    )
+
+
 @dataclass(slots=True)
 class SecurityDecision:
     allowed: bool
@@ -120,10 +132,12 @@ class ACLRule:
         self.require_tls = None if require_tls is None else bool(require_tls)
 
         self.networks = []
-        for item in ip_cidrs or ():
+        cidr_rows = (ip_cidrs,) if isinstance(ip_cidrs, str) else (ip_cidrs or ())
+        for item in cidr_rows:
             net = _to_network(item)
-            if net is not None:
-                self.networks.append(net)
+            if net is None:
+                raise ValueError(f"Invalid ACL IP address or network: {item!r}")
+            self.networks.append(net)
 
         self.header_equals = {}
         for key, value in (header_equals or {}).items():
@@ -142,7 +156,10 @@ class ACLRule:
             return False
         if self.path and request.path != self.path:
             return False
-        if self.path_prefix and not request.path.startswith(self.path_prefix):
+        if self.path_prefix and not _path_has_prefix(
+            request.path,
+            self.path_prefix,
+        ):
             return False
         if self._path_regex_compiled and not self._path_regex_compiled.search(request.path):
             return False
@@ -153,10 +170,10 @@ class ACLRule:
         if self.networks and not _ip_in_networks(client_ip, self.networks):
             return False
         for key, expected in self.header_equals.items():
-            if str(request.headers.get(key, "")) != expected:
+            if str(get_header(request.headers, key, default="")) != expected:
                 return False
         for key, regex in self.header_regex.items():
-            if not regex.search(str(request.headers.get(key, ""))):
+            if not regex.search(str(get_header(request.headers, key, default=""))):
                 return False
         return True
 
@@ -181,6 +198,7 @@ class SecurityPolicy:
         *,
         acl_default="allow",
         trust_x_forwarded_for=False,
+        trusted_proxy_cidrs=None,
         whitelist_overrides_blacklist=True,
         whitelist_bypass_behavior=True,
         rate_limit_requests=DEFAULT_RATE_LIMIT_REQUESTS,
@@ -198,6 +216,19 @@ class SecurityPolicy:
 
         self.acl_default = acl_default_text
         self.trust_x_forwarded_for = bool(trust_x_forwarded_for)
+        proxy_rows = (
+            (trusted_proxy_cidrs,)
+            if isinstance(trusted_proxy_cidrs, str)
+            else (trusted_proxy_cidrs or ())
+        )
+        self.trusted_proxy_networks = []
+        for raw in proxy_rows:
+            network = _to_network(raw)
+            if network is None:
+                raise ValueError(
+                    f"Invalid trusted proxy IP address or network: {raw!r}"
+                )
+            self.trusted_proxy_networks.append(network)
         self.whitelist_overrides_blacklist = bool(whitelist_overrides_blacklist)
         self.whitelist_bypass_behavior = bool(whitelist_bypass_behavior)
 
@@ -333,17 +364,32 @@ class SecurityPolicy:
         )
 
     def resolve_client_ip(self, request):
-        if self.trust_x_forwarded_for:
-            forwarded = str(request.headers.get("x-forwarded-for", "")).strip()
-            if forwarded:
-                first = forwarded.split(",")[0].strip()
-                if _to_ip(first):
-                    return first
         client = request.client or ("", 0)
         ip_text = str(client[0] if isinstance(client, (tuple, list)) and client else "")
-        if _to_ip(ip_text):
-            return ip_text
-        return ""
+        peer = _to_ip(ip_text)
+        if peer is None:
+            return ""
+        peer_text = str(peer)
+        if (
+            not self.trust_x_forwarded_for
+            or not self.trusted_proxy_networks
+            or not _ip_in_networks(peer_text, self.trusted_proxy_networks)
+        ):
+            return peer_text
+
+        forwarded = str(
+            get_header(request.headers, "x-forwarded-for", default="")
+        ).strip()
+        chain = []
+        for raw in forwarded.split(","):
+            candidate = _to_ip(raw.strip())
+            if candidate is not None:
+                chain.append(str(candidate))
+        chain.append(peer_text)
+        for candidate in reversed(chain):
+            if not _ip_in_networks(candidate, self.trusted_proxy_networks):
+                return candidate
+        return chain[0] if chain else peer_text
 
     def add_whitelist(self, *ip_or_cidr):
         added = 0
@@ -463,9 +509,14 @@ class SecurityPolicy:
             self._prune_events_locked(self._suspicious_events, now, self.suspicious_window_seconds)
             self._requests_total += 1
 
+            whitelisted = bool(ip_text and _ip_in_networks(ip_text, self._whitelist_networks))
+            blacklisted = bool(ip_text and _ip_in_networks(ip_text, self._blacklist_networks))
+
             if ip_text:
                 active_block = self._temporary_blocks.get(ip_text)
-                if active_block:
+                if active_block and not (
+                    whitelisted and self.whitelist_bypass_behavior
+                ):
                     retry_after = max(1, int(float(active_block.get("until", now)) - now))
                     reason = str(active_block.get("reason", "temporary_block"))
                     return self._deny_locked(
@@ -476,9 +527,6 @@ class SecurityPolicy:
                         message="Too Many Requests",
                         retry_after=retry_after,
                     )
-
-            whitelisted = bool(ip_text and _ip_in_networks(ip_text, self._whitelist_networks))
-            blacklisted = bool(ip_text and _ip_in_networks(ip_text, self._blacklist_networks))
 
             if blacklisted and not (whitelisted and self.whitelist_overrides_blacklist):
                 return self._deny_locked(
@@ -584,6 +632,10 @@ class SecurityPolicy:
                 "policy": {
                     "acl_default": self.acl_default,
                     "trust_x_forwarded_for": self.trust_x_forwarded_for,
+                    "trusted_proxy_cidrs": [
+                        str(network)
+                        for network in self.trusted_proxy_networks
+                    ],
                     "whitelist_overrides_blacklist": self.whitelist_overrides_blacklist,
                     "whitelist_bypass_behavior": self.whitelist_bypass_behavior,
                     "rate_limit_requests": self.rate_limit_requests,

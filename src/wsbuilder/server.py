@@ -129,7 +129,12 @@ class HTTPServer:
                 return
             except ValueError as e:
                 message = str(e).lower()
-                status = 431 if "header" in message else 400
+                if "too large" in message:
+                    status = 431
+                elif "unsupported http version" in message:
+                    status = 505
+                else:
+                    status = 400
                 send_http_response(conn, Response.text(str(e), status=status))
                 return
             if not req:
@@ -137,13 +142,49 @@ class HTTPServer:
 
             headers = req["headers"]
             body = req["remainder"]
+            transfer_encoding = headers.get("transfer-encoding", "").strip()
+            content_length = headers.get("content-length")
+            expectation = headers.get("expect", "").strip().lower()
 
-            if "content-length" in headers:
-                try:
-                    cl = int(headers["content-length"])
-                except Exception:
+            if transfer_encoding and content_length is not None:
+                send_http_response(
+                    conn,
+                    Response.text(
+                        "Content-Length and Transfer-Encoding cannot be combined",
+                        status=400,
+                    ),
+                )
+                return
+            if transfer_encoding:
+                send_http_response(
+                    conn,
+                    Response.text("Transfer-Encoding is not supported", status=501),
+                )
+                return
+            if expectation and expectation != "100-continue":
+                send_http_response(
+                    conn,
+                    Response.text("Expectation Failed", status=417),
+                )
+                return
+            if expectation and content_length is None:
+                send_http_response(
+                    conn,
+                    Response.text(
+                        "100-continue requires Content-Length",
+                        status=417,
+                    ),
+                )
+                return
+
+            if content_length is not None:
+                if not content_length or any(
+                    char < "0" or char > "9"
+                    for char in content_length
+                ):
                     send_http_response(conn, Response.text("Invalid Content-Length", status=400))
                     return
+                cl = int(content_length)
                 if cl < 0:
                     send_http_response(conn, Response.text("Invalid Content-Length", status=400))
                     return
@@ -153,6 +194,11 @@ class HTTPServer:
                         Response.text("Payload Too Large", status=413),
                     )
                     return
+                if expectation == "100-continue" and len(body) < cl:
+                    try:
+                        conn.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+                    except (ConnectionError, OSError):
+                        return
                 if len(body) < cl:
                     need = cl - len(body)
                     if need > 0:
@@ -160,6 +206,12 @@ class HTTPServer:
                             body += recv_exact(conn, need)
                         except socket.timeout:
                             send_http_response(conn, Response.text("Request Timeout", status=408))
+                            return
+                        except (ConnectionError, OSError):
+                            send_http_response(
+                                conn,
+                                Response.text("Incomplete Request Body", status=400),
+                            )
                             return
                 elif len(body) > cl:
                     body = body[:cl]
@@ -169,20 +221,33 @@ class HTTPServer:
                         Response.text("Payload Too Large", status=413),
                     )
                     return
+            elif body:
+                send_http_response(
+                    conn,
+                    Response.text("Unexpected request body without framing", status=400),
+                )
+                return
 
             raw_path = req["path"]
             path, _, query = raw_path.partition("?")
             started = time.time()
 
-            request = Request(
-                method=req["method"],
-                path=path,
-                query_string=query,
-                headers=headers,
-                body=body,
-                client=addr,
-                tls=tls_meta,
-            )
+            try:
+                request = Request(
+                    method=req["method"],
+                    path=path,
+                    query_string=query,
+                    headers=headers,
+                    body=body,
+                    client=addr,
+                    tls=tls_meta,
+                )
+            except (TypeError, ValueError) as e:
+                send_http_response(
+                    conn,
+                    Response.text(f"Invalid request target: {e}", status=400),
+                )
+                return
             if metrics:
                 metrics.http_request_started(
                     request.method,
@@ -191,11 +256,45 @@ class HTTPServer:
                 )
 
             ws_request = is_ws_request(headers)
+            if ws_request and (
+                request.method != "GET" or req["version"] != "HTTP/1.1"
+            ):
+                response = Response.text(
+                    "WebSocket upgrade requires GET over HTTP/1.1",
+                    status=405,
+                    headers={"Allow": "GET"},
+                )
+                send_http_response(
+                    conn,
+                    response,
+                    send_body=request.method != "HEAD",
+                )
+                if metrics:
+                    elapsed = (time.time() - started) * 1000.0
+                    metrics.http_response_sent(
+                        request.method,
+                        request.path,
+                        response.status,
+                        body_size=(
+                            len(response.body)
+                            if request.method != "HEAD"
+                            else 0
+                        ),
+                        duration_ms=elapsed,
+                    )
+                if security:
+                    security.observe_response(request, response.status)
+                return
+
             if ws_request and security:
                 decision = security.evaluate(request)
                 if not decision.allowed:
                     response = decision.to_response()
-                    send_http_response(conn, response)
+                    send_http_response(
+                        conn,
+                        response,
+                        send_body=request.method != "HEAD",
+                    )
                     if metrics:
                         elapsed = (time.time() - started) * 1000.0
                         metrics.http_response_sent(
@@ -212,7 +311,11 @@ class HTTPServer:
                 ws_route = self.app.ws_routes.get(path)
                 if not ws_route:
                     response = Response.text("Not Found", status=404)
-                    send_http_response(conn, response)
+                    send_http_response(
+                        conn,
+                        response,
+                        send_body=request.method != "HEAD",
+                    )
                     if metrics:
                         elapsed = (time.time() - started) * 1000.0
                         metrics.http_response_sent(
@@ -227,7 +330,11 @@ class HTTPServer:
                     return
                 handshake_error = _websocket_handshake_error_response(headers)
                 if handshake_error is not None:
-                    send_http_response(conn, handshake_error)
+                    send_http_response(
+                        conn,
+                        handshake_error,
+                        send_body=request.method != "HEAD",
+                    )
                     if metrics:
                         elapsed = (time.time() - started) * 1000.0
                         metrics.error("ws_handshake", handshake_error.status)
@@ -311,10 +418,28 @@ class HTTPServer:
                 send_http_response(conn, Response.text("Internal Server Error", status=500))
                 return
 
-            send_http_response(conn, response)
+            try:
+                send_http_response(
+                    conn,
+                    response,
+                    send_body=request.method != "HEAD",
+                )
+            except ValueError as e:
+                if metrics:
+                    metrics.error("http_response", e)
+                response = Response.text("Internal Server Error", status=500)
+                send_http_response(
+                    conn,
+                    response,
+                    send_body=request.method != "HEAD",
+                )
             if metrics:
                 elapsed = (time.time() - started) * 1000.0
-                body_size = 0 if response.is_stream else len(response.body)
+                body_size = (
+                    0
+                    if response.is_stream or request.method == "HEAD"
+                    else len(response.body)
+                )
                 metrics.http_response_sent(
                     request.method,
                     request.path,

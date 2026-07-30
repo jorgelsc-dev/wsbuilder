@@ -39,7 +39,8 @@ logs.event("request", method="GET", path="/")
 ```
 
 `NDJSONLog` mantiene un registro linea a linea, facil de consumir con `jq`,
-scripts shell o pipelines de procesamiento.
+scripts shell o pipelines de procesamiento. Las escrituras concurrentes dentro
+del mismo proceso se serializan y cada registro se emite con una sola escritura.
 
 Metodos:
 
@@ -78,14 +79,18 @@ Metodos principales:
 - `close(wait=True, timeout=None)`
 
 `max_concurrent` permite limitar concurrencia con semaforo interno.
+`spawn()` y `close()` se coordinan de forma atomica: una tarea iniciada antes del
+cierre queda registrada y participa en la espera; las posteriores se rechazan.
 
 ## `TaskHandle`
 
-Cada tarea expone estado y resultado:
+Cada tarea expone estado y resultado. `context.app` usa la aplicacion del
+`TaskManager` aunque no se adjunte un request. Cancelar una tarea ya terminal es
+una operacion nula y devuelve `False`.
 
-- `status()`, `running()`, `finished()`, `cancelled()`
+- `status`, `running`, `started`, `finished`, `cancelled`
 - `wait(timeout=None)`, `join(timeout=None)`, `get(timeout=None)`
-- `result()`, `exception()`, `snapshot()`
+- `result`, `exception`, `snapshot()`
 
 Errores especificos:
 

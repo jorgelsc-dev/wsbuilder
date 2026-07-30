@@ -40,6 +40,28 @@ class TestSQLiteMemoryCache(unittest.TestCase):
         self.assertIsNone(self.cache.get("k1"))
         self.assertIsNone(self.cache.get("k2"))
 
+    def test_add_and_replace_treat_expired_entries_as_missing(self):
+        self.cache.set("add-key", "old", ttl=0.02)
+        self.cache.set("replace-key", "old", ttl=0.02)
+        time.sleep(0.04)
+
+        self.assertTrue(self.cache.add("add-key", "new"))
+        self.assertEqual(self.cache.get("add-key"), "new")
+        self.assertFalse(self.cache.replace("replace-key", "new"))
+        self.assertIsNone(self.cache.get("replace-key"))
+
+    def test_noop_dml_does_not_leave_an_open_transaction(self):
+        self.assertFalse(self.cache.delete("missing"))
+        self.assertFalse(self.cache._conn.in_transaction)
+        self.assertEqual(self.cache.delete_many(["missing"]), 0)
+        self.assertFalse(self.cache._conn.in_transaction)
+        self.assertFalse(self.cache.expire("missing", 1.0))
+        self.assertFalse(self.cache._conn.in_transaction)
+        self.assertEqual(self.cache.invalidate_tag("missing"), 0)
+        self.assertFalse(self.cache._conn.in_transaction)
+        self.assertEqual(self.cache.cleanup(), 0)
+        self.assertFalse(self.cache._conn.in_transaction)
+
     def test_incr_decr_numeric(self):
         self.assertEqual(self.cache.incr("counter"), 1)
         self.assertEqual(self.cache.incr("counter", amount=4), 5)

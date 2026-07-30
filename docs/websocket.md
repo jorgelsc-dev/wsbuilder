@@ -10,7 +10,7 @@ def ws_echo(ws, _request):
     while True:
         frame = ws.recv_frame()
         if frame.opcode == 0x1:
-            ws.send_text(frame.payload.decode("utf-8", errors="ignore"))
+            ws.send_text(frame.payload.decode("utf-8"))
         elif frame.opcode == 0x8:
             ws.close(1000, "bye")
             break
@@ -44,7 +44,9 @@ Metodos publicos mas usados:
 - `close(code=1000, reason="")`
 
 `recv_frame()` devuelve un `WebSocketFrame` con `opcode`, `payload`, `fin` y
-metadatos del frame leido.
+metadatos del mensaje leido. Los mensajes fragmentados se reensamblan antes de
+devolverse; los frames de control intercalados se procesan durante el
+reensamblado.
 
 ## Handshake y utilidades
 
@@ -66,7 +68,9 @@ pasar por `App`.
 - Usa `keepalive_interval` y `pong_timeout` cuando el cliente puede quedar
   mucho tiempo ocioso.
 - Trata `opcode == 0x8` como cierre ordenado.
-- Para mensajes de texto, decodifica con tolerancia a errores si el origen no
-  esta completamente controlado.
+- Declara en `subprotocols` cada protocolo que el servidor realmente soporta;
+  el handshake nunca refleja uno no declarado.
+- Los upgrades requieren `GET` sobre HTTP/1.1. El servidor valida mascaras,
+  opcodes, longitudes minimas, limites de payload, UTF-8 y frames de control.
 - Si necesitas limitar trafico o ACL, habilita `SecurityPolicy` tambien en la
   aplicacion HTTP; el handshake pasa por la evaluacion de seguridad.

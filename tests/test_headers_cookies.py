@@ -46,6 +46,17 @@ class TestHeadersCookies(unittest.TestCase):
         self.assertIn("HttpOnly", line)
         self.assertIn("SameSite=Strict", line)
 
+    def test_headers_and_cookies_reject_response_splitting(self):
+        headers = {}
+        with self.assertRaises(ValueError):
+            set_header(headers, "X-Test\r\nX-Injected", "value")
+        with self.assertRaises(ValueError):
+            set_header(headers, "X-Test", "value\r\nX-Injected: yes")
+        with self.assertRaises(ValueError):
+            build_set_cookie("sid", "ok\r\nX-Injected: yes")
+        with self.assertRaises(ValueError):
+            build_set_cookie("sid", "ok", same_site="sometimes")
+
 
 if __name__ == "__main__":
     unittest.main()

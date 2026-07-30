@@ -242,6 +242,7 @@ def _decode_name(data, offset):
     jumped = False
     next_offset = offset
     pointer_hops = 0
+    expanded_size = 1
 
     while True:
         if offset >= len(data):
@@ -268,11 +269,23 @@ def _decode_name(data, offset):
                 raise ValueError("invalid DNS name: pointer loop")
             continue
 
+        if length & 0xC0:
+            raise ValueError("invalid DNS name: reserved label type")
+        if length > 63:
+            raise ValueError("invalid DNS name: label too long")
+
         offset += 1
         end = offset + length
         if end > len(data):
             raise ValueError("invalid DNS name: truncated label")
-        labels.append(data[offset:end].decode("ascii", errors="ignore"))
+        expanded_size += length + 1
+        if expanded_size > 255:
+            raise ValueError("invalid DNS name: name too long")
+        try:
+            label = data[offset:end].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ValueError("invalid DNS name: non-ASCII label") from exc
+        labels.append(label)
         offset = end
         if not jumped:
             next_offset = offset
@@ -631,6 +644,42 @@ def _normalize_upstream(entry):
     return {"host": host, "port": port, "family": family, "socktype": socktype, "proto": proto, "sockaddr": sockaddr}
 
 
+def _same_upstream_endpoint(upstream, received_addr):
+    expected_addr = upstream.get("sockaddr")
+    if not isinstance(received_addr, (list, tuple)) or len(received_addr) < 2:
+        return False
+    if not isinstance(expected_addr, (list, tuple)) or len(expected_addr) < 2:
+        return False
+    try:
+        ports_match = int(received_addr[1]) == int(expected_addr[1])
+    except (TypeError, ValueError):
+        return False
+    if not ports_match:
+        return False
+
+    family = upstream.get("family")
+    received_host = str(received_addr[0]).split("%", 1)[0]
+    expected_host = str(expected_addr[0]).split("%", 1)[0]
+    try:
+        return socket.inet_pton(family, received_host) == socket.inet_pton(family, expected_host)
+    except (OSError, TypeError, ValueError):
+        return received_host.lower() == expected_host.lower()
+
+
+def _is_valid_upstream_response(response, received_addr, upstream, expected_txid, expected_questions):
+    if not _same_upstream_endpoint(upstream, received_addr):
+        return False
+    try:
+        txid, flags, questions = _parse_query(response)
+    except ValueError:
+        return False
+    if not (flags & 0x8000):
+        return False
+    if txid != expected_txid:
+        return False
+    return questions == expected_questions
+
+
 class LocalDNSServer:
     """Authoritative DNS UDP server with optional upstream fallback."""
 
@@ -859,11 +908,21 @@ class LocalDNSServer:
         unique = []
         seen = set()
         for row in matches:
-            key = (row["name"], row["rtype"], row["rclass"], row["ttl"], row["rdata"])
+            resolved_row = row
+            if name.startswith("*.") and row["name"] == name:
+                resolved_row = dict(row)
+                resolved_row["name"] = _normalize_name(qname)
+            key = (
+                resolved_row["name"],
+                resolved_row["rtype"],
+                resolved_row["rclass"],
+                resolved_row["ttl"],
+                resolved_row["rdata"],
+            )
             if key in seen:
                 continue
             seen.add(key)
-            unique.append(row)
+            unique.append(resolved_row)
 
         return True, unique
 
@@ -889,14 +948,25 @@ class LocalDNSServer:
     def _forward_to_upstream(self, data):
         if not self._upstreams:
             return None
+        try:
+            expected_txid, _flags, expected_questions = _parse_query(data)
+        except ValueError:
+            return None
         for upstream in self._upstreams:
             sock = None
             try:
                 sock = socket.socket(upstream["family"], upstream["socktype"], upstream["proto"])
                 sock.settimeout(self.upstream_timeout)
                 sock.sendto(data, upstream["sockaddr"])
-                response, _addr = sock.recvfrom(4096)
-                return response
+                response, received_addr = sock.recvfrom(65535)
+                if _is_valid_upstream_response(
+                    response,
+                    received_addr,
+                    upstream,
+                    expected_txid,
+                    expected_questions,
+                ):
+                    return response
             except OSError:
                 continue
             finally:
@@ -965,7 +1035,11 @@ class LocalDNSServer:
                         raise
                     break
 
-                response = self._handle_packet(data)
+                try:
+                    response = self._handle_packet(data)
+                except Exception:
+                    # A malformed datagram must not terminate the DNS service loop.
+                    continue
                 if response:
                     try:
                         self._sock.sendto(response, addr)

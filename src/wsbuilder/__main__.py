@@ -3,7 +3,7 @@ import threading
 
 from .framework import App, Response, parse_close_payload
 
-DEFAULT_HOST = "0.0.0.0"
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
 MONITOR_HTML = """<!doctype html>

@@ -169,6 +169,83 @@ class TestViewThreadRouting(unittest.TestCase):
         response = app.dispatch(self._request("/slow"))
         self.assertEqual(response.status, 504)
 
+    def test_timed_out_queued_job_is_not_executed_later(self):
+        app = self._new_app()
+        release = threading.Event()
+        first_started = threading.Event()
+        calls = []
+        calls_lock = threading.Lock()
+
+        @app.view(
+            "/slow-queue",
+            min_threads=1,
+            max_threads=1,
+            worker_timeout_seconds=0.05,
+            requests_per_thread=0,
+        )
+        def slow_queue(request):
+            with calls_lock:
+                calls.append(request.query.get("job"))
+            first_started.set()
+            release.wait(0.5)
+            return "done"
+
+        first_request = self._request("/slow-queue")
+        first_request.query_string = "job=first"
+        first_request.query = {"job": "first"}
+        first_response = {}
+        first_thread = threading.Thread(
+            target=lambda: first_response.setdefault(
+                "value",
+                app.dispatch(first_request),
+            )
+        )
+        first_thread.start()
+        self.assertTrue(first_started.wait(1.0))
+
+        second_request = self._request("/slow-queue")
+        second_request.query_string = "job=second"
+        second_request.query = {"job": "second"}
+        second_response = app.dispatch(second_request)
+        self.assertEqual(second_response.status, 504)
+
+        release.set()
+        first_thread.join(timeout=1.0)
+        time.sleep(0.02)
+        self.assertEqual(calls, ["first"])
+
+    def test_signed_affinity_cookie_selects_previous_worker(self):
+        app = App(thread_cookie_secret="test-secret")
+        self.apps.append(app)
+
+        @app.view(
+            "/affinity",
+            min_threads=2,
+            max_threads=2,
+            requests_per_thread=0,
+        )
+        def affinity(_request):
+            return "ok"
+
+        route = app.router.resolve("/affinity", "GET")
+        affinity_worker = route.thread_pool.workers[1]
+        cookie = app._sign_thread_cookie(
+            route.path,
+            affinity_worker.thread_id,
+        )
+
+        response = app.dispatch(
+            self._request(
+                "/affinity",
+                headers={"Cookie": f"{app.thread_cookie_name}={cookie}"},
+            )
+        )
+
+        self.assertEqual(
+            response.headers["WSBuilder-Thread"],
+            affinity_worker.thread_id,
+        )
+
     def test_thread_count_backwards_compatibility(self):
         app = self._new_app()
 

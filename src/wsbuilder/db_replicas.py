@@ -119,6 +119,9 @@ class DatabaseReplicaPool:
         timeout: float = 10.0,
         detect_types: int = 0,
     ):
+        replica_count = int(replica_count)
+        if replica_count <= 0:
+            raise ValueError("replica_count must be greater than zero")
         self.db_path = db_path
         self.replica_count = replica_count
         self.timeout = timeout
@@ -194,6 +197,7 @@ class OptimizedDatabase:
         self.debug = debug
         self._lock = threading.RLock()
         self._tx_depth = threading.local()
+        self._savepoint_sequence = 0
         self.optimization_config = optimization_config or SQLite3OptimizationConfig()
         
         # Connection setup
@@ -329,7 +333,22 @@ class OptimizedDatabase:
 
         with self._lock:
             self._log("SQL many:", sql.strip())
-            cur = self._conn.executemany(sql, [tuple(p) for p in seq_of_params])
+            params = [tuple(p) for p in seq_of_params]
+            atomic = bool(commit) or self.in_transaction()
+            savepoint = None
+            if atomic:
+                self._savepoint_sequence += 1
+                savepoint = f"wsb_many_{self._savepoint_sequence}"
+                self._conn.execute(f"SAVEPOINT {savepoint}")
+            try:
+                cur = self._conn.executemany(sql, params)
+            except BaseException:
+                if savepoint is not None:
+                    self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                raise
+            if savepoint is not None:
+                self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             if commit and not self.in_transaction():
                 self._conn.commit()
             return cur.rowcount

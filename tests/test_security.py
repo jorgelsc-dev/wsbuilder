@@ -84,6 +84,58 @@ class TestSecurityPolicy(unittest.TestCase):
         self.assertGreaterEqual(snap["counters"]["temporary_blocks_active"], 1)
         self.assertIn("127.0.0.1", snap["active_blocks"])
 
+    def test_forwarded_for_requires_a_trusted_direct_proxy(self):
+        untrusted = SecurityPolicy(trust_x_forwarded_for=True)
+        spoofed = _req(
+            "GET",
+            "/",
+            client=("203.0.113.10", 1234),
+            headers={"X-Forwarded-For": "198.51.100.20"},
+        )
+        self.assertEqual(
+            untrusted.resolve_client_ip(spoofed),
+            "203.0.113.10",
+        )
+
+        trusted = SecurityPolicy(
+            trust_x_forwarded_for=True,
+            trusted_proxy_cidrs=("10.0.0.0/8",),
+        )
+        proxied = _req(
+            "GET",
+            "/",
+            client=("10.0.0.5", 1234),
+            headers={
+                "X-Forwarded-For": "spoofed, 198.51.100.20, 10.0.0.4"
+            },
+        )
+        self.assertEqual(
+            trusted.resolve_client_ip(proxied),
+            "198.51.100.20",
+        )
+
+    def test_whitelist_bypasses_existing_behavior_block(self):
+        policy = SecurityPolicy()
+        self.assertTrue(policy.block_ip("127.0.0.1"))
+        policy.add_whitelist("127.0.0.1")
+
+        decision = policy.evaluate(_req("GET", "/"))
+
+        self.assertTrue(decision.allowed)
+
+    def test_acl_rejects_invalid_network_instead_of_matching_everyone(self):
+        policy = SecurityPolicy()
+        with self.assertRaises(ValueError):
+            policy.deny(path="/admin", ip_cidrs=("not-a-network",))
+
+    def test_acl_path_prefix_respects_segment_boundaries(self):
+        policy = SecurityPolicy(acl_default="deny")
+        policy.allow(path_prefix="/api")
+
+        self.assertTrue(policy.evaluate(_req("GET", "/api")).allowed)
+        self.assertTrue(policy.evaluate(_req("GET", "/api/users")).allowed)
+        self.assertFalse(policy.evaluate(_req("GET", "/api-private")).allowed)
+
     def test_metrics_snapshot_includes_security_block(self):
         self.app.enable_security()
         self.app.enable_metrics(app_name="secure-app")
