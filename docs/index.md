@@ -1,89 +1,39 @@
 # wsbuilder
 
-`wsbuilder` se distribuye como paquete Python puro, sin dependencias de runtime.
-Eso permite una instalacion simple con `pip` en Linux, macOS y Windows siempre que
-el usuario tenga Python `3.11+`.
+`wsbuilder` es una libreria Python `3.11+` para construir servicios HTTP,
+WebSocket y utilidades de infraestructura con Python puro y sin dependencias de
+runtime.
 
-Esta documentacion cubre la superficie publica principal del proyecto:
+Esta documentacion esta organizada para tres perfiles:
 
-- nucleo `App`, `HTTPServer`, `Request` y `Response`.
-- WebSocket, cache, seguridad, metricas, logs y tareas.
-- ORM SQLite, replicas de lectura y optimizacion.
-- DNS local, proxy HTTP y utilidades de borde.
-- IA, prediccion y un proyecto integral de ejemplo separado.
+- **Principiantes**: levantar una API, devolver HTML/JSON y entender `Request` y
+  `Response`.
+- **Intermedios**: persistencia SQLite, cache, seguridad, metricas, logs y tareas
+  en background.
+- **Avanzados**: worker pools, TLS, limites de transporte, reverse proxy, DNS,
+  replicas SQLite y operacion interna.
 
-## Instalacion recomendada
+## Que puedes construir
 
-```bash
-python -m pip install --upgrade pip
-python -m pip install wsbuilder
-```
+- APIs JSON pequenas o medianas.
+- Vistas HTML simples y streaming HTTP.
+- Endpoints WebSocket para echo, chat, eventos o telemetria.
+- Servicios con SQLite embebido y modelos declarativos.
+- Herramientas internas con cache, ACL, rate limit, logs y metricas.
+- Reverse proxy local con balanceo y dashboard.
+- Servidor DNS local para demos, labs y entornos internos.
+- Entrenamiento o prediccion simple desde Python puro.
 
-Si tu distribucion protege el Python del sistema con PEP 668 y muestra
-`externally-managed-environment`, usa el flujo en `venv` documentado abajo.
+Para una lista completa, lee [Que puedes hacer con wsbuilder](capabilities.md).
 
-La guia completa esta en [Instalacion](install.md).
-
-## Instalacion en entorno virtual
-
-=== "Linux / macOS"
-
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate
-    python -m pip install --upgrade pip
-    python -m pip install wsbuilder
-    ```
-
-=== "Windows PowerShell"
-
-    ```powershell
-    py -m venv .venv
-    .venv\Scripts\Activate.ps1
-    py -m pip install --upgrade pip
-    py -m pip install wsbuilder
-    ```
-
-## Verificar que quedo bien
-
-```bash
-python -c "import wsbuilder; print(wsbuilder.__version__)"
-wsbuilder --help
-```
-
-## Instalar desde codigo fuente
-
-Para instalar desde este repositorio:
-
-```bash
-python -m pip install .
-```
-
-La instalacion editable solo se recomienda para desarrollo:
-
-```bash
-python -m pip install -e .
-```
-
-## Instalar sin internet
-
-Si necesitas compilar e instalar localmente sin acceso a PyPI, usa:
-
-```bash
-python -m build --no-isolation
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --no-index dist/wsbuilder-*.whl
-```
-
-La explicacion detallada y la alternativa desde codigo fuente estan en [Instalacion](install.md).
-
-## Inicio rapido
+## Primer ejemplo
 
 ```python
 from wsbuilder import App, Response
 
 app = App(cors_allow_origin="*")
+app.enable_metrics()
+app.enable_docs(path="/docs", json_path="/docs.json")
 
 @app.view("/")
 def home(_request):
@@ -93,26 +43,59 @@ def home(_request):
 def health(_request):
     return {"ok": True}
 
-app.run("0.0.0.0", 8765)
+app.run("127.0.0.1", 8765)
 ```
+
+Ejecuta:
+
+```bash
+python app.py
+```
+
+Abre:
+
+- `http://127.0.0.1:8765/`
+- `http://127.0.0.1:8765/api/health`
+- `http://127.0.0.1:8765/docs`
+- `http://127.0.0.1:8765/api/metrics`
+
+## Ruta de aprendizaje
+
+| Nivel | Empieza aqui | Que aprendes |
+| --- | --- | --- |
+| Inicial | [Principiantes](beginners.md) | instalar, crear rutas, devolver JSON/HTML, activar docs runtime |
+| Medio | [Intermedios](intermediate.md) | CRUD SQLite, cache, seguridad, metricas, logs y tareas |
+| Avanzado | [Avanzados](advanced.md) | HTTPServer, TLS, worker pools, DNS, proxy, replicas y operacion |
+
+## Guias por tema
+
+| Tema | Guia |
+| --- | --- |
+| Instalacion normal, local y offline | [Instalacion](install.md) |
+| Arquitectura y flujo interno | [Arquitectura](architecture.md) |
+| Rutas HTTP, requests, responses y docs runtime | [App y HTTP](app-http.md) |
+| WebSocket y frames | [WebSocket](websocket.md) |
+| SQLite, modelos y replicas | [Datos y ORM](data-orm.md) |
+| Cache KV, cache HTTP y seguridad | [Cache y Seguridad](cache-security.md) |
+| Metricas, logs y tareas | [Observabilidad y Tareas](observability-tasks.md) |
+| DNS y reverse proxy | [Red y Edge](network-edge.md) |
+| IA, estadistica y prediccion | [IA y Prediccion](ai-predict.md) |
+| Exportaciones publicas | [API publica](api-map.md) |
+| Ejemplo completo | [Proyecto integral](full-project.md) |
 
 ## Demo incluida
 
-Tras instalar el paquete puedes levantar la demo:
+Despues de instalar el paquete:
 
 ```bash
-wsbuilder --host 0.0.0.0 --port 8765
+wsbuilder --host 127.0.0.1 --port 8765
 ```
 
-## Siguientes lecturas
+La demo publica HTTP, WebSocket, metricas, monitor HTML y documentacion runtime.
 
-- [Arquitectura](architecture.md)
-- [App y HTTP](app-http.md)
-- [WebSocket](websocket.md)
-- [Datos y ORM](data-orm.md)
-- [Cache y Seguridad](cache-security.md)
-- [Observabilidad y Tareas](observability-tasks.md)
-- [Red y Edge](network-edge.md)
-- [IA y Prediccion](ai-predict.md)
-- [Mapa de API publica](api-map.md)
-- [Proyecto integral](full-project.md)
+## Estado del paquete
+
+El proyecto se declara como `Development Status :: 3 - Alpha` en `pyproject.toml`.
+Tratalo como una libreria util para servicios internos, prototipos y laboratorios
+controlados. Revisa limites, seguridad, TLS y apagado de recursos antes de
+exponerlo fuera de localhost.

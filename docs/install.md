@@ -45,6 +45,8 @@ python -c "import wsbuilder; print(wsbuilder.__version__)"
 wsbuilder --help
 ```
 
+Tambien existe el alias `wsbuilder-demo`, que ejecuta la misma demo incluida.
+
 ## 2. Compilar en local e instalar en local sin internet
 
 Usa esta ruta cuando ya tienes una copia local del repositorio y no quieres que
@@ -121,3 +123,27 @@ wsbuilder --help
 
 Ese flujo es el mas estable porque instala desde un artefacto ya construido y no
 depende de herramientas de compilacion en la maquina final.
+
+## 3. Instalar para desarrollo
+
+Desde la raiz del repositorio:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Validar el paquete:
+
+```bash
+PYTHONPATH=src pytest -q
+```
+
+Validar la documentacion:
+
+```bash
+python -m pip install -r requirements-docs.txt
+mkdocs build --strict
+```

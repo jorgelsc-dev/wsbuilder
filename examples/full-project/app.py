@@ -318,7 +318,7 @@ def build_app(*, upstream_port=DEFAULT_UPSTREAM_PORT, enable_dns=False, dns_host
         if task is None:
             return Response.json({"status": "error", "message": "task not found"}, status=404)
         payload = task.snapshot()
-        if task.finished() and app.latest_network is not None:
+        if task.finished.is_set() and app.latest_network is not None:
             payload["prediction_yes"] = app.latest_network.predict_class([1, 0])
         return payload
 

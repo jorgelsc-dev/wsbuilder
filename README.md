@@ -1,147 +1,63 @@
 # wsbuilder
 
-`wsbuilder` es una libreria Python para construir servidores HTTP, WebSocket y utilidades de infraestructura en un unico paquete.
+`wsbuilder` es una libreria Python `3.11+` para construir servicios HTTP,
+WebSocket y utilidades de infraestructura en un paquete pequeno, modular y sin
+dependencias de runtime.
 
-Se apoya en la biblioteca estandar y expone bloques pequenos y composables para:
+Sirve para crear:
 
-- routing HTTP y respuestas tipadas.
-- WebSocket de bajo nivel con control de frames.
-- ORM ligero para SQLite.
-- cache, seguridad, metricas y tareas en background.
-- DNS local y replicas SQLite optimizadas.
+- APIs JSON y vistas HTML.
+- canales WebSocket.
+- servicios con SQLite embebido y ORM ligero.
+- cache clave-valor y cache HTTP de vistas.
+- rate limiting, ACL, listas de IP y bloqueo temporal.
+- metricas JSON, stream NDJSON, logs y tareas en background.
+- DNS local, reverse proxy y balanceo.
+- prediccion simple y redes neuronales basicas desde Python puro.
 
-## Mapa rapido
+## Ruta de documentacion
 
-<div class="diagram">
-<div class="diagram-title">Mapa rapido</div>
-<div class="diagram-track">
-<div class="diagram-node">Cliente</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">HTTPServer</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">App</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Router</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">HTTP / WS</div>
-</div>
-<div class="diagram-note" style="margin-top: 0.85rem;">El servicio se organiza alrededor de `App` y sus capas transversales.</div>
-</div>
+La documentacion esta organizada por nivel:
 
-## Por que destaca
+- [Principiantes](docs/beginners.md): instala, crea la primera app y entiende
+  rutas `view` y `api`.
+- [Intermedios](docs/intermediate.md): agrega SQLite, cache, seguridad, metricas,
+  logs y tareas.
+- [Avanzados](docs/advanced.md): configura limites HTTP, TLS, worker pools, DNS,
+  ProxyI, replicas SQLite y operacion.
 
-- Menos superficie de dependencia en runtime.
-- Flujo explicito: request, dispatch, respuesta y cierre.
-- Modulos separados que puedes activar solo cuando los necesitas.
-- API publica uniforme: `App`, `Response`, `Database`, `TaskManager`, `LocalDNSServer`.
-- Adecuado para servicios pequenos, medianos y capas de borde en Microservicios.
+Tambien puedes leer:
 
-## Instalacion
+- [Que puedes hacer con wsbuilder](docs/capabilities.md)
+- [Instalacion](docs/install.md)
+- [Arquitectura](docs/architecture.md)
+- [API publica](docs/api-map.md)
+- [Proyecto integral](docs/full-project.md)
 
-### 1. Instalar con pip
+## Instalacion rapida
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install wsbuilder
 ```
 
-En Debian, Kali, Ubuntu y derivados, `pip` puede bloquear la instalacion en el
-Python del sistema con `externally-managed-environment` (PEP 668). En esos
-casos, la ruta recomendada es usar un entorno virtual.
-
-Si quieres aislar la instalacion en un entorno virtual:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install wsbuilder
-```
-
-Verifica la instalacion:
-
-```bash
-python -c "import wsbuilder; print(wsbuilder.__version__)"
-wsbuilder --help
-```
-
-### 2. Compilar en local e instalar sin internet
-
-Si vas a trabajar sin conexion, usa una rueda local y desactiva el aislamiento de build.
-
-Requisitos previos:
-
-- Tener este repositorio ya descargado en la maquina.
-- Tener Python `3.11+`.
-- Tener `build`, `setuptools>=77` y `wheel` ya instalados antes de desconectarte.
-
-Compilar el paquete localmente sin descargar nada:
-
-```bash
-python -m build --no-isolation
-```
-
-Instalar la wheel generada sin usar PyPI:
-
-```bash
-python -m pip install --no-index dist/wsbuilder-*.whl
-```
-
-Si tu Python del sistema aplica PEP 668, crea primero un `venv` y ejecuta la
-instalacion dentro de ese entorno:
+En Debian, Kali, Ubuntu y otros entornos que aplican PEP 668, `pip` puede
+rechazar la instalacion sobre el Python del sistema con
+`externally-managed-environment`. Usa un entorno virtual:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --no-index dist/wsbuilder-*.whl
+python -m pip install --upgrade pip
+python -m pip install wsbuilder
 ```
 
-Si de forma excepcional necesitas instalar en el Python del sistema, `pip`
-permite forzarlo con `--break-system-packages`, pero no es la ruta recomendada:
-
-```bash
-python -m pip install --break-system-packages --no-index dist/wsbuilder-*.whl
-```
-
-Si prefieres instalar directamente desde el codigo fuente local, sin wheel:
-
-```bash
-python -m pip install --no-index --no-build-isolation --no-deps .
-```
-
-Verifica la instalacion offline:
+Verifica:
 
 ```bash
 python -c "import wsbuilder; print(wsbuilder.__version__)"
 wsbuilder --help
 ```
-
-### Instalacion local o sin publicar
-
-Desde este repositorio:
-
-```bash
-python -m pip install .
-```
-
-Si el entorno del sistema rechaza la instalacion, usa el mismo flujo dentro de
-un `venv`.
-
-Desde wheel ya construida:
-
-```bash
-python -m pip install dist/*.whl
-```
-
-### Desarrollo
-
-La instalacion editable queda reservada para contributors:
-
-```bash
-python -m pip install -e .
-```
-
-La guia completa de instalacion tambien queda documentada en [docs/install.md](docs/install.md).
 
 ## Inicio rapido
 
@@ -150,6 +66,7 @@ from wsbuilder import App, Response
 
 app = App(cors_allow_origin="*")
 app.enable_metrics()
+app.enable_docs(path="/docs", json_path="/docs.json")
 
 @app.view("/")
 def home(_request):
@@ -159,150 +76,138 @@ def home(_request):
 def health(_request):
     return {"ok": True}
 
-app.run("0.0.0.0", 8765)
+app.run("127.0.0.1", 8765)
 ```
 
-## Mapa de la libreria
+Ejecuta:
 
-<div class="diagram">
-<div class="diagram-title">Mapa de la libreria</div>
-<div class="diagram-track">
-<div class="diagram-node">framework / App</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">http / ws / orm</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">cache / security</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">metrics / tasks</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">dns / replicas / utils</div>
-</div>
-</div>
+```bash
+python app.py
+```
 
-- `wsbuilder.framework`: fachada publica con `App`, `Request`, `Response`, `HTTPServer`, `WebSocket` y helpers.
-- `wsbuilder.http`: parseo HTTP, request/response y streaming.
-- `wsbuilder.ws`: handshake, frames y errores WebSocket.
-- `wsbuilder.orm`: modelos SQLite, `QuerySet`, transacciones y helpers SQL.
-- `wsbuilder.cache` y `wsbuilder.caches`: cache en memoria y cache declarativa de respuestas.
-- `wsbuilder.security`: ACL, rate limiting y decision engine.
-- `wsbuilder.metrics`: snapshot y stream de observabilidad.
-- `wsbuilder.tasks`: trabajo asincrono controlado por `TaskManager`.
-- `wsbuilder.dns`: servidor DNS UDP local.
-- `wsbuilder.db_replicas`: lectura optimizada y pool de replicas SQLite.
-- `wsbuilder.cookies` y `wsbuilder.headers`: utilidades HTTP de bajo nivel.
-- `wsbuilder.ia`: redes neuronales basicas desde cero, con clasificacion, prediccion y estadistica.
-- `wsbuilder.predicts`: utilidad matematica `Predictor`.
+Abre:
 
-## Casos de uso
+- `http://127.0.0.1:8765/`
+- `http://127.0.0.1:8765/api/health`
+- `http://127.0.0.1:8765/docs`
+- `http://127.0.0.1:8765/api/metrics`
 
-1. APIs REST pequenas con respuestas JSON y HTML.
-2. Chat, notificaciones y telemetria sobre WebSocket.
-3. Persistencia local con SQLite y modelo declarativo.
-4. Cache de rutas o contenido calculado.
-5. Control de acceso, bloqueo temporal y observabilidad interna.
-6. Procesos de background y lectura optimizada sobre SQLite.
+## Demo incluida
 
-## IA desde cero
+```bash
+wsbuilder --host 127.0.0.1 --port 8765
+```
 
-`wsbuilder.ia` incluye tres bloques:
+La demo incluye:
 
-- `DataSet` para manejar datos, dividir conjuntos, mezclar y calcular estadistica por columna.
-- `NeuralNetwork` y `DenseLayer` para regresion y clasificacion.
-- `describe_data` y `evaluate_errors` para desviacion, incertidumbre y error maximo permisible.
+- `/`
+- `/monitor`
+- `/thread-demo`
+- `/api/health`
+- `/api/metrics`
+- `/api/metrics/stream`
+- `/docs`
+- `/docs.json`
+- `/ws/`
 
-### Regresion
+## Mapa de modulos
+
+| Area | Modulos | APIs principales |
+| --- | --- | --- |
+| HTTP | `app.py`, `http.py`, `server.py` | `App`, `Request`, `Response`, `HTTPServer` |
+| WebSocket | `ws.py` | `WebSocket`, `parse_close_payload`, handshake |
+| Datos | `orm.py`, `db_replicas.py` | `Database`, `Model`, `QuerySet`, `OptimizedDatabase` |
+| Cache | `cache.py`, `caches.py` | `SQLiteMemoryCache`, `ViewResponseCache` |
+| Seguridad | `security.py` | `SecurityPolicy`, `ACLRule`, `SecurityDecision` |
+| Observabilidad | `metrics.py`, `logs.py`, `tasks.py` | `AppMetrics`, `NDJSONLog`, `TaskManager` |
+| Red y edge | `dns.py`, `proxyi.py` | `LocalDNSServer`, `ProxyI` |
+| IA y prediccion | `ia.py`, `predicts.py` | `DataSet`, `NeuralNetwork`, `Predictor` |
+
+## Ejemplo con datos
 
 ```python
-from wsbuilder import NeuralNetwork
+from datetime import UTC, datetime
+from wsbuilder import App, Database, DateTimeField, IntegerField, Model, Response, TextField
 
-X = [[0.0], [1.0], [2.0], [3.0]]
-Y = [[0.0], [1.0], [2.0], [3.0]]
+class Note(Model):
+    __tablename__ = "notes"
 
-net = NeuralNetwork(seed=7, learning_rate=0.1, loss="mse")
-net.add_dense(4, input_size=1, activation="tanh")
-net.add_dense(1, activation="linear")
+    id = IntegerField(primary_key=True, auto_increment=True)
+    title = TextField(unique=True, null=False, index=True)
+    created_at = DateTimeField(default=lambda: datetime.now(UTC), null=False)
 
-net.fit(X, Y, epochs=2000, batch_size=4)
+app = App(cors_allow_origin="*")
+app.db = Database("data/app.sqlite3", enable_wal=True)
+Note.create_table(app.db)
 
-prediction = net.predict([1.5])
-report = net.predict_with_metrics([1.5], expected=[1.5], permissible_error=0.25)
+@app.api("/api/notes", methods=("GET", "POST"))
+def notes(request):
+    if request.method == "GET":
+        rows = [note.to_dict() for note in Note.objects(app.db).order_by("-id").all()]
+        return {"items": rows}
+
+    payload = request.json() or {}
+    title = str(payload.get("title", "")).strip()
+    if not title:
+        return Response.json({"message": "title is required"}, status=400)
+    note = Note.create(app.db, title=title)
+    return Response.json(note.to_dict(), status=201)
 ```
 
-### Clasificacion
+## Instalacion local y offline
 
-```python
-from wsbuilder import NeuralNetwork
+Desde este repositorio:
 
-X = [[0, 0], [0, 1], [1, 0], [1, 1]]
-labels = ["no", "yes", "yes", "yes"]
-
-clf = NeuralNetwork(seed=3, learning_rate=0.3, loss="binary_cross_entropy", task="classification")
-clf.add_dense(6, input_size=2, activation="tanh")
-clf.add_dense(1, activation="sigmoid")
-
-clf.fit_classification(X, labels, epochs=3000, batch_size=4)
-label = clf.predict_class([1, 0])
-probability = clf.predict_proba([1, 0])
-accuracy = clf.accuracy(X, labels)
+```bash
+python -m pip install .
 ```
 
-### Manejo de datos
+Instalacion editable para desarrollo:
 
-```python
-from wsbuilder.ia import DataSet, describe_data, evaluate_errors
-
-dataset = DataSet([[1, 2], [2, 3], [3, 4]], [[0], [1], [1]])
-train, test = dataset.split(train_ratio=0.67, shuffle=True, seed=42)
-stats = dataset.describe_features()
-errors = evaluate_errors([10.0, 11.0], [9.8, 11.4], permissible_error=0.5)
-summary = describe_data([1.0, 1.2, 0.9, 1.1])
+```bash
+python -m pip install -e .
 ```
 
-### Entrenamiento en background con Tasks
+Compilar wheel sin red, si ya tienes `build`, `setuptools>=77` y `wheel`
+disponibles:
 
-```python
-from wsbuilder import NeuralNetwork, TaskManager, submit_training_task
-
-X = [[0, 0], [0, 1], [1, 0], [1, 1]]
-labels = ["no", "yes", "yes", "yes"]
-
-clf = NeuralNetwork(seed=3, learning_rate=0.3, loss="binary_cross_entropy", task="classification")
-clf.add_dense(6, input_size=2, activation="tanh")
-clf.add_dense(1, activation="sigmoid")
-
-tasks = TaskManager(max_concurrent=1)
-task = submit_training_task(
-    tasks,
-    clf,
-    X,
-    labels,
-    classification=True,
-    epochs=3000,
-    batch_size=4,
-    shuffle=False,
-)
-
-history = task.get()
-label = clf.predict_class([1, 0])
+```bash
+python -m build --no-isolation
+python -m pip install --no-index dist/wsbuilder-*.whl
 ```
 
-## Documentacion
+La guia completa esta en [docs/install.md](docs/install.md).
 
-- [Inicio](docs/index.md)
-- [Arquitectura](docs/architecture.md)
-- [API publica](docs/api-map.md)
-- [Proyecto integral](docs/full-project.md)
+## Desarrollo
+
+Comandos utiles del repositorio:
+
+```bash
+python -m pip install -e .
+PYTHONPATH=src pytest -q
+python -m build
+python -m twine check dist/*
+mkdocs build --strict
+```
+
+## Estado del proyecto
+
+El paquete esta marcado como `Development Status :: 3 - Alpha`. Es adecuado para
+servicios internos, prototipos, demos y laboratorios controlados. Antes de usarlo
+fuera de localhost, revisa limites de transporte, TLS, seguridad, logs,
+observabilidad y apagado de recursos.
 
 ## Contribucion y soporte
 
-- Crea ramas desde `main` usando `feat/<nombre>` o `fix/<nombre>`.
-- Mantiene los cambios enfocados en un solo tema por PR.
-- Abre el pull request hacia `main` con una descripcion corta y notas de riesgo.
-- Si encuentras un problema de seguridad, reportalo de forma privada.
+- Crea ramas desde `main` usando prefijos como `feat/`, `fix/` o `docs/`.
+- Mantiene cada PR enfocado en un solo cambio logico.
+- Ejecuta las validaciones relevantes antes de abrir PR.
+- Reporta vulnerabilidades de forma privada.
 
 ### Soporte opcional
 
-Si `wsbuilder` te resulta util y quieres apoyar el mantenimiento del proyecto, puedes donar en BTC:
+Si `wsbuilder` te resulta util y quieres apoyar el mantenimiento del proyecto,
+puedes donar en BTC:
 
 `bc1q3lhxpr9yantvefmvhpd2h4lu0ykf3t45zvuve2`
 

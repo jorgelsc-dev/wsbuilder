@@ -21,6 +21,17 @@ La informacion incluye HTTP, conexiones TCP, WebSocket, errores y, cuando la
 aplicacion las tiene activadas, snapshots extra de cache, seguridad, proxy y
 workers por ruta.
 
+Campos principales del snapshot:
+
+| Campo | Contenido |
+| --- | --- |
+| `connections` | TCP activos/totales, HTTP en vuelo y WS activos |
+| `http` | requests, responses, metodos, paths, status y latencias |
+| `websocket` | upgrades, mensajes, bytes y paths |
+| `traffic` | bytes de entrada y salida |
+| `errors` | contador y ultimo error registrado |
+| `threads` | worker pools de rutas `view` |
+
 ## Streaming de metricas
 
 `AppMetrics.response_stream()` permite seguir los puntos de forma continua.
@@ -30,6 +41,9 @@ Parametros utiles del endpoint generado:
 - `interval`
 - `limit`
 - `follow=1`
+
+`limit` produce un stream finito. `follow=1` lo mantiene abierto. El intervalo se
+normaliza entre `0.1` y `60.0` segundos.
 
 ## Logs NDJSON
 
@@ -48,6 +62,9 @@ Metodos:
 - `event(name, **fields)`
 - `describe()`
 - `close()`
+
+Tambien existe `append_ndjson(path, record)` en `wsbuilder.logs` para escribir un
+registro suelto sin crear una instancia persistente.
 
 ## Tareas en background
 
@@ -82,6 +99,18 @@ Metodos principales:
 `spawn()` y `close()` se coordinan de forma atomica: una tarea iniciada antes del
 cierre queda registrada y participa en la espera; las posteriores se rechazan.
 
+Parametros utiles de `spawn()`:
+
+| Parametro | Uso |
+| --- | --- |
+| `name` | nombre humano de la tarea |
+| `group` | agrupar para listar o cancelar |
+| `metadata` | datos serializables para snapshots |
+| `daemon` | controla si el thread es daemon |
+| `pass_handle` | pasa el `TaskHandle` a la funcion |
+| `request` | adjunta metadatos de la solicitud |
+| `timeout_seconds` | tiempo maximo esperando cupo cuando `max_concurrent` limita |
+
 ## `TaskHandle`
 
 Cada tarea expone estado y resultado. `context.app` usa la aplicacion del
@@ -91,6 +120,9 @@ una operacion nula y devuelve `False`.
 - `status`, `running`, `started`, `finished`, `cancelled`
 - `wait(timeout=None)`, `join(timeout=None)`, `get(timeout=None)`
 - `result`, `exception`, `snapshot()`
+
+`finished` y `started` son eventos de `threading.Event`; por eso se consultan con
+`task.finished.is_set()` o `task.started.wait(...)`.
 
 Errores especificos:
 
