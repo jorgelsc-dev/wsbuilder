@@ -61,12 +61,25 @@ rows = Article.objects(db).filter(title__startswith="H").order_by("-id").all()
 
 ## `QuerySet`
 
-Operadores usados en la suite actual:
+Operadores soportados:
 
 - `field=value`
+- `field__ne=value`
+- `field__gt=value`
 - `field__gte=value`
+- `field__lt=value`
+- `field__lte=value`
+- `field__like=value`
+- `field__ilike=value`
+- `field__contains=value`
+- `field__icontains=value`
 - `field__startswith=value`
+- `field__istartswith=value`
+- `field__endswith=value`
+- `field__iendswith=value`
 - `field__in=[...]`
+- `field__not_in=[...]`
+- `field__isnull=True`
 
 Metodos utiles:
 
@@ -75,6 +88,16 @@ Metodos utiles:
 - `limit`, `offset`, `paginate`
 - `all`, `first`, `get`, `values`
 - `count`, `exists`, `update`, `delete`, `create`
+- `where_raw`, `using`
+
+Ejemplo con replica de lectura:
+
+```python
+rows = Article.objects(db).using("replica").order_by("-id").limit(20).all()
+```
+
+Los querysets con `using("replica")` son de solo lectura: `update()`,
+`delete()` y `create()` levantan error.
 
 ## Transacciones
 
@@ -100,6 +123,18 @@ savepoints.
 - `DateTimeField`
 - `JSONField`
 
+Opciones comunes de campos:
+
+- `primary_key`
+- `unique`
+- `null`
+- `default`
+- `index`
+- `auto_increment` en `IntegerField`
+
+`DateTimeField` serializa valores `datetime` en ISO 8601 y los reconstruye al
+leer. `JSONField` guarda estructuras JSON compatibles.
+
 Tambien existen helpers SQL:
 
 - `SQL`
@@ -119,3 +154,22 @@ Tambien existen helpers SQL:
 
 Usa `OptimizedDatabase` cuando quieres dejar activados WAL, cache y replicas con
 un constructor mas orientado a throughput de lectura.
+
+```python
+from wsbuilder import OptimizedDatabase, SQLite3OptimizationConfig
+
+config = SQLite3OptimizationConfig(cache_size=32768, wal_autocheckpoint=500)
+db = OptimizedDatabase(
+    "data/app.sqlite3",
+    optimization_config=config,
+    enable_replicas=True,
+    replica_count=4,
+)
+```
+
+Notas:
+
+- las replicas no se crean para `:memory:`.
+- `replica_count` debe ser mayor que cero.
+- las replicas usan conexiones read-only.
+- las escrituras deben ejecutarse en la conexion principal.

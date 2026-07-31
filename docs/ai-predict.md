@@ -22,6 +22,9 @@ Metodos utiles:
 - `describe_features()`, `describe_targets()`
 - `standardize()`, `normalize_min_max()`
 
+`split()` puede mezclar datos con `shuffle=True` y `seed` para resultados
+repetibles. `batches()` permite entrenar por lotes.
+
 ## `NeuralNetwork`
 
 La red neuronal es completamente Python puro.
@@ -54,10 +57,28 @@ Capacidades mas visibles:
 - `evaluate`, `accuracy`, `classification_metrics`.
 - `predict_with_metrics` para reportes de error y confianza.
 
+Activaciones soportadas por la red:
+
+- `linear`
+- `sigmoid`
+- `tanh`
+- `relu`
+- `leaky_relu`
+- `softmax`
+
+Losses soportadas:
+
+- `mse`
+- `binary_cross_entropy`
+- `categorical_cross_entropy`
+
 ## `DenseLayer`
 
 `DenseLayer` permite definir capas manuales y se usa como bloque interno del
 `NeuralNetwork`.
+
+Tambien puedes crear capas con `net.add_dense(units, input_size=..., activation=...)`,
+que es la forma mas directa para usuarios de la libreria.
 
 ## Estadistica y error
 
@@ -113,3 +134,6 @@ prediction, sigma, lower, upper = predictor.predict([5])
 ```
 
 Es util cuando quieres prediccion rapida sin configurar una red neuronal.
+
+Despues de `fit`, la instancia expone informacion como `rank`, coeficientes y
+residuos internos usados para calcular desviacion e intervalo estimado.

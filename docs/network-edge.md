@@ -22,7 +22,8 @@ dns.start()
 
 Capacidades visibles en la suite:
 
-- registros `A`, `AAAA`, `TXT`, `MX`, `SRV`, `CNAME`.
+- registros `A`, `AAAA`, `NS`, `CNAME`, `PTR`, `MX`, `TXT`, `SRV`, `SOA`,
+  `CAA`, `NAPTR`, `URI`, `DS`, `DNSKEY`, `TLSA` y `SSHFP`.
 - records wildcard.
 - records con `TYPE####` y `rdata` crudo.
 - fallback a upstreams remotos cuando se habilita.
@@ -46,6 +47,17 @@ Metodos publicos:
 - `start`
 - `close`
 
+Ejemplo de registro plano:
+
+```python
+dns = LocalDNSServer(
+    records=[
+        {"name": "app.local", "type": "A", "value": "127.0.0.1", "ttl": 60},
+        {"name": "raw.local", "type": "TYPE65280", "hex": "01020304"},
+    ],
+)
+```
+
 ## Proxy HTTP con `ProxyI`
 
 `ProxyI` es una capa de reverse proxy y balanceo sin dependencias externas.
@@ -64,6 +76,10 @@ Los targets HTTPS verifican certificados TLS por defecto. La opcion
 `verify_tls=False` queda disponible para entornos locales controlados, pero no
 debe usarse frente a upstreams no confiables.
 
+`ProxyTarget` acepta opciones como `name`, `weight`, `enabled`,
+`preserve_host`, `verify_tls`, `strip_prefix`, `extra_headers`, `connect_timeout`
+y `read_timeout`.
+
 ## Construccion de reglas
 
 `ProxyRouteBuilder` soporta filtros por:
@@ -81,6 +97,7 @@ Tambien permite:
 - `hash_key(value)`
 - `default(value=True)`
 - `upstream(target, **kwargs)`
+- `to(target, **kwargs)` como alias de `upstream`
 
 Los prefijos respetan limites de segmento: `/api` coincide con `/api` y
 `/api/users`, no con `/apix`. `strip_prefix` aplica la misma regla. Si
@@ -108,6 +125,9 @@ La API publica expone:
 `ProxyI(default_balance=...)` establece el balance de las reglas que no lo
 sobrescriban. Los targets con `enabled=False` no participan en seleccion ni se
 reactivan implicitamente cuando todos estan deshabilitados.
+
+`normalize_balance_mode(value)` acepta constantes y nombres de estrategia con
+guiones o underscores.
 
 ## Instalacion sobre `App`
 
@@ -139,3 +159,9 @@ responde `413` cuando el cuerpo lo supera.
 
 Para despachar trafico real, una ruta HTTP de tu aplicacion debe invocar
 `app.proxyi.dispatch(request)`.
+
+```python
+@app.api("/api/proxy/upstream")
+def proxy_upstream(request):
+    return app.proxyi.dispatch(request)
+```

@@ -8,17 +8,24 @@ edit_uri: edit/main/docs/
 
 nav:
   - Inicio: index.md
+  - Que puedes hacer: capabilities.md
+  - Aprender por nivel:
+      - Principiantes: beginners.md
+      - Intermedios: intermediate.md
+      - Avanzados: advanced.md
   - Instalacion: install.md
-  - Arquitectura: architecture.md
-  - App y HTTP: app-http.md
-  - WebSocket: websocket.md
-  - Datos y ORM: data-orm.md
-  - Cache y Seguridad: cache-security.md
-  - Observabilidad y Tareas: observability-tasks.md
-  - Red y Edge: network-edge.md
-  - IA y Prediccion: ai-predict.md
-  - API publica: api-map.md
-  - Proyecto integral: full-project.md
+  - Guias por modulo:
+      - Arquitectura: architecture.md
+      - App y HTTP: app-http.md
+      - WebSocket: websocket.md
+      - Datos y ORM: data-orm.md
+      - Cache y Seguridad: cache-security.md
+      - Observabilidad y Tareas: observability-tasks.md
+      - Red y Edge: network-edge.md
+      - IA y Prediccion: ai-predict.md
+  - Referencia:
+      - API publica: api-map.md
+      - Proyecto integral: full-project.md
 
 theme:
   name: material

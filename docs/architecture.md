@@ -3,6 +3,16 @@
 `wsbuilder` esta organizado como un paquete modular donde `App` actua como
 fachada principal y el resto de modulos se activan por composicion.
 
+La forma recomendada de uso es importar desde `wsbuilder`:
+
+```python
+from wsbuilder import App, Response, Database
+```
+
+Los modulos internos siguen estando separados para lectura, pruebas y uso
+avanzado, pero el reexport publico evita que una app dependa de rutas internas
+innecesarias.
+
 ## Mapa general
 
 | Area | Modulos | Superficie principal |
@@ -27,6 +37,23 @@ fachada principal y el resto de modulos se activan por composicion.
 5. Para rutas `api`, los `dict` y `list` se convierten automaticamente en JSON.
 6. `send_http_response()` serializa la respuesta, incluyendo streaming si aplica.
 7. Si la ruta es WebSocket, el servidor hace el handshake y delega al handler.
+
+## Orden de integraciones en `dispatch`
+
+Para HTTP normal, `App.dispatch()` aplica las capas en este orden:
+
+1. Adjunta `request.app`.
+2. Evalua `SecurityPolicy`, si existe.
+3. Responde `OPTIONS` automatico cuando la ruta existe.
+4. Resuelve ruta y metodo.
+5. Consulta cache HTTP de vistas, si existe y la ruta es `plain`.
+6. Ejecuta el handler directo o por worker pool.
+7. Normaliza el resultado a `Response`.
+8. Guarda en cache HTTP si aplica.
+9. Agrega cabeceras CORS a rutas `api`.
+
+El servidor TCP agrega metricas de transporte y llama
+`security.observe_response(...)` despues de enviar la respuesta.
 
 ## Estilo de composicion
 
@@ -60,6 +87,7 @@ def health(_request):
 
 - `from wsbuilder import ...`: forma recomendada para consumir la API publica.
 - `python -m wsbuilder`: levanta la demo incluida del paquete.
+- `wsbuilder` o `wsbuilder-demo`: comandos instalados por el paquete.
 - `framework.py`: fachada de compatibilidad que reexporta casi toda la capa
   publica original.
 
@@ -72,3 +100,11 @@ def health(_request):
 
 Eso es util para demos, entornos internos y validacion rapida sin depender de
 OpenAPI ni generadores externos.
+
+## Lectura por nivel
+
+- Si es tu primera app, empieza en [Principiantes](beginners.md).
+- Si ya tienes rutas y quieres datos, cache y seguridad, sigue con
+  [Intermedios](intermediate.md).
+- Si necesitas operar limites, TLS, proxy, DNS o replicas, lee
+  [Avanzados](advanced.md).
