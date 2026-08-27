@@ -3,6 +3,9 @@
 Esta pagina funciona como mapa rapido de exportaciones publicas visibles desde
 `from wsbuilder import ...`.
 
+Para ejemplos completos por nivel, lee [Principiantes](beginners.md),
+[Intermedios](intermediate.md) y [Avanzados](advanced.md).
+
 ## Nucleo
 
 | Grupo | Exportaciones |
@@ -10,6 +13,14 @@ Esta pagina funciona como mapa rapido de exportaciones publicas visibles desde
 | App | `App`, `Route`, `Router`, `HTTPServer` |
 | HTTP | `Request`, `Response`, `parse_query_string` |
 | WebSocket | `WebSocket`, `parse_close_payload`, `handshake_websocket_with_options` |
+
+Metodos habituales:
+
+- `App.view`, `App.api`, `App.route`, `App.ws`
+- `App.enable_metrics`, `App.enable_security`, `App.enable_caches`,
+  `App.enable_logs`, `App.enable_docs`
+- `App.dispatch`, `App.describe`, `App.run`, `App.close`
+- `Response.json`, `Response.text`, `Response.html`, `Response.stream`
 
 ## Tareas y concurrencia
 
@@ -42,6 +53,13 @@ Esta pagina funciona como mapa rapido de exportaciones publicas visibles desde
 | Campos | `IntegerField`, `TextField`, `RealField`, `BlobField`, `BooleanField`, `DateTimeField`, `JSONField` |
 | Helpers | `SQL`, `create_tables`, `drop_tables`, `quote_identifier`, `validate_identifier` |
 | Replicas | `DatabaseReplica`, `DatabaseReplicaPool`, `OptimizedDatabase`, `SQLite3OptimizationConfig` |
+
+Filtros `QuerySet` documentados:
+
+- `eq`, `ne`, `gt`, `gte`, `lt`, `lte`
+- `like`, `ilike`, `contains`, `icontains`
+- `startswith`, `istartswith`, `endswith`, `iendswith`
+- `in`, `not_in`, `isnull`
 
 ## Utilidades HTTP
 
@@ -82,3 +100,16 @@ Esta pagina funciona como mapa rapido de exportaciones publicas visibles desde
 | Redes | `DenseLayer`, `NeuralNetwork`, `submit_training_task` |
 | Analisis | `describe_data`, `evaluate_errors` |
 | Prediccion | `Predictor` |
+
+## Modulos directos utiles
+
+Algunas piezas no se reexportan desde `wsbuilder`, pero son utiles para pruebas
+de bajo nivel:
+
+- `wsbuilder.ws.WebSocketProtocolError`
+- `wsbuilder.ws.WebSocketReadTimeoutError`
+- `wsbuilder.ws.WebSocketConnectionClosedError`
+- `wsbuilder.ws.WebSocketFrame`
+- `wsbuilder.http.parse_http_request`
+- `wsbuilder.http.send_http_response`
+- `wsbuilder.logs.append_ndjson`

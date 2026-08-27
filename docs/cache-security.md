@@ -23,8 +23,24 @@ Funciones utiles:
 - `tag`, `untag`, `invalidate_tag`, `invalidate_tags`
 - `keys`, `count`, `size_bytes`, `stats`, `metrics_snapshot`
 
+Tipos de valor soportados por defecto:
+
+- `None`, `bool`, `int`, `float`, `str`, `bytes`.
+- estructuras compatibles con JSON, como `dict` y `list`.
+
+`allow_pickle=True` permite otros objetos, pero solo debe usarse con datos de
+confianza porque `pickle` no es un formato seguro frente a entradas no confiables.
+
 Una entrada expirada se considera ausente para `add` y `replace`, incluso si
 `cleanup_interval_seconds=0`.
+
+Codigos `ttl()`:
+
+| Valor | Significado |
+| --- | --- |
+| numero positivo | segundos restantes |
+| `-1` | la clave existe sin expiracion |
+| `-2` | la clave no existe o ya expiro |
 
 ## Cache HTTP de vistas con `ViewResponseCache`
 
@@ -74,6 +90,17 @@ Notas practicas:
 - por defecto cachea `status=200`.
 - anade `X-WSBuilder-Cache: HIT` cuando sirve desde cache.
 
+Configuracion por ruta:
+
+| Clave | Uso |
+| --- | --- |
+| `ttl` | segundos de vida de la respuesta |
+| `enabled` | `False` desactiva cache aunque exista regla global |
+| `vary_query` | lista de parametros de query que forman parte de la clave |
+| `vary_headers` | headers permitidos en `Vary` y parte de la clave |
+| `allow_private` | permite cachear requests con `Authorization` o `Cookie` |
+| `statuses` | codigos HTTP cacheables |
+
 ## `SecurityPolicy`
 
 `SecurityPolicy` combina ACL, listas blancas/negras, rate limiting, deteccion
@@ -114,12 +141,33 @@ Metodos frecuentes:
 - `observe_response(request, status_code)`
 - `snapshot()`
 
+Parametros importantes del constructor:
+
+| Parametro | Uso |
+| --- | --- |
+| `acl_default` | `allow` o `deny` cuando ninguna regla coincide |
+| `rate_limit_requests` | cantidad maxima de requests por ventana |
+| `rate_limit_window_seconds` | tamano de la ventana de rate limit |
+| `violation_threshold` | bloquea al acumular denegaciones |
+| `suspicious_status_codes` | codigos que cuentan como comportamiento sospechoso |
+| `suspicious_threshold` | cantidad de respuestas sospechosas antes de bloquear |
+| `block_duration_seconds` | duracion del bloqueo temporal |
+
 Las entradas de la whitelist pueden prevalecer sobre blacklist y bloqueos de
 comportamiento mediante `whitelist_overrides_blacklist` y
 `whitelist_bypass_behavior`, ambos activos por defecto.
 
 Los filtros ACL con `path_prefix` respetan limites de segmento: `/api`
 coincide con `/api` y `/api/users`, pero no con `/api-private`.
+
+Ejemplo con politica cerrada:
+
+```python
+policy = SecurityPolicy(acl_default="deny")
+policy.allow(methods=("GET",), path="/api/health")
+policy.allow(methods=("GET",), path_prefix="/api/public")
+app.enable_security(policy)
+```
 
 ## `SecurityDecision`
 

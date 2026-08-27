@@ -4,6 +4,10 @@
 
 `App` es el centro del framework. Mantiene el router, las rutas WebSocket y las
 integraciones opcionales de metricas, seguridad, cache, logs, proxy y tareas.
+Una aplicacion puede usarse de dos formas:
+
+- con `app.run(host, port)`, para aceptar conexiones reales.
+- con `app.dispatch(request)`, para pruebas o integraciones programaticas.
 
 Constructor:
 
@@ -37,7 +41,7 @@ def home(_request):
 ### `@app.api`
 
 Pensada para JSON. Si el handler devuelve `dict` o `list`, la conversion a JSON
- es automatica.
+es automatica.
 
 ```python
 @app.api("/api/health")
@@ -48,6 +52,16 @@ def health(_request):
 ### `@app.route`
 
 Es la forma mas generica. Permite elegir `kind="plain"` o `kind="api"`.
+
+```python
+@app.route("/status.txt", methods=("GET",), kind="plain")
+def status(_request):
+    return "ok"
+```
+
+El path debe empezar con `/` y no puede contener caracteres de control. Los
+metodos se normalizan a mayusculas. Si declaras una ruta `GET`, `HEAD` funciona
+automaticamente con las mismas cabeceras y sin cuerpo.
 
 ## `Request`
 
@@ -68,6 +82,9 @@ def echo(request):
     payload = request.json() or {}
     return {"received": payload, "query": request.query}
 ```
+
+Si el cuerpo no es JSON valido, `request.json()` devuelve `None`. Eso permite
+escribir handlers defensivos sin envolver cada parseo en `try/except`.
 
 ## `Response`
 
@@ -102,6 +119,27 @@ Si `cors_allow_origin` esta configurado:
 Ademas, `HEAD` reutiliza una ruta `GET` y envia sus mismas cabeceras sin cuerpo.
 Un metodo no permitido para una ruta existente responde `405` e incluye
 `Allow`; una ruta inexistente responde `404`.
+
+## Probar una ruta sin red
+
+```python
+from wsbuilder import Request
+
+request = Request(
+    method="GET",
+    path="/api/health",
+    query_string="",
+    headers={},
+    body=b"",
+    client=("127.0.0.1", 1234),
+)
+
+response = app.dispatch(request)
+assert response.status == 200
+```
+
+Ese patron aparece en la suite porque evita abrir sockets y permite probar la
+logica de rutas de forma determinista.
 
 ## Vistas con hilos dedicados
 
@@ -144,6 +182,24 @@ def prepare():
 app.add_startup(prepare)
 ```
 
+Los hooks se ejecutan al inicio de `HTTPServer.serve_forever()`. Si un hook falla,
+el error se imprime y el servidor sigue intentando arrancar.
+
+## Integraciones `enable_*`
+
+`App` expone accesos rapidos para las capas mas comunes:
+
+| Metodo | Que instala |
+| --- | --- |
+| `enable_metrics(...)` | `app.metrics` y endpoints JSON/NDJSON |
+| `enable_security(policy=None)` | `app.security` con `SecurityPolicy` |
+| `enable_caches(caches=None)` | `app.caches` con cache HTTP de vistas |
+| `enable_logs(path=...)` | `app.logs` con escritor NDJSON |
+| `enable_docs(...)` | rutas HTML/JSON de documentacion runtime |
+
+La cache clave-valor usa `install_cache(app, cache)` porque puede haber muchas
+instancias o namespaces segun el diseno de la aplicacion.
+
 ## Documentacion automatica
 
 ```python
@@ -173,6 +229,27 @@ Caracteristicas practicas:
 - soporte de `Expect: 100-continue` para cuerpos con `Content-Length`.
 - soporte TLS via `ssl_context`.
 - handshake WebSocket integrado.
+
+Limites por defecto:
+
+| Campo | Valor |
+| --- | --- |
+| `MAX_CONNECTION_WORKERS` | `64` conexiones activas |
+| `MAX_REQUEST_HEADER_BYTES` | `64 KiB` |
+| `MAX_REQUEST_BODY_BYTES` | `2 MiB` |
+| `REQUEST_READ_TIMEOUT_SECONDS` | `10.0` segundos |
+| `ACCEPT_TIMEOUT_SECONDS` | `0.5` segundos |
+
+Para cambiarlos, instancia `HTTPServer` manualmente y ajusta atributos antes de
+llamar `serve_forever()`.
+
+```python
+from wsbuilder import HTTPServer
+
+server = HTTPServer("127.0.0.1", 8765, app)
+server.MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024
+server.serve_forever()
+```
 
 ## Demo incluida
 
