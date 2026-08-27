@@ -1,6 +1,6 @@
 import unittest
 
-from wsbuilder import Response, parse_query_string
+from wsbuilder import App, Request, Response, parse_query_string
 from wsbuilder.http import parse_http_request, send_http_response
 
 
@@ -98,3 +98,78 @@ class TestHTTPCore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRouterDispatch(unittest.TestCase):
+    def setUp(self):
+        self.app = App()
+
+    def tearDown(self):
+        self.app.close()
+
+    def _request(self, method, path):
+        return Request(
+            method=method,
+            path=path,
+            query_string="",
+            headers={},
+            body=b"",
+            client=("127.0.0.1", 1234),
+            tls={},
+        )
+
+    def test_explicit_options_route_receives_the_request(self):
+        seen = []
+
+        @self.app.api("/api/items", methods=("OPTIONS",))
+        def options_handler(_request):
+            seen.append("handler")
+            return Response.text("custom", status=204, headers={"Allow": "GET, OPTIONS"})
+
+        response = self.app.dispatch(self._request("OPTIONS", "/api/items"))
+
+        self.assertEqual(seen, ["handler"])
+        self.assertEqual(response.status, 204)
+        self.assertEqual(response.headers.get("Allow"), "GET, OPTIONS")
+
+    def test_options_without_explicit_route_still_answers_automatically(self):
+        @self.app.api("/api/items", methods=("GET", "POST"))
+        def items(_request):
+            return {"ok": True}
+
+        response = self.app.dispatch(self._request("OPTIONS", "/api/items"))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(
+            response.headers["Access-Control-Allow-Methods"],
+            "GET, HEAD, OPTIONS, POST",
+        )
+
+    def test_router_index_keeps_registration_order_and_head_fallback(self):
+        @self.app.api("/dup", methods=("GET",))
+        def first(_request):
+            return {"which": "first"}
+
+        @self.app.api("/dup", methods=("GET", "POST"))
+        def second(_request):
+            return {"which": "second"}
+
+        self.assertIs(self.app.router.resolve("/dup", "GET"), self.app.router.routes[0])
+        self.assertIs(self.app.router.resolve("/dup", "POST"), self.app.router.routes[1])
+        self.assertIs(self.app.router.resolve("/dup", "HEAD"), self.app.router.routes[0])
+        self.assertIsNone(self.app.router.resolve("/missing", "GET"))
+        self.assertEqual(
+            self.app.router.allowed_methods("/dup"),
+            {"GET", "HEAD", "POST", "OPTIONS"},
+        )
+        self.assertEqual(self.app.router.allowed_methods("/missing"), set())
+
+    def test_unknown_method_on_known_path_returns_405_with_allow(self):
+        @self.app.api("/only-get", methods=("GET",))
+        def only_get(_request):
+            return {"ok": True}
+
+        response = self.app.dispatch(self._request("DELETE", "/only-get"))
+
+        self.assertEqual(response.status, 405)
+        self.assertEqual(response.headers["Allow"], "GET, HEAD, OPTIONS")

@@ -1,6 +1,7 @@
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
 
 
@@ -16,6 +17,11 @@ _TERMINAL_STATUSES = {
     TASK_CANCELLED,
     TASK_REJECTED,
 }
+
+# How many finished tasks stay queryable through the manager. Without a bound a
+# long-running server that spawns a task per request keeps every handle (and its
+# result) alive for the whole process lifetime.
+DEFAULT_MAX_FINISHED_TASKS = 512
 
 
 class TaskError(Exception):
@@ -209,6 +215,14 @@ class TaskHandle:
             self.request = None
             self.context.request = None
 
+    def _finish_and_finalize(self):
+        # Register the task with the manager before waking waiters, so anything
+        # that inspects the manager after ``wait()`` sees settled bookkeeping.
+        try:
+            self.manager._finalize_task(self)
+        finally:
+            self._finished.set()
+
     def _run(self):
         gate = self.manager._task_slot
         if gate is not None:
@@ -222,8 +236,7 @@ class TaskHandle:
                         exception=TaskCancelledError("Task cancelled before start"),
                     )
                     self._release_execution_references()
-                    self._finished.set()
-                    self.manager._finalize_task(self)
+                    self._finish_and_finalize()
                     return
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
@@ -233,8 +246,7 @@ class TaskHandle:
                         exception=TaskRejectedError("Task capacity reached"),
                     )
                     self._release_execution_references()
-                    self._finished.set()
-                    self.manager._finalize_task(self)
+                    self._finish_and_finalize()
                     return
                 acquired = gate.acquire(timeout=0.1 if remaining is None else min(0.1, remaining))
 
@@ -277,21 +289,23 @@ class TaskHandle:
         finally:
             self._set_state(finished_at=time.time())
             self._release_execution_references()
-            self._finished.set()
             if gate is not None:
                 gate.release()
-            self.manager._finalize_task(self)
+            self._finish_and_finalize()
 
 
 class TaskManager:
-    def __init__(self, app=None, max_concurrent=0):
+    def __init__(self, app=None, max_concurrent=0, max_finished_tasks=DEFAULT_MAX_FINISHED_TASKS):
         self.app = app
         self.max_concurrent = max(0, int(max_concurrent or 0))
+        self.max_finished_tasks = max(0, int(max_finished_tasks or 0))
         self._task_slot = threading.BoundedSemaphore(self.max_concurrent) if self.max_concurrent > 0 else None
         self._lock = threading.RLock()
         self._tasks = {}
         self._by_group = {}
+        self._finished_order = deque()
         self._closed = threading.Event()
+        self._evicted_finished_total = 0
 
     def spawn(
         self,
@@ -408,6 +422,8 @@ class TaskManager:
             "enabled": True,
             "closed": self._closed.is_set(),
             "max_concurrent": self.max_concurrent,
+            "max_finished_tasks": self.max_finished_tasks,
+            "finished_evicted_total": self._evicted_finished_total,
             "total": len(rows),
             "counts": counts,
             "tasks": rows,
@@ -422,6 +438,16 @@ class TaskManager:
                     if not group_ids:
                         self._by_group.pop(task.group, None)
             self._tasks[task.id] = task
+            self._finished_order.append(task.id)
+            self._evict_finished_locked()
+
+    def _evict_finished_locked(self):
+        if self.max_finished_tasks <= 0:
+            return
+        while len(self._finished_order) > self.max_finished_tasks:
+            evicted_id = self._finished_order.popleft()
+            if self._tasks.pop(evicted_id, None) is not None:
+                self._evicted_finished_total += 1
 
     def close(self, *, wait=True, timeout=None):
         with self._lock:

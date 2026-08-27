@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import re
 import socket
 import threading
@@ -531,8 +532,23 @@ def read_ws_frame_raw(conn):
     if payload_len:
         payload = recv_exact(conn, payload_len)
         if masked and mask:
-            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            payload = unmask_payload(payload, mask)
     return WebSocketFrame(fin, opcode, payload, bool(masked), mask)
+
+
+def unmask_payload(payload, mask):
+    """Apply the WebSocket masking key to ``payload``.
+
+    A single big-integer XOR is orders of magnitude faster than a per-byte
+    Python loop, which matters because every client frame is masked.
+    """
+    length = len(payload)
+    if not length or not mask:
+        return bytes(payload)
+    repeated = (bytes(mask) * (length // len(mask) + 1))[:length]
+    return (
+        int.from_bytes(bytes(payload), "big") ^ int.from_bytes(repeated, "big")
+    ).to_bytes(length, "big")
 
 
 def make_ws_frame_bytes(opcode, payload=b""):
@@ -590,81 +606,14 @@ def _is_valid_close_code(code):
     ) or 3000 <= code <= 4999
 
 
-def _left_rotate(n, b):
-    return ((n << b) | (n >> (32 - b))) & 0xFFFFFFFF
-
-
 def sha1(data_bytes):
-    message = bytearray(data_bytes)
-    orig_len_bits = (8 * len(message)) & 0xFFFFFFFFFFFFFFFF
-    message.append(0x80)
-    while (len(message) * 8) % 512 != 448:
-        message.append(0)
-    message += orig_len_bits.to_bytes(8, "big")
-
-    h0 = 0x67452301
-    h1 = 0xEFCDAB89
-    h2 = 0x98BADCFE
-    h3 = 0x10325476
-    h4 = 0xC3D2E1F0
-
-    for i in range(0, len(message), 64):
-        w = [0] * 80
-        chunk = message[i : i + 64]
-        for j in range(16):
-            w[j] = int.from_bytes(chunk[j * 4 : (j + 1) * 4], "big")
-        for j in range(16, 80):
-            w[j] = _left_rotate(w[j - 3] ^ w[j - 8] ^ w[j - 14] ^ w[j - 16], 1)
-
-        a, b, c, d, e = h0, h1, h2, h3, h4
-        for t in range(80):
-            if 0 <= t <= 19:
-                f = (b & c) | ((~b) & d)
-                k = 0x5A827999
-            elif 20 <= t <= 39:
-                f = b ^ c ^ d
-                k = 0x6ED9EBA1
-            elif 40 <= t <= 59:
-                f = (b & c) | (b & d) | (c & d)
-                k = 0x8F1BBCDC
-            else:
-                f = b ^ c ^ d
-                k = 0xCA62C1D6
-            tmp = (_left_rotate(a, 5) + f + e + k + w[t]) & 0xFFFFFFFF
-            e = d
-            d = c
-            c = _left_rotate(b, 30)
-            b = a
-            a = tmp
-
-        h0 = (h0 + a) & 0xFFFFFFFF
-        h1 = (h1 + b) & 0xFFFFFFFF
-        h2 = (h2 + c) & 0xFFFFFFFF
-        h3 = (h3 + d) & 0xFFFFFFFF
-        h4 = (h4 + e) & 0xFFFFFFFF
-
-    digest = b"".join(x.to_bytes(4, "big") for x in [h0, h1, h2, h3, h4])
-    return digest
+    """SHA-1 digest of ``data_bytes`` (WebSocket handshake accept token)."""
+    return hashlib.sha1(bytes(data_bytes)).digest()
 
 
 B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 
 def base64_encode(data_bytes):
-    res = []
-    i = 0
-    n = len(data_bytes)
-    while i < n:
-        b = data_bytes[i : i + 3]
-        i += 3
-        pad = 3 - len(b)
-        val = 0
-        for x in b:
-            val = (val << 8) + x
-        val <<= pad * 8
-        for j in range(18, -1, -6):
-            idx = (val >> j) & 0x3F
-            res.append(B64_ALPHABET[idx])
-        if pad:
-            res[-pad:] = "=" * pad
-    return "".join(res)
+    """Standard base64 encoding, returned as an ASCII ``str``."""
+    return base64.b64encode(bytes(data_bytes)).decode("ascii")

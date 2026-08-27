@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from .http import Response
 
 DEFAULT_STREAM_POINTS = 5
+DEFAULT_MAX_TRACKED_LABELS = 512
+OVERFLOW_LABEL = "<other>"
 
 
 def _iso_utc(ts):
@@ -36,11 +38,16 @@ def _is_truthy(value):
 
 
 class AppMetrics:
-    def __init__(self, app_name="wsbuilder-app"):
+    def __init__(self, app_name="wsbuilder-app", max_tracked_labels=DEFAULT_MAX_TRACKED_LABELS):
         self.app_name = app_name
         self.started_at = time.time()
         self._lock = threading.Lock()
         self._extra_snapshot_provider = None
+        # Request paths and methods are attacker controlled, so the per-label
+        # counters must never grow without bound. Each map keeps at most
+        # ``max_tracked_labels`` distinct labels and folds the rest into a
+        # single ``OVERFLOW_LABEL`` bucket, so totals stay exact.
+        self.max_tracked_labels = max(1, _safe_int(max_tracked_labels, DEFAULT_MAX_TRACKED_LABELS))
 
         self.active_tcp_connections = 0
         self.total_tcp_connections = 0
@@ -75,6 +82,8 @@ class AppMetrics:
             self._extra_snapshot_provider = None
 
     def _inc_map(self, data, key, step=1):
+        if key not in data and len(data) >= self.max_tracked_labels:
+            key = OVERFLOW_LABEL
         data[key] = data.get(key, 0) + step
 
     def tcp_connection_open(self):
@@ -253,9 +262,10 @@ def install_metrics(
     stream_path="/api/metrics/stream",
     app_name=None,
     extra_snapshot_provider=None,
+    max_tracked_labels=DEFAULT_MAX_TRACKED_LABELS,
 ):
     name = app_name or app.__class__.__name__
-    metrics = AppMetrics(app_name=name)
+    metrics = AppMetrics(app_name=name, max_tracked_labels=max_tracked_labels)
     if extra_snapshot_provider:
         metrics.set_extra_snapshot_provider(extra_snapshot_provider)
     app.metrics = metrics
@@ -285,4 +295,4 @@ def install_metrics(
     return metrics
 
 
-__all__ = ["AppMetrics", "install_metrics"]
+__all__ = ["AppMetrics", "install_metrics", "DEFAULT_MAX_TRACKED_LABELS", "OVERFLOW_LABEL"]

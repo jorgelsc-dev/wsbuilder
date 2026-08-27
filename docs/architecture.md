@@ -44,7 +44,7 @@ Para HTTP normal, `App.dispatch()` aplica las capas en este orden:
 
 1. Adjunta `request.app`.
 2. Evalua `SecurityPolicy`, si existe.
-3. Responde `OPTIONS` automatico cuando la ruta existe.
+3. Responde `OPTIONS` automatico cuando la ruta existe y ninguna la declara.
 4. Resuelve ruta y metodo.
 5. Consulta cache HTTP de vistas, si existe y la ruta es `plain`.
 6. Ejecuta el handler directo o por worker pool.

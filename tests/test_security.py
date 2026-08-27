@@ -150,3 +150,65 @@ class TestSecurityPolicy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSecurityTrackingLimits(unittest.TestCase):
+    def test_client_tracking_maps_stop_growing_at_the_configured_ceiling(self):
+        policy = SecurityPolicy(max_tracked_clients=16)
+
+        for index in range(4000):
+            decision = policy.evaluate(
+                _req("GET", "/", client=(f"10.0.{index // 256}.{index % 256}", 1234))
+            )
+            self.assertTrue(decision.allowed)
+
+        counters = policy.snapshot()["counters"]
+        self.assertLessEqual(counters["request_clients_tracked"], 16)
+        self.assertEqual(counters["tracked_clients_evicted_total"], 4000 - 16)
+        self.assertEqual(counters["requests_total"], 4000)
+
+    def test_recently_seen_client_survives_eviction_and_keeps_rate_limiting(self):
+        policy = SecurityPolicy(
+            max_tracked_clients=4,
+            rate_limit_requests=3,
+            rate_limit_window_seconds=60.0,
+        )
+
+        for index in range(3):
+            self.assertTrue(policy.evaluate(_req("GET", "/", client=("203.0.113.9", 1))).allowed)
+            policy.evaluate(_req("GET", "/", client=(f"198.51.100.{index}", 1)))
+
+        decision = policy.evaluate(_req("GET", "/", client=("203.0.113.9", 1)))
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.status, 429)
+        self.assertEqual(decision.reason, "rate_limit")
+
+    def test_temporary_blocks_are_capped(self):
+        policy = SecurityPolicy(max_temporary_blocks=8)
+
+        for index in range(200):
+            policy.block_ip(f"192.0.2.{index % 200}", duration_seconds=600)
+
+        counters = policy.snapshot()["counters"]
+        self.assertEqual(counters["temporary_blocks_active"], 8)
+        self.assertEqual(counters["temporary_blocks_evicted_total"], 192)
+
+    def test_reblocking_a_known_ip_extends_it_without_evicting_others(self):
+        policy = SecurityPolicy(max_temporary_blocks=2)
+        policy.block_ip("192.0.2.1", duration_seconds=600)
+        policy.block_ip("192.0.2.2", duration_seconds=600)
+
+        policy.block_ip("192.0.2.1", duration_seconds=900)
+
+        active = policy.snapshot()["active_blocks"]
+        self.assertEqual(set(active), {"192.0.2.1", "192.0.2.2"})
+        self.assertGreater(active["192.0.2.1"]["remaining_seconds"], 600)
+
+    def test_snapshot_reports_the_configured_limits(self):
+        policy = SecurityPolicy(max_tracked_clients=11, max_temporary_blocks=13)
+
+        reported = policy.snapshot()["policy"]
+
+        self.assertEqual(reported["max_tracked_clients"], 11)
+        self.assertEqual(reported["max_temporary_blocks"], 13)

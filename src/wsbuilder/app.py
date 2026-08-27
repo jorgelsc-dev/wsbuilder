@@ -371,28 +371,32 @@ class Route:
 class Router:
     def __init__(self):
         self.routes = []
+        # Index by path so resolution stays O(1) in the number of registered
+        # routes instead of scanning the whole table on every request.
+        self._by_path = {}
 
     def add(self, route):
         self.routes.append(route)
+        self._by_path.setdefault(route.path, []).append(route)
 
     def resolve(self, path, method=None):
+        candidates = self._by_path.get(path)
+        if not candidates:
+            return None
         normalized_method = None if method is None else str(method).upper()
-        for route in self.routes:
-            if route.path != path:
-                continue
+        for route in candidates:
             if normalized_method is None or normalized_method in route.methods:
                 return route
         if normalized_method == "HEAD":
-            for route in self.routes:
-                if route.path == path and "GET" in route.methods:
+            for route in candidates:
+                if "GET" in route.methods:
                     return route
         return None
 
     def allowed_methods(self, path):
         methods = set()
-        for route in self.routes:
-            if route.path == path:
-                methods.update(route.methods)
+        for route in self._by_path.get(path, ()):
+            methods.update(route.methods)
         if "GET" in methods:
             methods.add("HEAD")
         if methods:
@@ -625,8 +629,12 @@ class App:
         path="/api/metrics",
         stream_path="/api/metrics/stream",
         app_name=None,
+        max_tracked_labels=None,
     ):
-        from .metrics import install_metrics
+        from .metrics import DEFAULT_MAX_TRACKED_LABELS, install_metrics
+
+        if max_tracked_labels is None:
+            max_tracked_labels = DEFAULT_MAX_TRACKED_LABELS
 
         def _extra_snapshot():
             data = {"threads": self.thread_metrics_snapshot()}
@@ -663,6 +671,7 @@ class App:
             stream_path=stream_path,
             app_name=app_name,
             extra_snapshot_provider=_extra_snapshot,
+            max_tracked_labels=max_tracked_labels,
         )
 
     def enable_security(self, policy=None):
@@ -1206,7 +1215,10 @@ class App:
                     )
                 return Response.text(decision.message, status=decision.status, headers=headers)
 
-        if request.method == "OPTIONS":
+        if request.method == "OPTIONS" and not self.router.resolve(
+            request.path,
+            "OPTIONS",
+        ):
             allowed_methods = self.router.allowed_methods(request.path)
             if allowed_methods:
                 headers = {

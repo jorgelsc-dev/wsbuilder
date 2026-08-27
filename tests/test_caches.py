@@ -4,7 +4,12 @@ import time
 import unittest
 
 from wsbuilder import App, Request, Response
-from wsbuilder.caches import ViewResponseCache
+from wsbuilder.cache import SQLiteMemoryCache
+from wsbuilder.caches import (
+    DEFAULT_VIEW_CACHE_MAX_BYTES,
+    DEFAULT_VIEW_CACHE_MAX_ENTRIES,
+    ViewResponseCache,
+)
 
 
 def _req(path, method="GET", headers=None):
@@ -244,3 +249,49 @@ class TestViewResponseCaches(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestViewCacheStorageLimits(unittest.TestCase):
+    def test_default_store_is_bounded(self):
+        cache = ViewResponseCache()
+        self.addCleanup(cache.close)
+
+        self.assertEqual(cache.store.max_entries, DEFAULT_VIEW_CACHE_MAX_ENTRIES)
+        self.assertEqual(cache.store.max_bytes, DEFAULT_VIEW_CACHE_MAX_BYTES)
+
+    def test_distinct_query_strings_cannot_grow_the_store_past_the_cap(self):
+        app = App()
+        self.addCleanup(app.close)
+        caches = app.enable_caches(ViewResponseCache(max_entries=10, max_bytes=0))
+        caches.set_global_wildcard(60.0)
+
+        @app.view("/report")
+        def report(request):
+            return Response.text(f"report {request.query_string}")
+
+        for index in range(120):
+            request = Request(
+                method="GET",
+                path="/report",
+                query_string=f"page={index}",
+                headers={},
+                body=b"",
+                client=("127.0.0.1", 1234),
+                tls={},
+            )
+            app.dispatch(request)
+
+        snapshot = caches.snapshot()
+        self.assertLessEqual(snapshot["storage"]["entries_total"], 10)
+        self.assertGreater(snapshot["counters"]["stores"], 10)
+        self.assertGreater(caches.store.stats()["counters"]["evictions"], 0)
+
+    def test_caller_supplied_store_keeps_its_own_limits(self):
+        store = SQLiteMemoryCache(max_entries=3)
+        cache = ViewResponseCache(store=store)
+        self.addCleanup(store.close)
+
+        self.assertIs(cache.store, store)
+        self.assertEqual(cache.store.max_entries, 3)
+        cache.close()
+        self.assertFalse(store._closed)

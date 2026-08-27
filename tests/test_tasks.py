@@ -196,3 +196,54 @@ class TestTasks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTaskRetention(unittest.TestCase):
+    def test_finished_tasks_are_evicted_once_the_history_is_full(self):
+        manager = TaskManager(max_finished_tasks=5)
+        self.addCleanup(manager.close)
+
+        handles = [manager.spawn(lambda value=index: value) for index in range(40)]
+        for handle in handles:
+            handle.wait(timeout=5.0)
+
+        snapshot = manager.snapshot()
+        self.assertEqual(snapshot["max_finished_tasks"], 5)
+        self.assertEqual(snapshot["total"], 5)
+        self.assertEqual(snapshot["finished_evicted_total"], 35)
+        self.assertIsNone(manager.get(handles[0].id))
+        self.assertIsNotNone(manager.get(handles[-1].id))
+
+    def test_evicted_tasks_are_dropped_oldest_first(self):
+        manager = TaskManager(max_finished_tasks=2)
+        self.addCleanup(manager.close)
+
+        finished = []
+        for index in range(4):
+            handle = manager.spawn(lambda value=index: value)
+            handle.wait(timeout=5.0)
+            finished.append(handle)
+
+        retained = {row["id"] for row in manager.list()}
+        self.assertEqual(retained, {finished[2].id, finished[3].id})
+
+    def test_history_can_be_disabled_to_keep_every_task(self):
+        manager = TaskManager(max_finished_tasks=0)
+        self.addCleanup(manager.close)
+
+        handles = [manager.spawn(lambda value=index: value) for index in range(20)]
+        for handle in handles:
+            handle.wait(timeout=5.0)
+
+        self.assertEqual(manager.snapshot()["total"], 20)
+        self.assertEqual(manager.snapshot()["finished_evicted_total"], 0)
+
+    def test_group_index_does_not_retain_evicted_tasks(self):
+        manager = TaskManager(max_finished_tasks=1)
+        self.addCleanup(manager.close)
+
+        for index in range(6):
+            manager.spawn(lambda value=index: value, group="batch").wait(timeout=5.0)
+
+        self.assertEqual(manager._by_group, {})
+        self.assertEqual(len(manager._tasks), 1)
