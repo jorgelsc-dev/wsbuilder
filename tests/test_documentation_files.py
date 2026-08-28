@@ -41,6 +41,16 @@ class TestPackageVersion(unittest.TestCase):
     def test_pyproject_and_module_versions_agree(self):
         self.assertEqual(self.project_version, self.module_version)
 
+    def test_main_declares_an_unreleased_development_version(self):
+        # release-from-main.yml strips the suffix on the release/vX.Y.Z branch
+        # it cuts, so a plain version here means the tree claims to *be* a
+        # published release it is not.
+        self.assertRegex(
+            self.project_version,
+            r"^\d+\.\d+\.\d+\.dev\d+$",
+            "the version on main must carry a .devN suffix",
+        )
+
     def test_docs_do_not_pin_a_stale_artifact_version(self):
         stale = []
         for path in sorted((ROOT / "docs").glob("*.md")) + [ROOT / "README.md"]:
