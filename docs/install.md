@@ -71,9 +71,14 @@ python -m build --no-isolation
 El resultado queda en `dist/`, por ejemplo:
 
 ```text
-dist/wsbuilder-0.9.1.dev0-py3-none-any.whl
-dist/wsbuilder-0.9.1.dev0.tar.gz
+dist/wsbuilder-<version>-py3-none-any.whl
+dist/wsbuilder-<version>.tar.gz
 ```
+
+`<version>` es la que declara `pyproject.toml` en el arbol que estas
+compilando. Un checkout de `main` lleva sufijo `.dev0` porque va por delante de
+la ultima version publicada; los artefactos publicados en PyPI salen de la rama
+`release/vX.Y.Z`, donde la version ya no lleva ese sufijo.
 
 ### Instalar el wheel local sin consultar PyPI
 
