@@ -4,6 +4,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENTS_PATH = REPO_ROOT / "AGENTS.md"
+CONTRIBUTING_PATH = REPO_ROOT / "CONTRIBUTING.md"
+REMOVED_HELPER = "scripts/agent-workflow.sh"
 
 
 class TestAgentWorkflowDocument(unittest.TestCase):
@@ -15,7 +17,17 @@ class TestAgentWorkflowDocument(unittest.TestCase):
         self.assertTrue(AGENTS_PATH.is_file())
 
     def test_no_removed_helper_script_is_referenced(self):
-        self.assertNotIn("scripts/agent-workflow.sh", self.agents_text)
+        self.assertNotIn(REMOVED_HELPER, self.agents_text)
+
+    def test_human_facing_docs_do_not_reference_the_removed_helper(self):
+        # AGENTS.md was guarded when the script was dropped, but the same
+        # workflow is mirrored in CONTRIBUTING.md, which kept pointing at it.
+        for path in (CONTRIBUTING_PATH, REPO_ROOT / "README.md"):
+            with self.subTest(document=path.name):
+                self.assertNotIn(REMOVED_HELPER, path.read_text(encoding="utf-8"))
+
+    def test_the_removed_helper_script_is_absent_from_the_tree(self):
+        self.assertFalse((REPO_ROOT / REMOVED_HELPER).exists())
 
     def test_manual_branch_protocol_is_documented(self):
         self.assertIn("git fetch origin", self.agents_text)
