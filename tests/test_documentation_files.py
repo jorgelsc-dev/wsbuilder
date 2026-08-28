@@ -1,10 +1,13 @@
 import re
+import tomllib
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+DECLARED_VERSION = re.compile(r'^__version__ = "([^"]+)"$', re.MULTILINE)
+ARTIFACT_NAME = re.compile(r"wsbuilder-(\d+\.\d+\.\d+[^-\s/]*)")
 
 
 class TestDocumentationFiles(unittest.TestCase):
@@ -21,6 +24,31 @@ class TestDocumentationFiles(unittest.TestCase):
                 missing.append(raw_target)
 
         self.assertEqual(missing, [])
+
+
+class TestPackageVersion(unittest.TestCase):
+    """The version lives in two files that the release workflow patches
+    independently; nothing else would notice if one of them drifted."""
+
+    def setUp(self):
+        with (ROOT / "pyproject.toml").open("rb") as handle:
+            self.project_version = tomllib.load(handle)["project"]["version"]
+        init_text = (ROOT / "src" / "wsbuilder" / "__init__.py").read_text(encoding="utf-8")
+        match = DECLARED_VERSION.search(init_text)
+        self.assertIsNotNone(match, "src/wsbuilder/__init__.py declares no __version__")
+        self.module_version = match.group(1)
+
+    def test_pyproject_and_module_versions_agree(self):
+        self.assertEqual(self.project_version, self.module_version)
+
+    def test_docs_do_not_pin_a_stale_artifact_version(self):
+        stale = []
+        for path in sorted((ROOT / "docs").glob("*.md")) + [ROOT / "README.md"]:
+            for found in ARTIFACT_NAME.findall(path.read_text(encoding="utf-8")):
+                if found != self.project_version:
+                    stale.append(f"{path.relative_to(ROOT)}: wsbuilder-{found}")
+
+        self.assertEqual(stale, [])
 
 
 if __name__ == "__main__":

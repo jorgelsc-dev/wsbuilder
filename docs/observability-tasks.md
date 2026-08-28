@@ -32,6 +32,18 @@ Campos principales del snapshot:
 | `errors` | contador y ultimo error registrado |
 | `threads` | worker pools de rutas `view` |
 
+### Limite de cardinalidad
+
+Los mapas `http.paths`, `http.methods` y `websocket.paths` se construyen con
+datos que envia el cliente, asi que tienen un techo explicito. Cada mapa guarda
+como maximo `max_tracked_labels` etiquetas distintas (512 por defecto) y agrupa
+el resto en el bucket `<other>`, de forma que los totales siguen siendo exactos
+aunque alguien recorra rutas al azar.
+
+```python
+app.enable_metrics(app_name="service", max_tracked_labels=2000)
+```
+
 ## Streaming de metricas
 
 `AppMetrics.response_stream()` permite seguir los puntos de forma continua.
@@ -96,6 +108,14 @@ Metodos principales:
 - `close(wait=True, timeout=None)`
 
 `max_concurrent` permite limitar concurrencia con semaforo interno.
+`max_finished_tasks` limita cuantas tareas terminadas siguen siendo consultables
+(512 por defecto); al superarlo se descartan las mas antiguas, de modo que un
+proceso de larga vida no acumula handles ni resultados para siempre. Usa `0`
+para conservarlas todas. El snapshot expone `max_finished_tasks` y
+`finished_evicted_total`.
+
+Cuando `wait()` o `result()` retornan, la contabilidad del manager ya esta
+actualizada: la tarea aparece en su estado final y fuera del indice de grupos.
 `spawn()` y `close()` se coordinan de forma atomica: una tarea iniciada antes del
 cierre queda registrada y participa en la espera; las posteriores se rechazan.
 

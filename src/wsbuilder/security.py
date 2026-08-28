@@ -19,6 +19,11 @@ DEFAULT_VIOLATION_WINDOW_SECONDS = 60.0
 DEFAULT_SUSPICIOUS_THRESHOLD = 24
 DEFAULT_SUSPICIOUS_WINDOW_SECONDS = 120.0
 DEFAULT_BLOCK_DURATION_SECONDS = 300.0
+# Per-client bookkeeping is keyed by a remote address the caller does not
+# control, so every tracking map needs an explicit ceiling: a spoofed or simply
+# very wide source range would otherwise grow them until the process dies.
+DEFAULT_MAX_TRACKED_CLIENTS = 20000
+DEFAULT_MAX_TEMPORARY_BLOCKS = 20000
 
 
 def _safe_int(value, default):
@@ -209,6 +214,8 @@ class SecurityPolicy:
         suspicious_threshold=DEFAULT_SUSPICIOUS_THRESHOLD,
         suspicious_window_seconds=DEFAULT_SUSPICIOUS_WINDOW_SECONDS,
         block_duration_seconds=DEFAULT_BLOCK_DURATION_SECONDS,
+        max_tracked_clients=DEFAULT_MAX_TRACKED_CLIENTS,
+        max_temporary_blocks=DEFAULT_MAX_TEMPORARY_BLOCKS,
     ):
         acl_default_text = str(acl_default or "").strip().lower()
         if acl_default_text not in {"allow", "deny"}:
@@ -253,6 +260,10 @@ class SecurityPolicy:
             _safe_float(suspicious_window_seconds, DEFAULT_SUSPICIOUS_WINDOW_SECONDS),
         )
         self.block_duration_seconds = max(1.0, _safe_float(block_duration_seconds, DEFAULT_BLOCK_DURATION_SECONDS))
+        self.max_tracked_clients = max(1, _safe_int(max_tracked_clients, DEFAULT_MAX_TRACKED_CLIENTS))
+        self.max_temporary_blocks = max(1, _safe_int(max_temporary_blocks, DEFAULT_MAX_TEMPORARY_BLOCKS))
+        self._evicted_clients_total = 0
+        self._evicted_blocks_total = 0
 
         self._lock = threading.Lock()
         self._acl_rules = []
@@ -290,11 +301,22 @@ class SecurityPolicy:
             if not rows:
                 store.pop(key, None)
 
+    def _evict_tracked_clients_locked(self, store):
+        while len(store) >= self.max_tracked_clients:
+            oldest = next(iter(store), None)
+            if oldest is None:
+                return
+            store.pop(oldest, None)
+            self._evicted_clients_total += 1
+
     def _push_event_locked(self, store, key, now, window_seconds):
-        rows = store.get(key)
+        # Popping and re-inserting keeps the dict ordered least-recently-seen
+        # first, so eviction can drop the coldest client in O(1).
+        rows = store.pop(key, None)
         if rows is None:
             rows = deque()
-            store[key] = rows
+            self._evict_tracked_clients_locked(store)
+        store[key] = rows
         rows.append(now)
         threshold = now - window_seconds
         while rows and rows[0] <= threshold:
@@ -306,9 +328,16 @@ class SecurityPolicy:
         if duration_seconds is not None:
             duration = max(1.0, _safe_float(duration_seconds, self.block_duration_seconds))
         until = now + duration
-        row = self._temporary_blocks.get(ip_text)
+        row = self._temporary_blocks.pop(ip_text, None)
         if row and float(row.get("until", 0.0)) > until:
             until = float(row.get("until"))
+        if row is None:
+            while len(self._temporary_blocks) >= self.max_temporary_blocks:
+                oldest = next(iter(self._temporary_blocks), None)
+                if oldest is None:
+                    break
+                self._temporary_blocks.pop(oldest, None)
+                self._evicted_blocks_total += 1
         self._temporary_blocks[ip_text] = {"reason": str(reason or "temporary_block"), "until": until}
         self._temporary_blocks_total += 1
         return until
@@ -646,6 +675,8 @@ class SecurityPolicy:
                     "suspicious_threshold": self.suspicious_threshold,
                     "suspicious_window_seconds": self.suspicious_window_seconds,
                     "block_duration_seconds": self.block_duration_seconds,
+                    "max_tracked_clients": self.max_tracked_clients,
+                    "max_temporary_blocks": self.max_temporary_blocks,
                 },
                 "lists": {
                     "whitelist": [str(n) for n in self._whitelist_networks],
@@ -663,6 +694,8 @@ class SecurityPolicy:
                     "request_clients_tracked": len(self._request_events),
                     "violation_clients_tracked": len(self._violation_events),
                     "suspicious_clients_tracked": len(self._suspicious_events),
+                    "tracked_clients_evicted_total": self._evicted_clients_total,
+                    "temporary_blocks_evicted_total": self._evicted_blocks_total,
                 },
                 "acl": {
                     "rules_total": len(self._acl_rules),
@@ -684,6 +717,8 @@ __all__ = [
     "SecurityDecision",
     "SecurityPolicy",
     "DEFAULT_BLOCK_DURATION_SECONDS",
+    "DEFAULT_MAX_TEMPORARY_BLOCKS",
+    "DEFAULT_MAX_TRACKED_CLIENTS",
     "DEFAULT_RATE_LIMIT_REQUESTS",
     "DEFAULT_RATE_LIMIT_WINDOW_SECONDS",
     "DEFAULT_SUSPICIOUS_THRESHOLD",

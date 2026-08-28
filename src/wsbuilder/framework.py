@@ -67,6 +67,7 @@ from .ws import (
     read_ws_frame_raw,
     recv_exact,
     sha1,
+    unmask_payload,
 )
 
 __all__ = [
@@ -149,4 +150,5 @@ __all__ = [
     "recv_exact",
     "send_http_response",
     "sha1",
+    "unmask_payload",
 ]

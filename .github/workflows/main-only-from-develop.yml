@@ -15,12 +15,12 @@ jobs:
     env:
       BASE_REF: ${{ github.base_ref }}
       HEAD_REF: ${{ github.head_ref }}
-      PR_ACTOR: ${{ github.actor }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
     steps:
       - name: Validate PR source branch policy
         run: |
           set -euo pipefail
-          echo "base=${BASE_REF} head=${HEAD_REF} actor=${PR_ACTOR}"
+          echo "base=${BASE_REF} head=${HEAD_REF} author=${PR_AUTHOR}"
           if [ -z "${HEAD_REF}" ]; then
             echo "ERROR: missing pull request source branch"
             exit 1
@@ -29,7 +29,7 @@ jobs:
             echo "ERROR: PR source branch cannot be main"
             exit 1
           fi
-          if [ "${PR_ACTOR}" = "dependabot[bot]" ] && [[ "${HEAD_REF}" =~ ^dependabot/ ]]; then
+          if [ "${PR_AUTHOR}" = "dependabot[bot]" ] && [[ "${HEAD_REF}" =~ ^dependabot/ ]]; then
             echo "OK: Dependabot PR hacia main."
             exit 0
           fi
