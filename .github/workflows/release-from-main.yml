@@ -9,6 +9,7 @@ on:
 permissions:
   actions: write
   contents: write
+  pull-requests: write
 
 concurrency:
   group: release-from-main-${{ github.ref }}
@@ -65,6 +66,53 @@ jobs:
             echo "No commits to release since ${latest_tag:-repository start}."
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          # A release leaves main one step behind, so a follow-up PR moves it to
+          # the next .devN. That bump must not cut a release of its own, or every
+          # release spawns another one. Compare the tree instead of commit
+          # subjects: if nothing but the version declaration differs from the
+          # tag, there is nothing to publish.
+          if [ -n "${latest_tag:-}" ]; then
+            releasable="$(python - "$latest_tag" "origin/${target_ref}" <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          VERSION_LINES = {
+              "pyproject.toml": re.compile(r'^version = "[^"]+"$', re.MULTILINE),
+              "src/wsbuilder/__init__.py": re.compile(r'^__version__ = "[^"]+"$', re.MULTILINE),
+          }
+
+          base, head = sys.argv[1], sys.argv[2]
+
+          def body(ref, path, pattern):
+              """File contents without the version line, ignoring blank lines."""
+              try:
+                  text = subprocess.check_output(["git", "show", f"{ref}:{path}"], text=True)
+              except subprocess.CalledProcessError:
+                  return None
+              text = pattern.sub("", text)
+              return "\n".join(line.rstrip() for line in text.splitlines() if line.strip())
+
+          changed = subprocess.check_output(
+              ["git", "diff", "--name-only", base, head], text=True
+          ).split()
+
+          for path in changed:
+              pattern = VERSION_LINES.get(path)
+              if pattern is None or body(base, path, pattern) != body(head, path, pattern):
+                  print("true")
+                  break
+          else:
+              print("false")
+          PY
+            )"
+            if [ "$releasable" != "true" ]; then
+              echo "Only the version declaration changed since ${latest_tag}; nothing to release."
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
           subjects_file="$(mktemp)"
@@ -201,8 +249,8 @@ jobs:
                   raise SystemExit(f"Could not update version in {path}")
               p.write_text(new_text, encoding="utf-8")
 
-          replace_one("pyproject.toml", r'^version\s*=\s*"[^"]+"\s*$', f'version = "{version}"')
-          replace_one("src/wsbuilder/__init__.py", r'^__version__\s*=\s*"[^"]+"\s*$', f'__version__ = "{version}"')
+          replace_one("pyproject.toml", r'^version\s*=\s*"[^"]+"[ \t]*$', f'version = "{version}"')
+          replace_one("src/wsbuilder/__init__.py", r'^__version__\s*=\s*"[^"]+"[ \t]*$', f'__version__ = "{version}"')
           PY
 
           if ! git diff --quiet -- pyproject.toml src/wsbuilder/__init__.py; then
@@ -276,3 +324,82 @@ jobs:
           tag="v${NEXT_VERSION}"
           gh workflow run publish-packages.yml --ref "$tag"
           echo "Triggered publish-packages.yml for $tag"
+
+      - name: Open pull request moving main to the next development version
+        if: steps.semver.outputs.has_changes == 'true'
+        env:
+          BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          RULESET_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
+          ACTIONS_TOKEN: ${{ github.token }}
+          NEXT_VERSION: ${{ steps.semver.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          bot_token="${BOT_TOKEN:-${RULESET_TOKEN:-${ACTIONS_TOKEN:-}}}"
+          if [ -z "${bot_token:-}" ]; then
+            echo "No token available to open the version bump pull request."
+            exit 1
+          fi
+
+          dev_version="$(python - "$NEXT_VERSION" <<'PY'
+          import sys
+
+          major, minor, patch = (int(part) for part in sys.argv[1].split("."))
+          print(f"{major}.{minor}.{patch + 1}.dev0")
+          PY
+          )"
+
+          branch="chore/open-${dev_version}"
+          git remote set-url origin "https://x-access-token:${bot_token}@github.com/${GITHUB_REPOSITORY}.git"
+          git config user.name "release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git fetch origin --prune
+          git checkout -B "$branch" "origin/main"
+
+          python - "$dev_version" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+
+          def replace_one(path, pattern, replacement):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              new_text, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
+              if count != 1:
+                  raise SystemExit(f"Could not update version in {path}")
+              p.write_text(new_text, encoding="utf-8")
+
+          replace_one("pyproject.toml", r'^version\s*=\s*"[^"]+"[ \t]*$', f'version = "{version}"')
+          replace_one("src/wsbuilder/__init__.py", r'^__version__\s*=\s*"[^"]+"[ \t]*$', f'__version__ = "{version}"')
+          PY
+
+          if git diff --quiet -- pyproject.toml src/wsbuilder/__init__.py; then
+            echo "main already declares ${dev_version}. Nothing to open."
+            exit 0
+          fi
+
+          git add pyproject.toml src/wsbuilder/__init__.py
+          git commit -m "chore(release): open ${dev_version}"
+          git push --force-with-lease origin "$branch"
+
+          export GH_TOKEN="$bot_token"
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            echo "A pull request for ${branch} already exists."
+            exit 0
+          fi
+
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "chore(release): open ${dev_version}" \
+            --body "$(printf '%s\n' \
+              "v${NEXT_VERSION} shipped, so main is one step behind it." \
+              "" \
+              "This moves main to ${dev_version}, keeping a source checkout ordered" \
+              "after the published package instead of below it." \
+              "" \
+              "Opened automatically by release-from-main.yml. Merging it does not cut" \
+              "a release: the version calculation skips revisions whose only change is" \
+              "the version declaration.")"
+          echo "Opened version bump pull request for ${dev_version}"
