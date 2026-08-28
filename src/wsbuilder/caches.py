@@ -16,6 +16,11 @@ from .http import Response
 
 DEFAULT_VIEW_CACHE_NAMESPACE = "http-view-cache"
 DEFAULT_CACHE_METHODS = ("GET", "HEAD")
+# Cache keys are derived from the request line, which a client controls, so the
+# store this class creates for itself must be capped. Callers that pass their
+# own ``store`` keep full control over its limits.
+DEFAULT_VIEW_CACHE_MAX_ENTRIES = 5000
+DEFAULT_VIEW_CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 _THREAD_HEADERS = {
     "wsbuilder-thread",
@@ -151,10 +156,15 @@ class ViewResponseCache:
         store=None,
         namespace=DEFAULT_VIEW_CACHE_NAMESPACE,
         default_ttl=None,
+        max_entries=DEFAULT_VIEW_CACHE_MAX_ENTRIES,
+        max_bytes=DEFAULT_VIEW_CACHE_MAX_BYTES,
     ):
         self.namespace = str(namespace or DEFAULT_VIEW_CACHE_NAMESPACE).strip() or DEFAULT_VIEW_CACHE_NAMESPACE
         self.default_ttl = None if default_ttl is None else max(0.0, _safe_float(default_ttl, 0.0))
-        self.store = store or SQLiteMemoryCache()
+        self.store = store or SQLiteMemoryCache(
+            max_entries=max(0, _safe_int(max_entries, DEFAULT_VIEW_CACHE_MAX_ENTRIES)),
+            max_bytes=max(0, _safe_int(max_bytes, DEFAULT_VIEW_CACHE_MAX_BYTES)),
+        )
         self._owns_store = store is None
         self._lock = threading.RLock()
         self._rules = []
@@ -566,6 +576,8 @@ def install_caches(app, caches=None, attr_name="caches"):
 
 __all__ = [
     "DEFAULT_CACHE_METHODS",
+    "DEFAULT_VIEW_CACHE_MAX_BYTES",
+    "DEFAULT_VIEW_CACHE_MAX_ENTRIES",
     "DEFAULT_VIEW_CACHE_NAMESPACE",
     "GlobalCacheRule",
     "ViewResponseCache",

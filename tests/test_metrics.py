@@ -2,7 +2,7 @@ import json
 import unittest
 
 from wsbuilder import App, ProxyI, Request
-from wsbuilder.metrics import AppMetrics, install_metrics
+from wsbuilder.metrics import OVERFLOW_LABEL, AppMetrics, install_metrics
 
 
 class TestMetrics(unittest.TestCase):
@@ -149,3 +149,46 @@ class TestMetrics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMetricsCardinality(unittest.TestCase):
+    def test_unknown_paths_and_methods_fold_into_an_overflow_bucket(self):
+        metrics = AppMetrics(app_name="capped", max_tracked_labels=3)
+
+        for index in range(50):
+            metrics.http_request_started(f"M{index}", f"/scan/{index}")
+            metrics.ws_opened(f"/ws/{index}")
+
+        snapshot = metrics.snapshot()
+        paths = snapshot["http"]["paths"]
+        methods = snapshot["http"]["methods"]
+        ws_paths = snapshot["websocket"]["paths"]
+
+        # 3 tracked labels plus the shared overflow bucket.
+        self.assertEqual(len(paths), 4)
+        self.assertEqual(len(methods), 4)
+        self.assertEqual(len(ws_paths), 4)
+        self.assertEqual(paths[OVERFLOW_LABEL], 47)
+        self.assertEqual(ws_paths[OVERFLOW_LABEL], 47)
+        self.assertEqual(sum(paths.values()), 50)
+        self.assertEqual(snapshot["http"]["requests_total"], 50)
+
+    def test_known_labels_keep_their_own_counters(self):
+        metrics = AppMetrics(app_name="capped", max_tracked_labels=2)
+
+        for _ in range(5):
+            metrics.http_request_started("GET", "/health")
+        metrics.http_request_started("GET", "/other")
+        metrics.http_request_started("GET", "/overflow")
+
+        paths = metrics.snapshot()["http"]["paths"]
+        self.assertEqual(paths["/health"], 5)
+        self.assertEqual(paths["/other"], 1)
+        self.assertEqual(paths[OVERFLOW_LABEL], 1)
+
+    def test_enable_metrics_accepts_a_custom_label_budget(self):
+        app = App()
+        self.addCleanup(app.close)
+        metrics = app.enable_metrics(max_tracked_labels=7)
+
+        self.assertEqual(metrics.max_tracked_labels, 7)

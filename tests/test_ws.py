@@ -12,7 +12,10 @@ from wsbuilder.ws import (
     handshake_websocket_with_options,
     make_ws_frame_bytes,
     parse_close_payload,
+    base64_encode,
     read_ws_frame_raw,
+    sha1,
+    unmask_payload,
 )
 
 
@@ -327,3 +330,31 @@ class TestWebSocketCore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWebSocketPrimitives(unittest.TestCase):
+    def test_unmask_payload_matches_the_per_byte_definition(self):
+        mask = b"\x37\xfa\x21\x3d"
+        for size in (0, 1, 2, 3, 4, 5, 7, 8, 1023, 4096):
+            payload = bytes((index * 31 + size) % 256 for index in range(size))
+            expected = bytes(
+                byte ^ mask[index % 4] for index, byte in enumerate(payload)
+            )
+            with self.subTest(size=size):
+                self.assertEqual(unmask_payload(payload, mask), expected)
+
+    def test_unmask_payload_is_an_involution(self):
+        mask = b"\x00\xff\x10\x80"
+        payload = bytes(range(256)) * 4
+
+        self.assertEqual(unmask_payload(unmask_payload(payload, mask), mask), payload)
+
+    def test_unmask_payload_without_mask_returns_the_payload(self):
+        self.assertEqual(unmask_payload(b"abc", b""), b"abc")
+        self.assertEqual(unmask_payload(b"", b"\x01\x02\x03\x04"), b"")
+
+    def test_handshake_accept_token_matches_rfc6455_example(self):
+        key = "dGhlIHNhbXBsZSBub25jZQ=="
+        digest = sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("utf-8"))
+
+        self.assertEqual(base64_encode(digest), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")

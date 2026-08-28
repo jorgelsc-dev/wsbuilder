@@ -21,6 +21,25 @@ class HTTPServer:
         self.app = app
         self._sock = None
         self.ssl_context = ssl_context
+        self._stop = threading.Event()
+        self._serving = threading.Event()
+        self.server_address = (host, port)
+
+    def stop(self):
+        """Ask a running ``serve_forever`` loop to finish accepting."""
+        self._stop.set()
+
+    def wait_until_serving(self, timeout=None):
+        """Block until the listening socket is bound, for callers/tests."""
+        return self._serving.wait(timeout)
+
+    def _create_listening_socket(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((self.host, self.port))
+        s.listen(128)
+        s.settimeout(self.ACCEPT_TIMEOUT_SECONDS)
+        return s
 
     def serve_forever(self):
         for hook in self.app.startup_hooks:
@@ -29,21 +48,27 @@ class HTTPServer:
             except Exception as e:
                 print(f"[startup] error: {e}")
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind((self.host, self.port))
-        s.listen(128)
-        s.settimeout(self.ACCEPT_TIMEOUT_SECONDS)
+        s = self._create_listening_socket()
         self._sock = s
+        self.server_address = s.getsockname()[:2]
         scheme = "https" if self.ssl_context else "http"
-        print(f"Server listening on {scheme}://{self.host}:{self.port}/")
+        host, port = self.server_address
+        print(f"Server listening on {scheme}://{host}:{port}/")
         worker_limiter = threading.BoundedSemaphore(self.MAX_CONNECTION_WORKERS)
         interrupted = False
+        self._serving.set()
         try:
-            while True:
+            while not self._stop.is_set():
                 try:
                     conn, addr = s.accept()
                 except socket.timeout:
+                    continue
+                except OSError as e:
+                    # Transient accept failures (dropped handshake, fd
+                    # exhaustion, ...) must not take the whole server down.
+                    if self._stop.is_set():
+                        break
+                    print(f"[accept] error: {e}")
                     continue
                 acquired = worker_limiter.acquire(timeout=self.ACQUIRE_WORKER_TIMEOUT_SECONDS)
                 if not acquired:
@@ -63,6 +88,7 @@ class HTTPServer:
             interrupted = True
             print("\n[shutdown] interrupted by user (Ctrl+C). stopping server...")
         finally:
+            self._serving.clear()
             s.close()
             try:
                 if hasattr(self.app, "close"):

@@ -116,6 +116,15 @@ Si `cors_allow_origin` esta configurado:
 - el `OPTIONS` automatico responde con la union de metodos permitidos y
   cabeceras basicas.
 
+El `OPTIONS` automatico solo actua cuando ninguna ruta declara ese metodo. Si
+registras un handler propio para `OPTIONS`, la peticion llega a tu codigo:
+
+```python
+@app.api("/api/items", methods=("OPTIONS",))
+def items_options(request):
+    return Response(status=204, headers={"Allow": "GET, POST, OPTIONS"})
+```
+
 Ademas, `HEAD` reutiliza una ruta `GET` y envia sus mismas cabeceras sin cuerpo.
 Un metodo no permitido para una ruta existente responde `405` e incluye
 `Allow`; una ruta inexistente responde `404`.
@@ -229,6 +238,9 @@ Caracteristicas practicas:
 - soporte de `Expect: 100-continue` para cuerpos con `Content-Length`.
 - soporte TLS via `ssl_context`.
 - handshake WebSocket integrado.
+- el bucle de `accept()` sobrevive a errores transitorios del sistema
+  operativo (descriptores agotados, conexiones abortadas) y solo termina
+  cuando se lo pides.
 
 Limites por defecto:
 
@@ -250,6 +262,33 @@ server = HTTPServer("127.0.0.1", 8765, app)
 server.MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024
 server.serve_forever()
 ```
+
+### Ciclo de vida
+
+Para levantar el servidor desde otro hilo (tests, embebido en otra app):
+
+| Miembro | Uso |
+| --- | --- |
+| `stop()` | pide al bucle que deje de aceptar y termine |
+| `wait_until_serving(timeout=None)` | espera a que el socket este escuchando |
+| `server_address` | `(host, port)` real ya enlazado, util con puerto `0` |
+
+```python
+import threading
+
+server = HTTPServer("127.0.0.1", 0, app)
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+server.wait_until_serving(timeout=5.0)
+
+host, port = server.server_address
+# ... ejercitar el servidor ...
+
+server.stop()
+thread.join(timeout=5.0)
+```
+
+Al salir del bucle se cierra el socket y se llama `app.close()`.
 
 ## Demo incluida
 

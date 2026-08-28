@@ -1,3 +1,5 @@
+import socket
+import threading
 import unittest
 
 from wsbuilder import App
@@ -303,3 +305,82 @@ class TestHTTPServer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FlakyListener:
+    """Listening socket whose first ``accept`` fails like a real transient error."""
+
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+        self.accept_failures = 0
+
+    def accept(self):
+        if self.accept_failures == 0:
+            self.accept_failures += 1
+            raise OSError(24, "Too many open files")
+        return self._wrapped.accept()
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+
+class _FlakyServer(HTTPServer):
+    def _create_listening_socket(self):
+        self.listener = _FlakyListener(super()._create_listening_socket())
+        return self.listener
+
+
+class TestHTTPServerLifecycle(unittest.TestCase):
+    def _serve(self, server):
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.assertTrue(server.wait_until_serving(timeout=5.0))
+        self.addCleanup(thread.join, 5.0)
+        self.addCleanup(server.stop)
+        return thread
+
+    def _get(self, address, path="/ping"):
+        with socket.create_connection(address, timeout=5.0) as sock:
+            sock.sendall(
+                f"GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".encode()
+            )
+            received = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+        return received
+
+    def _ping_app(self):
+        app = App()
+
+        @app.api("/ping", methods=("GET",))
+        def ping(_request):
+            return {"pong": True}
+
+        return app
+
+    def test_serve_forever_answers_requests_and_stops_on_demand(self):
+        server = HTTPServer("127.0.0.1", 0, self._ping_app())
+        thread = self._serve(server)
+
+        received = self._get(server.server_address)
+        self.assertIn(b"200 OK", received)
+        self.assertIn(b'{"pong":true}', received)
+
+        server.stop()
+        thread.join(timeout=5.0)
+        self.assertFalse(thread.is_alive())
+
+    def test_transient_accept_error_does_not_stop_the_server(self):
+        server = _FlakyServer("127.0.0.1", 0, self._ping_app())
+        thread = self._serve(server)
+
+        received = self._get(server.server_address)
+        self.assertEqual(server.listener.accept_failures, 1)
+        self.assertIn(b"200 OK", received)
+
+        server.stop()
+        thread.join(timeout=5.0)
+        self.assertFalse(thread.is_alive())

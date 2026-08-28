@@ -68,6 +68,15 @@ def overview(request):
     return f"lang={request.query.get('lang', 'es')}"
 ```
 
+El store que `ViewResponseCache` crea para si mismo esta acotado:
+`max_entries=5000` y `max_bytes=64 MiB`. Las claves derivan de la peticion, asi
+que sin ese techo bastaria con variar el query string para llenar la memoria.
+Cuando pasas tu propio `store`, sus limites mandan y nadie los sobreescribe.
+
+```python
+http_cache = ViewResponseCache(default_ttl=20, max_entries=20000)
+```
+
 Las solicitudes con `Authorization` o `Cookie` no usan la cache compartida por
 defecto. Una ruta puede habilitarlas de forma explicita:
 
@@ -152,6 +161,14 @@ Parametros importantes del constructor:
 | `suspicious_status_codes` | codigos que cuentan como comportamiento sospechoso |
 | `suspicious_threshold` | cantidad de respuestas sospechosas antes de bloquear |
 | `block_duration_seconds` | duracion del bloqueo temporal |
+| `max_tracked_clients` | maximo de IPs con contadores activos |
+| `max_temporary_blocks` | maximo de bloqueos temporales simultaneos |
+
+El seguimiento por cliente se indexa por IP remota, un dato que el emisor
+controla. Por eso cada mapa tiene un techo: al llegar al limite se descarta el
+cliente visto hace mas tiempo, de modo que un rango de origen muy amplio no
+puede hacer crecer la memoria del proceso sin freno. El snapshot informa
+`tracked_clients_evicted_total` y `temporary_blocks_evicted_total`.
 
 Las entradas de la whitelist pueden prevalecer sobre blacklist y bloqueos de
 comportamiento mediante `whitelist_overrides_blacklist` y
