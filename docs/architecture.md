@@ -1,110 +1,100 @@
 # Arquitectura
 
-`wsbuilder` esta organizado como un paquete modular donde `App` actua como
-fachada principal y el resto de modulos se activan por composicion.
+WSBuilder se organiza alrededor de una idea simple: una aplicacion central que enruta requests y va
+activando componentes transversales cuando hacen falta.
 
-La forma recomendada de uso es importar desde `wsbuilder`:
+## Flujo de request
 
-```python
-from wsbuilder import App, Response, Database
-```
+1. `HTTPServer` recibe la conexion.
+2. `parse_http_request` crea un `Request`.
+3. `App.dispatch` aplica seguridad, cache y resolucion de ruta.
+4. El handler devuelve `Response`, `dict`, `list`, texto o `None`.
+5. `App` ajusta CORS, cookies de afinidad, metricas y logs.
 
-Los modulos internos siguen estando separados para lectura, pruebas y uso
-avanzado, pero el reexport publico evita que una app dependa de rutas internas
-innecesarias.
+## Tipos de ruta
 
-## Mapa general
+### `view`
 
-| Area | Modulos | Superficie principal |
-| --- | --- | --- |
-| Nucleo HTTP | `app.py`, `http.py`, `server.py` | `App`, `HTTPServer`, `Request`, `Response`, `Route`, `Router` |
-| WebSocket | `ws.py` | `WebSocket`, `WebSocketFrame`, handshake y utilidades de frames |
-| Persistencia | `orm.py`, `db_replicas.py` | `Database`, `Model`, `QuerySet`, `OptimizedDatabase`, `DatabaseReplicaPool` |
-| Cache | `cache.py`, `caches.py` | `SQLiteMemoryCache`, `ViewResponseCache`, `install_cache`, `install_caches` |
-| Seguridad | `security.py` | `SecurityPolicy`, `ACLRule`, `SecurityDecision`, `install_security` |
-| Observabilidad | `metrics.py`, `logs.py`, `tasks.py` | `AppMetrics`, `NDJSONLog`, `TaskManager` |
-| Red y edge | `dns.py`, `proxyi.py` | `LocalDNSServer`, `ProxyI`, `ProxyRule`, `ProxyTarget` |
-| IA y prediccion | `ia.py`, `predicts.py` | `DataSet`, `NeuralNetwork`, `DenseLayer`, `Predictor` |
-| Compatibilidad | `framework.py`, `__init__.py` | reexport de la API publica |
-
-## Flujo de ejecucion
-
-1. `HTTPServer` acepta la conexion TCP y parsea la peticion HTTP.
-2. Se crea un `Request` con `method`, `path`, `query`, `headers`, `body`,
-   `client` y metadatos TLS.
-3. `App.dispatch()` aplica seguridad, cache de vistas y resolucion de rutas.
-4. El handler devuelve `Response`, `dict`, `list`, `str`, `bytes` o `None`.
-5. Para rutas `api`, los `dict` y `list` se convierten automaticamente en JSON.
-6. `send_http_response()` serializa la respuesta, incluyendo streaming si aplica.
-7. Si la ruta es WebSocket, el servidor hace el handshake y delega al handler.
-
-## Orden de integraciones en `dispatch`
-
-Para HTTP normal, `App.dispatch()` aplica las capas en este orden:
-
-1. Adjunta `request.app`.
-2. Evalua `SecurityPolicy`, si existe.
-3. Responde `OPTIONS` automatico cuando la ruta existe y ninguna la declara.
-4. Resuelve ruta y metodo.
-5. Consulta cache HTTP de vistas, si existe y la ruta es `plain`.
-6. Ejecuta el handler directo o por worker pool.
-7. Normaliza el resultado a `Response`.
-8. Guarda en cache HTTP si aplica.
-9. Agrega cabeceras CORS a rutas `api`.
-
-El servidor TCP agrega metricas de transporte y llama
-`security.observe_response(...)` despues de enviar la respuesta.
-
-## Estilo de composicion
-
-El proyecto evita acoplar todo por herencia. Lo habitual es:
-
-- crear `App()`.
-- habilitar piezas opcionales con `enable_*` o `install_*`.
-- registrar rutas HTTP y WS con decoradores.
-- adjuntar recursos propios a la instancia, por ejemplo `app.db` o `app.proxyi`.
-
-Ejemplo minimo:
+Rutas HTML o texto. Pueden usar un pool de workers por ruta si configuras `min_threads` y `max_threads`.
 
 ```python
-from wsbuilder import App, Response, SecurityPolicy, SQLiteMemoryCache, install_cache
-
-app = App(cors_allow_origin="*")
-app.enable_metrics(app_name="service")
-app.enable_security(SecurityPolicy(rate_limit_requests=120))
-install_cache(app, SQLiteMemoryCache(default_ttl=60))
-
-@app.view("/")
-def home(_request):
-    return Response.html("<h1>wsbuilder</h1>")
-
-@app.api("/api/health")
-def health(_request):
-    return {"ok": True}
+@app.view("/dashboard", min_threads=1, max_threads=4, requests_per_thread=32)
+def dashboard(_request):
+    return "ok"
 ```
 
-## Superficies de entrada
+### `api`
 
-- `from wsbuilder import ...`: forma recomendada para consumir la API publica.
-- `python -m wsbuilder`: levanta la demo incluida del paquete.
-- `wsbuilder` o `wsbuilder-demo`: comandos instalados por el paquete.
-- `framework.py`: fachada de compatibilidad que reexporta casi toda la capa
-  publica original.
+Rutas JSON para APIs y servicios de control.
 
-## Documentacion en runtime
+```python
+@app.api("/api/users")
+def users(_request):
+    return [{"id": 1, "name": "Alice"}]
+```
 
-`App.enable_docs()` expone dos superficies automaticas:
+### `ws`
 
-- `path`: HTML navegable para inspeccionar rutas y capacidades activas.
-- `json_path`: snapshot JSON del estado publico de la aplicacion.
+Rutas WebSocket con handshake y callbacks de ciclo de vida.
 
-Eso es util para demos, entornos internos y validacion rapida sin depender de
-OpenAPI ni generadores externos.
+```python
+@app.ws("/ws/")
+def chat(ws, _request):
+    while True:
+        frame = ws.recv_frame()
+        if frame.opcode == 0x8:
+            break
+        ws.send_text(frame.payload.decode("utf-8", errors="ignore"))
+```
 
-## Lectura por nivel
+## Componentes transversales
 
-- Si es tu primera app, empieza en [Principiantes](beginners.md).
-- Si ya tienes rutas y quieres datos, cache y seguridad, sigue con
-  [Intermedios](intermediate.md).
-- Si necesitas operar limites, TLS, proxy, DNS o replicas, lee
-  [Avanzados](advanced.md).
+<div class="ws-grid ws-grid-compact">
+  <article class="ws-card">
+    <h3>Seguridad</h3>
+    <p>Bloquea, limita y audita requests antes de entrar al handler.</p>
+  </article>
+  <article class="ws-card">
+    <h3>Cache</h3>
+    <p>Guarda respuestas de `view` y aplica reglas globales o por ruta.</p>
+  </article>
+  <article class="ws-card">
+    <h3>Metricas</h3>
+    <p>Expone snapshots JSON y streaming continuo para observabilidad en vivo.</p>
+  </article>
+  <article class="ws-card">
+    <h3>Tareas</h3>
+    <p>Ejecuta trabajo en background con cancelacion y control de concurrencia.</p>
+  </article>
+</div>
+
+## Threads por ruta
+
+Las rutas `view` pueden correr en directo o en un pool controlado por la propia ruta.
+
+- `thread_count=0` usa ejecucion directa.
+- `min_threads` y `max_threads` habilitan el pool.
+- `requests_per_thread` limita cuanta carga acepta cada worker.
+- `affinity_ttl_seconds` y `thread_cookie_name` ayudan a mantener afinidad por cookie.
+
+## Docs nativas
+
+`App.enable_docs()` usa `App.describe()` para construir el JSON de la aplicacion y una pagina HTML simple.
+Esto es util cuando quieres introspeccion interna sin montar una documentacion externa.
+
+## Cuando usar cada capa
+
+| Necesidad | Capa |
+| --- | --- |
+| HTML o texto | `view` |
+| JSON o API | `api` |
+| Conexion persistente | `ws` |
+| Tareas de fondo | `tasks` |
+| Control de acceso | `security` |
+| Telemetria | `metrics` |
+| Respuesta repetida | `cache` |
+
+## Nota practica
+
+La libreria intenta mantenerse en la stdlib. Eso simplifica despliegue, reduce friccion en entornos pequenos y
+hace mas obvio el flujo de ejecucion desde socket hasta respuesta.
