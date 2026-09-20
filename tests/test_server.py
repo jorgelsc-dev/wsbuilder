@@ -2,7 +2,7 @@ import socket
 import threading
 import unittest
 
-from wsbuilder import App
+from wsbuilder import App, Response
 from wsbuilder.metrics import AppMetrics
 from wsbuilder.security import SecurityDecision
 from wsbuilder.server import HTTPServer
@@ -178,9 +178,11 @@ class TestHTTPServer(unittest.TestCase):
 
         requests = (
             (
+                # chunked is decoded now, but a coding the server cannot apply
+                # still has to be refused.
                 b"POST /echo HTTP/1.1\r\n"
                 b"Host: example.test\r\n"
-                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"Transfer-Encoding: gzip, chunked\r\n\r\n"
                 b"5\r\nhello\r\n0\r\n\r\n",
                 b"HTTP/1.1 501 Not Implemented",
             ),
@@ -384,3 +386,237 @@ class TestHTTPServerLifecycle(unittest.TestCase):
         server.stop()
         thread.join(timeout=5.0)
         self.assertFalse(thread.is_alive())
+
+
+class TestChunkedRequests(unittest.TestCase):
+    def _app(self, seen):
+        app = App()
+
+        @app.api("/echo", methods=("POST",))
+        def echo(request):
+            seen.append(request)
+            return {"body": request.body.decode(), "trailers": request.trailers}
+
+        return app
+
+    def test_chunked_body_reaches_the_handler_reassembled(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"5\r\nhello\r\n",
+                b"6\r\n world\r\n0\r\n\r\n",
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        sent = b"".join(conn.sent)
+        self.assertIn(b"HTTP/1.1 200 OK", sent)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].body, b"hello world")
+        self.assertEqual(seen[0].version, "HTTP/1.1")
+
+    def test_trailers_are_exposed_on_the_request(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"4\r\nbody\r\n0\r\nX-Checksum: abc\r\n\r\n"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(seen[0].body, b"body")
+        self.assertEqual(seen[0].trailers, {"x-checksum": "abc"})
+
+    def test_expect_100_continue_works_without_content_length(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Expect: 100-continue\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n",
+                b"2\r\nhi\r\n0\r\n\r\n",
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        sent = b"".join(conn.sent)
+        self.assertIn(b"HTTP/1.1 100 Continue", sent)
+        self.assertIn(b"HTTP/1.1 200 OK", sent)
+        self.assertEqual(seen[0].body, b"hi")
+
+    def test_chunked_body_over_the_limit_returns_413(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        server.MAX_REQUEST_BODY_BYTES = 8
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"10\r\n" + b"x" * 16 + b"\r\n0\r\n\r\n"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"HTTP/1.1 413 Payload Too Large", b"".join(conn.sent))
+        self.assertEqual(seen, [])
+
+    def test_truncated_chunked_body_returns_400(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"9\r\nshort"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"HTTP/1.1 400 Bad Request", b"".join(conn.sent))
+        self.assertEqual(seen, [])
+
+
+class TestPersistentConnections(unittest.TestCase):
+    def _app(self, seen):
+        app = App()
+
+        @app.api("/n", methods=("GET",))
+        def counter(request):
+            seen.append(request.path)
+            return {"n": len(seen)}
+
+        return app
+
+    @staticmethod
+    def _get(path="/n", version="HTTP/1.1", extra=b""):
+        return (
+            f"GET {path} {version}\r\nHost: example.test\r\n".encode() + extra + b"\r\n"
+        )
+
+    def test_two_requests_share_one_connection(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn([self._get(), self._get()])
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        sent = b"".join(conn.sent)
+        self.assertEqual(seen, ["/n", "/n"])
+        self.assertEqual(sent.count(b"HTTP/1.1 200 OK"), 2)
+        self.assertNotIn(b"Connection: close", sent)
+
+    def test_pipelined_requests_arriving_together_are_both_served(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        # Both request lines land in a single read, so the second one is only
+        # served if the leftover bytes survive the first response.
+        conn = DummyConn([self._get() + self._get()])
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(seen, ["/n", "/n"])
+
+    def test_bodies_do_not_bleed_into_the_next_request(self):
+        seen = []
+        app = App()
+
+        @app.api("/echo", methods=("POST",))
+        def echo(request):
+            seen.append(request.body)
+            return {"ok": True}
+
+        server = HTTPServer("127.0.0.1", 0, app)
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\nHost: t\r\nContent-Length: 5\r\n\r\nhello"
+                b"POST /echo HTTP/1.1\r\nHost: t\r\nContent-Length: 5\r\n\r\nworld"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(seen, [b"hello", b"world"])
+
+    def test_connection_close_ends_the_conversation(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn([self._get(extra=b"Connection: close\r\n"), self._get()])
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(seen, ["/n"])
+        self.assertIn(b"Connection: close", b"".join(conn.sent))
+
+    def test_http_1_0_closes_unless_it_asks_to_stay(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn([self._get(version="HTTP/1.0"), self._get()])
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+        self.assertEqual(seen, ["/n"])
+
+        seen.clear()
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                self._get(version="HTTP/1.0", extra=b"Connection: keep-alive\r\n"),
+                self._get(version="HTTP/1.0", extra=b"Connection: keep-alive\r\n"),
+            ]
+        )
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+        self.assertEqual(seen, ["/n", "/n"])
+        self.assertIn(b"Connection: keep-alive", b"".join(conn.sent))
+
+    def test_max_requests_per_connection_is_enforced(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        server.MAX_KEEPALIVE_REQUESTS = 2
+        conn = DummyConn([self._get(), self._get(), self._get()])
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(len(seen), 2)
+
+    def test_reuse_can_be_turned_off_entirely(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        server.MAX_KEEPALIVE_REQUESTS = 1
+        conn = DummyConn([self._get(), self._get()])
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(seen, ["/n"])
+        self.assertIn(b"Connection: close", b"".join(conn.sent))
+
+    def test_an_unframed_streamed_response_closes_the_connection(self):
+        app = App()
+
+        @app.route("/stream", methods=("GET",))
+        def stream(_request):
+            response = Response.stream(iter([b"a", b"b"]))
+            response.headers.pop("Transfer-Encoding", None)
+            response.headers["Content-Type"] = "text/plain"
+            return response
+
+        server = HTTPServer("127.0.0.1", 0, app)
+        conn = DummyConn([self._get("/stream"), self._get("/stream")])
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(b"".join(conn.sent).count(b"HTTP/1.1 200 OK"), 1)
