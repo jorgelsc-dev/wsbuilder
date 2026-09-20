@@ -110,17 +110,37 @@ de las dos cosas. Por eso existe `wsbuilder/quic/tls.py`.
 
 Esto importa mas que la lista de lo que funciona:
 
-- **No hay retransmision.** Se acusan los paquetes recibidos, pero un paquete
-  que se pierde no se reenvia. Sirve en una red sana, **no en una con
-  perdidas**.
 - Sin 0-RTT, sin reanudacion de sesion, sin migracion de conexion, sin Retry.
 - QPACK no usa tabla dinamica: se anuncia capacidad cero. Es un modo valido del
   RFC 9204, pero cuesta compresion en cabeceras propias repetidas.
 - TLS 1.3 con una sola suite (`TLS_AES_128_GCM_SHA256`) y un solo grupo
   (X25519), solo servidor, sin certificados de cliente.
 
-Trata esto como una implementacion correcta del camino feliz, no como un stack
-endurecido para una red hostil.
+### Recuperacion de perdidas
+
+Implementada segun RFC 9002. Un paquete se declara perdido por **orden** --
+tres paquetes posteriores acusados, que es evidencia mas rapida que un reloj --
+o por **tiempo**, pasado 9/8 del mayor entre el RTT suavizado y el ultimo
+medido. Los espacios de numeracion son independientes: acusar un paquete 1-RTT
+no dice nada de uno Initial.
+
+Recuperar significa meter los frames del paquete perdido en uno **nuevo**, no
+reenviar el paquete: un numero de paquete se usa una sola vez. Los frames que
+solo describian el pasado, como un ACK, se descartan al retransmitir.
+
+El control de congestion es NewReno: slow start hasta la primera perdida, luego
+crecimiento lineal, con la ventana partida por la mitad y un unico evento de
+congestion por RTT.
+
+```python
+app.enable_metrics()   # el snapshot incluye rtt, ventana y perdidas
+```
+
+Un paquete que solo lleva un ACK nunca arma un temporizador: el par no debe
+acuse por el, asi que sondearlo no terminaria nunca.
+
+Trata esto como una implementacion correcta del camino comun, con recuperacion
+de perdidas real, pero sin las piezas que listo arriba.
 
 ## Que se verifico contra los RFC
 

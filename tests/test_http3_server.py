@@ -398,3 +398,91 @@ class TestAcknowledgementsOverUdp(QuicClientHarness):
         decoded = qf.parse_frames(opened)
         self.assertTrue(any(isinstance(frame, qf.AckFrame) for frame in decoded))
         self.assertTrue(any(isinstance(frame, qf.StreamFrame) for frame in decoded))
+
+
+class TestLossRecoveryInTheConnection(QuicClientHarness):
+    """Recovery is wired to the connection, not just available beside it."""
+
+    def test_sent_packets_are_tracked_for_recovery(self):
+        self._handshake()
+        connection = self._connection()
+        tracked = sum(len(v) for v in connection.recovery.sent.values())
+        self.assertGreater(tracked, 0)
+        self.assertGreater(connection.recovery.bytes_in_flight(), 0)
+
+    def test_an_ack_only_packet_is_not_tracked_as_in_flight(self):
+        self._handshake()
+        connection = self._connection()
+        from wsbuilder.quic.recovery import SentPacket
+
+        before = connection.recovery.bytes_in_flight()
+        connection.recovery.on_packet_sent(
+            "application",
+            SentPacket(99, 0.0, frames=[qf.AckFrame(1, 0, [0])],
+                       ack_eliciting=False, in_flight=False, size=60),
+        )
+        self.assertEqual(connection.recovery.bytes_in_flight(), before)
+
+    def test_a_lost_packet_has_its_frames_requeued(self):
+        from wsbuilder.quic.recovery import SentPacket
+
+        self._handshake()
+        connection = self._connection()
+        connection.recovery.sent["application"].clear()
+        for number in range(6):
+            connection.recovery.on_packet_sent(
+                "application",
+                SentPacket(
+                    number,
+                    1000.0 + number * 0.001,
+                    frames=[qf.StreamFrame(0, number * 10, b"chunk")],
+                    size=1200,
+                    level="application",
+                ),
+            )
+        outgoing = []
+        connection._on_ack("application", qf.AckFrame(5, 0, [1]), outgoing)
+
+        self.assertEqual(len(outgoing), 1)
+        level, frames = outgoing[0]
+        self.assertEqual(level, "application")
+        # Packets 0, 1 and 2 are three or more behind the acknowledged 5.
+        self.assertEqual([f.offset for f in frames], [0, 10, 20])
+
+    def test_a_retransmission_drops_the_old_acknowledgement(self):
+        from wsbuilder.quic.recovery import SentPacket
+
+        self._handshake()
+        connection = self._connection()
+        connection.recovery.sent["application"].clear()
+        for number in range(5):
+            connection.recovery.on_packet_sent(
+                "application",
+                SentPacket(
+                    number,
+                    1000.0 + number * 0.001,
+                    frames=[qf.AckFrame(3, 0, [0]), qf.StreamFrame(0, number, b"x")],
+                    size=1200,
+                    level="application",
+                ),
+            )
+        outgoing = []
+        connection._on_ack("application", qf.AckFrame(4, 0, [0]), outgoing)
+        _level, frames = outgoing[0]
+        # Repeating a stale ACK would describe the past, not this packet.
+        self.assertTrue(all(isinstance(f, qf.StreamFrame) for f in frames))
+
+    def test_the_server_tick_is_harmless_when_nothing_is_due(self):
+        self._handshake()
+        self.assertEqual(self.server._tick(), 0)
+
+    def test_the_loss_timer_is_armed_after_the_handshake(self):
+        self._handshake()
+        self.assertIsNotNone(self._connection().loss_timer())
+
+    def test_recovery_state_reaches_the_snapshot(self):
+        self._handshake()
+        recovery = self._connection().describe()["recovery"]
+        self.assertIn("congestion", recovery)
+        self.assertIn("rtt", recovery)
+        self.assertGreater(recovery["congestion"]["congestion_window"], 0)

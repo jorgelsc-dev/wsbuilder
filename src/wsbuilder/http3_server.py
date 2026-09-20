@@ -87,6 +87,10 @@ class Http3Server:
                 try:
                     datagram, address = sock.recvfrom(65535)
                 except socket.timeout:
+                    # The idle gap is where loss timers get a chance to fire;
+                    # without this a probe would wait for the next datagram,
+                    # which on a lossy path may never come.
+                    self._tick()
                     continue
                 except OSError as e:
                     if self._stop.is_set():
@@ -101,6 +105,24 @@ class Http3Server:
         finally:
             self._serving.clear()
             sock.close()
+
+    def _tick(self, now=None):
+        """Fire any due loss timer and send what it asks for."""
+        import time as _time
+
+        moment = _time.monotonic() if now is None else now
+        sent = 0
+        for connection in {id(c): c for c in self.connections.values()}.values():
+            deadline = connection.loss_timer()
+            if deadline is None or deadline > moment:
+                continue
+            for datagram in connection.on_timeout(now=moment):
+                try:
+                    self._sock.sendto(datagram, connection.client_address)
+                    sent += 1
+                except OSError:
+                    break
+        return sent
 
     # -- routing -------------------------------------------------------
 
@@ -192,6 +214,10 @@ class Http3Server:
             "address": f"{self.server_address[0]}:{self.server_address[1]}",
             "connections": len({id(c) for c in self.connections.values()}),
             "alt_svc": alt_svc_header(self.server_address[1]),
+            "recovery": [
+                c.recovery.describe()
+                for c in {id(c): c for c in self.connections.values()}.values()
+            ],
         }
 
 

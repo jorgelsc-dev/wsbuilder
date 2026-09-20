@@ -21,6 +21,7 @@ from .crypto import (
     initial_secrets,
     remove_header_protection,
 )
+from .recovery import LossRecovery, SentPacket
 from .packet import (
     FIXED_BIT,
     MIN_INITIAL_DATAGRAM,
@@ -139,6 +140,9 @@ class QuicConnection:
         self.alpn = None
         self.peer_transport_parameters = {}
         self._pending_acks = {level: [] for level in self.packet_numbers}
+        self.recovery = LossRecovery(
+            levels=(LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION)
+        )
         self._tls = ServerHandshake(
             certificate_chain_der,
             private_key,
@@ -251,11 +255,56 @@ class QuicConnection:
                     self._advance_handshake(level, outgoing)
             elif isinstance(frame, qframes.StreamFrame):
                 self._on_stream_frame(frame, outgoing)
+            elif isinstance(frame, qframes.AckFrame):
+                self._on_ack(level, frame, outgoing)
             elif isinstance(frame, qframes.ConnectionCloseFrame):
                 self.closed = True
             elif isinstance(frame, qframes.SimpleFrame):
                 if frame.frame_type == qframes.FRAME_HANDSHAKE_DONE:
                     self.handshake_complete = True
+
+    def _on_ack(self, level, frame, outgoing):
+        _acked, lost = self.recovery.on_ack_received(
+            level, frame.largest, frame.ranges, ack_delay=frame.delay / 1_000_000
+        )
+        self._retransmit(level, lost, outgoing)
+
+    def _retransmit(self, level, lost, outgoing):
+        """Resend what a lost packet carried, not the packet itself.
+
+        A packet number is used once, so recovery means putting the frames
+        into a new packet. Frames that only described the past -- ACKs,
+        padding -- are dropped: repeating them would say nothing new.
+        """
+        frames = []
+        for packet in lost:
+            frames.extend(
+                frame
+                for frame in packet.frames
+                if not isinstance(frame, qframes.AckFrame)
+            )
+        if frames:
+            outgoing.append((level, frames))
+        return frames
+
+    def on_timeout(self, now=None):
+        """Let a caller drive the loss timer. Returns datagrams to send."""
+        if self.closed:
+            return []
+        probes = self.recovery.on_timeout(now=now)
+        outgoing = []
+        by_level = {}
+        for packet in probes:
+            frames = [f for f in packet.frames if not isinstance(f, qframes.AckFrame)]
+            if frames:
+                by_level.setdefault(packet.level, []).extend(frames)
+        for level, frames in by_level.items():
+            outgoing.append((level, frames))
+        return self._flush(outgoing) if outgoing else []
+
+    def loss_timer(self):
+        """When on_timeout should next be called, or None if nothing is due."""
+        return self.recovery.loss_detection_timer()
 
     def _advance_handshake(self, level, outgoing):
         buffer = self.crypto_buffers[level]
@@ -401,7 +450,22 @@ class QuicConnection:
             )
         sealed = keys.seal(number, header, payload)
         pn_offset = len(header) - 4
-        return apply_header_protection(keys, header + sealed, pn_offset, 4)
+        packet = apply_header_protection(keys, header + sealed, pn_offset, 4)
+
+        # An ACK-only packet is never retransmitted: the peer will tell us
+        # again, and probing on it would never end.
+        ack_eliciting = any(not isinstance(f, qframes.AckFrame) for f in frame_list)
+        record = SentPacket(
+            number,
+            self.recovery._now(),
+            frames=list(frame_list),
+            ack_eliciting=ack_eliciting,
+            in_flight=ack_eliciting,
+            size=len(packet),
+            level=level,
+        )
+        self.recovery.on_packet_sent(level, record)
+        return packet
 
     def describe(self):
         return {
@@ -412,6 +476,7 @@ class QuicConnection:
             "peer_connection_id": self.peer_cid.hex(),
             "levels": sorted(self.keys),
             "streams": len(self.streams),
+            "recovery": self.recovery.describe(),
         }
 
 

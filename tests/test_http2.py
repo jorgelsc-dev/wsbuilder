@@ -537,6 +537,9 @@ class TestServerIntegration(unittest.TestCase):
         server = self._start(ssl_context=manager)
 
         context = ssl_module.create_default_context(cadata=ca.certificate_pem.decode())
+        # Pinned so a scanner -- and a reader -- can see the floor,
+        # rather than trusting whatever the default happens to be.
+        context.minimum_version = ssl_module.TLSVersion.TLSv1_2
         context.set_alpn_protocols(["h2", "http/1.1"])
         raw = self.socket.create_connection(server.server_address, timeout=5.0)
         with context.wrap_socket(raw, server_hostname="localhost") as tls:
