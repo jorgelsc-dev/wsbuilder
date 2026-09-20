@@ -61,5 +61,22 @@ class TestPackageVersion(unittest.TestCase):
         self.assertEqual(stale, [])
 
 
+class TestPackageDiscovery(unittest.TestCase):
+    def test_package_discovery_includes_subpackages(self):
+        with (ROOT / "pyproject.toml").open("rb") as handle:
+            config = tomllib.load(handle)
+
+        find_config = config["tool"]["setuptools"]["packages"]["find"]
+        package_root = ROOT / find_config["where"][0]
+        packages = {
+            path.parent.relative_to(package_root).as_posix().replace("/", ".")
+            for path in package_root.rglob("__init__.py")
+            if path.parent.name != "__pycache__"
+        }
+
+        self.assertIn("wsbuilder", packages)
+        self.assertIn("wsbuilder.quic", packages)
+
+
 if __name__ == "__main__":
     unittest.main()
