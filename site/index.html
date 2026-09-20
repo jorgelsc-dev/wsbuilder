@@ -6,11 +6,13 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Documentacion oficial de wsbuilder">
+        <meta name="description" content="Documentacion oficial de WSBuilder, con guias, referencia y ejemplos.">
       
       
-        <meta name="author" content="wsbuilder Authors">
+        <meta name="author" content="WSBuilder Authors">
       
+      
+        <link rel="canonical" href="https://wsbuilder.jorgelsc.dev/">
       
       
       
@@ -21,15 +23,15 @@
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
-        <title>wsbuilder</title>
+        <title>WSBuilder Docs</title>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
@@ -46,12 +48,12 @@
         
         
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Source+Sans+3:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Source Sans 3";--md-code-font:"JetBrains Mono"}</style>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="stylesheets/extra.css">
     
     <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -78,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#mapa-de-plataforma" class="md-skip">
+        <a href="#wsbuilder-docs" class="md-skip">
           Saltar a contenido
         </a>
       
@@ -92,10 +94,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Cabecera">
-    <a href="." title="wsbuilder" class="md-header__button md-logo" aria-label="wsbuilder" data-md-component="logo">
+    <a href="." title="WSBuilder Docs" class="md-header__button md-logo" aria-label="WSBuilder Docs" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+  <img src="assets/wsbuilder-mark.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -106,7 +107,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            wsbuilder
+            WSBuilder Docs
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -125,7 +126,21 @@
     
     
     
-    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber"  aria-label="Cambiar a modo oscuro"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Cambiar a modo oscuro" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="amber"  aria-label="Cambiar a modo claro"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Cambiar a modo claro" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
     
   
 </form>
@@ -155,16 +170,13 @@
       </label>
       <nav class="md-search__options" aria-label="Buscar">
         
-          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Compartir" aria-label="Compartir" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
-            
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
-          </a>
-        
         <button type="reset" class="md-search__icon md-icon" title="Limpiar" aria-label="Limpiar" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
       </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
       
     </form>
     <div class="md-search__output">
@@ -181,6 +193,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/jorgelsc-dev/wsbuilder" title="Ir al repositorio" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    WSBuilder
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -222,33 +246,16 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="getting-started/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Empezar
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
     
     
       <li class="md-tabs__item">
-        <a href="application/" class="md-tabs__link">
+        <a href="getting-started/" class="md-tabs__link">
           
   
   
-  Aplicacion
+    
+  
+  Guia
 
         </a>
       </li>
@@ -262,56 +269,35 @@
   
   
     <li class="md-tabs__item">
-      <a href="architecture/" class="md-tabs__link">
+      <a href="reference/" class="md-tabs__link">
         
   
   
     
-  
-  Arquitectura
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="help/" class="md-tabs__link">
-          
-  
-  
-  Ayuda
-
-        </a>
-      </li>
-    
-  
-
-      
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="reference/" class="md-tabs__link">
-          
-  
   
   Referencia
 
-        </a>
-      </li>
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="help/" class="md-tabs__link">
+        
+  
+  
     
+  
+  Ayuda
+
+      </a>
+    </li>
   
 
       
@@ -337,14 +323,25 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navegación" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="wsbuilder" class="md-nav__button md-logo" aria-label="wsbuilder" data-md-component="logo">
+    <a href="." title="WSBuilder Docs" class="md-nav__button md-logo" aria-label="WSBuilder Docs" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+  <img src="assets/wsbuilder-mark.svg" alt="logo">
 
     </a>
-    wsbuilder
+    WSBuilder Docs
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/jorgelsc-dev/wsbuilder" title="Ir al repositorio" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    WSBuilder
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -360,6 +357,8 @@
       
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
+      
+        
       
       
         <label class="md-nav__link md-nav__link--active" for="__toc">
@@ -403,6 +402,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -411,10 +412,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#mapa-de-plataforma" class="md-nav__link">
+  <a href="#mapa-rapido" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Mapa de plataforma
+        Mapa rapido
       
     </span>
   </a>
@@ -422,10 +423,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#bloques-principales" class="md-nav__link">
+  <a href="#lo-que-vas-a-encontrar" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bloques principales
+        Lo que vas a encontrar
       
     </span>
   </a>
@@ -433,10 +434,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#flujo-mental" class="md-nav__link">
+  <a href="#flujo-recomendado" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Flujo mental
+        Flujo recomendado
       
     </span>
   </a>
@@ -444,10 +445,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#casos-de-uso-principales" class="md-nav__link">
+  <a href="#resumen-de-uso" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Casos de uso principales
+        Resumen de uso
       
     </span>
   </a>
@@ -455,54 +456,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#guia-de-aplicacion" class="md-nav__link">
+  <a href="#enlaces-utiles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Guia de aplicacion
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#por-que-esta-libreria-es-fuerte" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Por que esta libreria es fuerte
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#vista-rapida" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Vista rapida
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#como-leer-esta-documentacion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Como leer esta documentacion
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#contribucion-y-soporte" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Contribucion y soporte
+        Enlaces utiles
       
     </span>
   </a>
@@ -519,6 +476,86 @@
     
       
       
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guia
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guia
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
   
   
   
@@ -543,152 +580,10 @@
     </li>
   
 
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
-        
-          
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Aplicacion
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Aplicacion
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="application/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Resumen
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
               
             
               
                 
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="application/easy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Facil
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="application/advanced/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Avanzada
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
   
   
   
@@ -713,58 +608,7 @@
     </li>
   
 
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
-        
-          
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Ayuda
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Ayuda
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
+              
             
               
                 
@@ -773,14 +617,14 @@
   
   
     <li class="md-nav__item">
-      <a href="help/" class="md-nav__link">
+      <a href="http/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Resumen
+    HTTP
   
 
     
@@ -801,150 +645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="help/microservices/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Microservicios
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
-        
-          
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Referencia
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Referencia
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="reference/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Resumen
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="reference/http/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    HTTP y respuesta
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="reference/websocket/" class="md-nav__link">
+      <a href="websocket/" class="md-nav__link">
         
   
   
@@ -972,14 +673,14 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/orm/" class="md-nav__link">
+      <a href="persistence/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    ORM
+    Persistencia
   
 
     
@@ -1000,7 +701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/cache/" class="md-nav__link">
+      <a href="cache/" class="md-nav__link">
         
   
   
@@ -1028,7 +729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/security/" class="md-nav__link">
+      <a href="security/" class="md-nav__link">
         
   
   
@@ -1056,14 +757,14 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/metrics/" class="md-nav__link">
+      <a href="observability/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Metricas
+    Observabilidad
   
 
     
@@ -1084,14 +785,14 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/tasks/" class="md-nav__link">
+      <a href="tasks/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Tareas en background
+    Tareas
   
 
     
@@ -1112,14 +813,14 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/utilities/" class="md-nav__link">
+      <a href="proxy/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Utilidades HTTP
+    Proxy
   
 
     
@@ -1140,14 +841,14 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/dns/" class="md-nav__link">
+      <a href="dns/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    DNS local
+    DNS
   
 
     
@@ -1168,14 +869,14 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/advanced/" class="md-nav__link">
+      <a href="ia/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Avanzado
+    IA
   
 
     
@@ -1192,6 +893,60 @@
           </ul>
         </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Referencia
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="help/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ayuda
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1213,6 +968,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -1221,10 +978,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#mapa-de-plataforma" class="md-nav__link">
+  <a href="#mapa-rapido" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Mapa de plataforma
+        Mapa rapido
       
     </span>
   </a>
@@ -1232,10 +989,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#bloques-principales" class="md-nav__link">
+  <a href="#lo-que-vas-a-encontrar" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bloques principales
+        Lo que vas a encontrar
       
     </span>
   </a>
@@ -1243,10 +1000,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#flujo-mental" class="md-nav__link">
+  <a href="#flujo-recomendado" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Flujo mental
+        Flujo recomendado
       
     </span>
   </a>
@@ -1254,10 +1011,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#casos-de-uso-principales" class="md-nav__link">
+  <a href="#resumen-de-uso" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Casos de uso principales
+        Resumen de uso
       
     </span>
   </a>
@@ -1265,54 +1022,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#guia-de-aplicacion" class="md-nav__link">
+  <a href="#enlaces-utiles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Guia de aplicacion
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#por-que-esta-libreria-es-fuerte" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Por que esta libreria es fuerte
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#vista-rapida" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Vista rapida
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#como-leer-esta-documentacion" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Como leer esta documentacion
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#contribucion-y-soporte" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Contribucion y soporte
+        Enlaces utiles
       
     </span>
   </a>
@@ -1335,151 +1048,166 @@
                   
 
 
+  
+    <a href="https://github.com/jorgelsc-dev/wsbuilder/edit/main/docs/index.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
 
-  <h1>Inicio</h1>
 
-<div class="hero">
+<h1 id="wsbuilder-docs">WSBuilder Docs<a class="headerlink" href="#wsbuilder-docs" title="Permanent link">&para;</a></h1>
+<div class="ws-hero">
+  <div class="ws-hero-copy">
+    <p class="ws-eyebrow">HTTP + WebSocket + ORM + cache + seguridad + proxy</p>
+    <h1>Una base completa para construir servicios Python sin cargar mas de lo necesario.</h1>
+    <p class="ws-lead">
+      WSBuilder agrupa el servidor, el router, el ORM, el cache, la observabilidad y las utilidades de red en
+      un solo paquete. La documentacion esta organizada para que puedas ir de cero a produccion sin perderte.
+    </p>
+    <div class="ws-actions">
+      <a class="ws-button ws-button-primary" href="getting-started/">Empezar</a>
+      <a class="ws-button ws-button-secondary" href="reference/">Ver referencia</a>
+      <a class="ws-button ws-button-ghost" href="architecture/">Entender arquitectura</a>
+    </div>
+  </div>
 
-# wsbuilder
-
-Libreria Python para construir servidores HTTP, WebSocket y utilidades de infraestructura con una API pequena y composable.
-
-</div>
-
-<h2 id="mapa-de-plataforma">Mapa de plataforma<a class="headerlink" href="#mapa-de-plataforma" title="Permanent link">&para;</a></h2>
-<div class="diagram">
-<div class="diagram-title">Mapa de plataforma</div>
-<div class="diagram-track">
-<div class="diagram-node">Cliente</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">HTTPServer</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">App</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Router</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">HTTP / WS</div>
-</div>
-<div class="diagram-rows" style="margin-top: 1rem;">
-<div class="diagram-row">
-<div class="diagram-step">Security / Cache / Metrics / Tasks</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">ORM / Headers / DNS</div>
-<div class="diagram-note">Capas auxiliares que acompañan al flujo principal.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">ORM</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">SQLite</div>
-<div class="diagram-note">Persistencia local y determinista.</div>
-</div>
-</div>
-</div>
-
-<h2 id="bloques-principales">Bloques principales<a class="headerlink" href="#bloques-principales" title="Permanent link">&para;</a></h2>
-<div class="cards">
-<div class="card"><strong>HTTP</strong>Router, request/response, stream chunked y parseo de query string.</div>
-<div class="card"><strong>WebSocket</strong>Handshake, frames, control de ping/pong y errores de protocolo.</div>
-<div class="card"><strong>Persistencia</strong>Modelos SQLite, `QuerySet`, transacciones y replicas de lectura.</div>
-<div class="card"><strong>Infra</strong>Cache, seguridad, metricas, tareas, DNS local y utilidades de protocolo.</div>
+  <aside class="ws-hero-panel" aria-label="Resumen rapido">
+    <div class="ws-hero-stat">
+      <span>1</span>
+      <small>import principal desde `wsbuilder`</small>
+    </div>
+    <div class="ws-hero-stat">
+      <span>4</span>
+      <small>capas centrales: HTTP, WebSocket, datos e infraestructura</small>
+    </div>
+    <div class="ws-hero-stat">
+      <span>0</span>
+      <small>dependencias runtime obligatorias fuera de la stdlib</small>
+    </div>
+  </aside>
 </div>
 
-<h2 id="flujo-mental">Flujo mental<a class="headerlink" href="#flujo-mental" title="Permanent link">&para;</a></h2>
-<div class="diagram">
-<div class="diagram-title">Flujo mental</div>
-<div class="diagram-stack">
-<div class="diagram-row">
-<div class="diagram-step">Cliente</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">HTTPServer</div>
-<div class="diagram-note">Recibe la peticion.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">HTTPServer</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">App.dispatch</div>
-<div class="diagram-note">Convierte bytes en request utilizable.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">App.dispatch</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">Handler</div>
-<div class="diagram-note">Ejecuta el negocio y produce datos.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">Handler</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">Response</div>
-<div class="diagram-note">Serializa y responde.</div>
-</div>
-</div>
+<h2 id="mapa-rapido">Mapa rapido<a class="headerlink" href="#mapa-rapido" title="Permanent link">&para;</a></h2>
+<div class="ws-grid">
+  <article class="ws-card">
+    <p class="ws-kicker">Punto de entrada</p>
+    <h2>App</h2>
+    <p>Define rutas HTTP, WebSocket, caches, seguridad, metricas, logs y tareas en background.</p>
+  </article>
+  <article class="ws-card">
+    <p class="ws-kicker">Persistencia</p>
+    <h2>ORM SQLite</h2>
+    <p>Modelos declarativos, filtros, transacciones, replicas de lectura y optimizacion SQLite.</p>
+  </article>
+  <article class="ws-card">
+    <p class="ws-kicker">Observabilidad</p>
+    <h2>Metricas y logs</h2>
+    <p>Snapshots JSON, streaming en vivo y logs NDJSON para seguimiento simple y automatizable.</p>
+  </article>
+  <article class="ws-card">
+    <p class="ws-kicker">Infraestructura</p>
+    <h2>Proxy y DNS</h2>
+    <p>Balanceo de trafico, virtual hosts, DNS local y utilidades para escenarios de borde.</p>
+  </article>
 </div>
 
-<h2 id="casos-de-uso-principales">Casos de uso principales<a class="headerlink" href="#casos-de-uso-principales" title="Permanent link">&para;</a></h2>
-<div class="cards">
-<div class="card"><strong>APIs pequenas</strong>Construye endpoints JSON y vistas HTML sin arrastrar un framework grande.</div>
-<div class="card"><strong>Tiempo real</strong>Usa WebSocket para chat, eventos y estados en vivo.</div>
-<div class="card"><strong>SQLite serio</strong>Modela datos, transacciones y lecturas optimizadas con una capa consistente.</div>
-<div class="card"><strong>Control interno</strong>Agrega cache, seguridad, metricas y tareas sin salir de la misma API.</div>
+<h2 id="lo-que-vas-a-encontrar">Lo que vas a encontrar<a class="headerlink" href="#lo-que-vas-a-encontrar" title="Permanent link">&para;</a></h2>
+<div class="ws-grid ws-grid-compact">
+  <article class="ws-card">
+    <h3>Guia de inicio</h3>
+    <p>Instalacion, primer servidor, docs en vivo y ejemplos listos para copiar.</p>
+    <a href="getting-started/">Abrir guia</a>
+  </article>
+  <article class="ws-card">
+    <h3>Arquitectura</h3>
+    <p>Como entra una request, donde se aplica seguridad, cache, metricas y tareas.</p>
+    <a href="architecture/">Ver arquitectura</a>
+  </article>
+  <article class="ws-card">
+    <h3>Referencia</h3>
+    <p>Lista de modulos y exportaciones publicas, agrupadas por caso de uso.</p>
+    <a href="reference/">Abrir referencia</a>
+  </article>
+  <article class="ws-card">
+    <h3>Ayuda</h3>
+    <p>Errores comunes, arranque local, validaciones y puntos de diagnostico rapido.</p>
+    <a href="help/">Ir a ayuda</a>
+  </article>
 </div>
 
-<h2 id="guia-de-aplicacion">Guia de aplicacion<a class="headerlink" href="#guia-de-aplicacion" title="Permanent link">&para;</a></h2>
-<div class="cards">
-<div class="card"><strong>Facil</strong>Parte de un servicio pequeno, correlo localmente y entiende el flujo basico de HTTP, JSON y HTML.</div>
-<div class="card"><strong>Avanzada</strong>Arma una aplicacion real con seguridad, cache, metricas, tareas, WebSocket y SQLite optimizado.</div>
-</div>
-
+<h2 id="flujo-recomendado">Flujo recomendado<a class="headerlink" href="#flujo-recomendado" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Abre <a href="application/easy/">Aplicacion - Facil</a> si quieres construir tu primer servicio completo sin perderte.</li>
-<li>Abre <a href="application/advanced/">Aplicacion - Avanzada</a> si ya sabes que vas a operar un servicio serio.</li>
-<li>Vuelve a <a href="architecture/">Arquitectura</a> si quieres entender por que cada pieza esta separada asi.</li>
+<li>Lee la <a href="getting-started/">guia de inicio</a> y levanta un <code>App</code> minimo.</li>
+<li>Sigue la <a href="architecture/">arquitectura</a> para entender el flujo de request a response.</li>
+<li>Abre la <a href="reference/">referencia</a> cuando necesites firmas, parametros o nombres exactos.</li>
+<li>Usa la <a href="help/">ayuda</a> para resolver problemas de instalacion, build o despliegue.</li>
 </ol>
-<h2 id="por-que-esta-libreria-es-fuerte">Por que esta libreria es fuerte<a class="headerlink" href="#por-que-esta-libreria-es-fuerte" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Tiene fronteras claras entre transporte, negocio y observabilidad.</li>
-<li>Exige poco para empezar y permite crecer por modulos.</li>
-<li>Usa componentes simples que puedes leer, depurar y extender sin magia opaca.</li>
-<li>Expone helpers de bajo nivel para cuando necesitas controlar el protocolo, no solo abstraerlo.</li>
-<li>Encaja bien como base de servicios pequenos o como pieza interna de una arquitectura mayor.</li>
-</ul>
-<h2 id="vista-rapida">Vista rapida<a class="headerlink" href="#vista-rapida" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wsbuilder</span><span class="w"> </span><span class="kn">import</span> <span class="n">App</span><span class="p">,</span> <span class="n">Response</span><span class="p">,</span> <span class="n">Database</span><span class="p">,</span> <span class="n">Model</span><span class="p">,</span> <span class="n">IntegerField</span><span class="p">,</span> <span class="n">TextField</span>
-
-<span class="n">app</span> <span class="o">=</span> <span class="n">App</span><span class="p">(</span><span class="n">cors_allow_origin</span><span class="o">=</span><span class="s2">&quot;*&quot;</span><span class="p">)</span>
-<span class="n">app</span><span class="o">.</span><span class="n">enable_metrics</span><span class="p">()</span>
-
-<span class="k">class</span><span class="w"> </span><span class="nc">User</span><span class="p">(</span><span class="n">Model</span><span class="p">):</span>
-    <span class="nb">id</span> <span class="o">=</span> <span class="n">IntegerField</span><span class="p">(</span><span class="n">primary_key</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">auto_increment</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="n">username</span> <span class="o">=</span> <span class="n">TextField</span><span class="p">(</span><span class="n">unique</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">null</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">email</span> <span class="o">=</span> <span class="n">TextField</span><span class="p">(</span><span class="n">null</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-
-<span class="n">db</span> <span class="o">=</span> <span class="n">Database</span><span class="p">(</span><span class="s2">&quot;app.db&quot;</span><span class="p">)</span>
-<span class="n">User</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">db</span><span class="p">)</span>
-
-<span class="nd">@app</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">home</span><span class="p">(</span><span class="n">_request</span><span class="p">):</span>
-    <span class="k">return</span> <span class="n">Response</span><span class="o">.</span><span class="n">html</span><span class="p">(</span><span class="s2">&quot;&lt;h1&gt;wsbuilder&lt;/h1&gt;&quot;</span><span class="p">)</span>
-
-<span class="nd">@app</span><span class="o">.</span><span class="n">api</span><span class="p">(</span><span class="s2">&quot;/api/health&quot;</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">health</span><span class="p">(</span><span class="n">_request</span><span class="p">):</span>
-    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;ok&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">}</span>
-
-<span class="n">app</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="s2">&quot;0.0.0.0&quot;</span><span class="p">,</span> <span class="mi">8765</span><span class="p">)</span>
+<h2 id="resumen-de-uso">Resumen de uso<a class="headerlink" href="#resumen-de-uso" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Si quieres...</th>
+<th>Lee primero</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Servir HTML o JSON</td>
+<td><a href="http/">HTTP</a></td>
+</tr>
+<tr>
+<td>Mantener conexiones persistentes</td>
+<td><a href="websocket/">WebSocket</a></td>
+</tr>
+<tr>
+<td>Guardar datos localmente</td>
+<td><a href="persistence/">Persistencia</a></td>
+</tr>
+<tr>
+<td>Reducir costo de respuestas</td>
+<td><a href="cache/">Cache</a></td>
+</tr>
+<tr>
+<td>Controlar acceso y rate limit</td>
+<td><a href="security/">Seguridad</a></td>
+</tr>
+<tr>
+<td>Medir carga y eventos</td>
+<td><a href="observability/">Observabilidad</a></td>
+</tr>
+<tr>
+<td>Ejecutar trabajo en segundo plano</td>
+<td><a href="tasks/">Tareas</a></td>
+</tr>
+<tr>
+<td>Proxy y balanceo</td>
+<td><a href="proxy/">Proxy</a></td>
+</tr>
+<tr>
+<td>Resolver nombres localmente</td>
+<td><a href="dns/">DNS</a></td>
+</tr>
+<tr>
+<td>Entrenar modelos sencillos</td>
+<td><a href="ia/">IA</a></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Atajo util</p>
+<p>Si solo quieres probar la libreria, instala el paquete en editable y arranca el demo:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+python<span class="w"> </span>-m<span class="w"> </span>wsbuilder<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8765</span>
 </code></pre></div>
-<h2 id="como-leer-esta-documentacion">Como leer esta documentacion<a class="headerlink" href="#como-leer-esta-documentacion" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Empieza por <a href="getting-started/">Empezar</a> si quieres levantar algo rapido.</li>
-<li>Sigue con <a href="application/">Aplicacion</a> para elegir entre la guia facil o la avanzada.</li>
-<li>Abre <a href="architecture/">Arquitectura</a> para entender el flujo interno.</li>
-<li>Abre <a href="help/">Ayuda</a> si estas pensando en Microservicios o topologias distribuidas.</li>
-<li>Usa <a href="reference/">Referencia</a> para ir directo a una clase, modulo o helper.</li>
-</ol>
-<h2 id="contribucion-y-soporte">Contribucion y soporte<a class="headerlink" href="#contribucion-y-soporte" title="Permanent link">&para;</a></h2>
+</div>
+<h2 id="enlaces-utiles">Enlaces utiles<a class="headerlink" href="#enlaces-utiles" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Trabaja en ramas <code>feat/&lt;nombre&gt;</code> o <code>fix/&lt;nombre&gt;</code> creadas desde <code>main</code>.</li>
-<li>Abre PRs hacia <code>main</code> con cambios pequenos y faciles de revisar.</li>
-<li>Si detectas una vulnerabilidad, usa el canal privado en vez de una issue publica.</li>
-<li>Soporte opcional por BTC: <code>bc1q3lhxpr9yantvefmvhpd2h4lu0ykf3t45zvuve2</code></li>
+<li><a href="https://github.com/jorgelsc-dev/wsbuilder">Repositorio</a></li>
+<li><a href="https://wsbuilder.jorgelsc.dev/">Documentacion en vivo</a></li>
+<li><a href="help/">Archivo de ayuda</a></li>
+<li><a href="reference/">Referencia completa</a></li>
 </ul>
 
 
@@ -1538,10 +1266,10 @@ Libreria Python para construir servidores HTTP, WebSocket y utilidades de infrae
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tabs", "navigation.sections", "navigation.top", "search.highlight", "search.share", "content.code.copy", "content.tabs.link"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado al portapapeles", "clipboard.copy": "Copiar al portapapeles", "search.result.more.one": "1 m\u00e1s en esta p\u00e1gina", "search.result.more.other": "# m\u00e1s en esta p\u00e1gina", "search.result.none": "No se encontraron documentos", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Teclee para comenzar b\u00fasqueda", "search.result.term.missing": "Falta", "select.version": "Seleccionar versi\u00f3n"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.sections", "navigation.indexes", "navigation.expand", "navigation.tracking", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit", "content.tabs.link", "toc.follow"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado al portapapeles", "clipboard.copy": "Copiar al portapapeles", "search.result.more.one": "1 m\u00e1s en esta p\u00e1gina", "search.result.more.other": "# m\u00e1s en esta p\u00e1gina", "search.result.none": "No se encontraron documentos", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Teclee para comenzar b\u00fasqueda", "search.result.term.missing": "Falta", "select.version": "Seleccionar versi\u00f3n"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

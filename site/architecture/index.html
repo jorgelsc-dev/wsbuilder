@@ -6,32 +6,34 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Documentacion oficial de wsbuilder">
+        <meta name="description" content="Documentacion oficial de WSBuilder, con guias, referencia y ejemplos.">
       
       
-        <meta name="author" content="wsbuilder Authors">
+        <meta name="author" content="WSBuilder Authors">
       
       
+        <link rel="canonical" href="https://wsbuilder.jorgelsc.dev/architecture/">
       
-        <link rel="prev" href="../application/advanced/">
+      
+        <link rel="prev" href="../getting-started/">
       
       
-        <link rel="next" href="../help/">
+        <link rel="next" href="../http/">
       
       
         
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
-        <title>Arquitectura - wsbuilder</title>
+        <title>Arquitectura - WSBuilder Docs</title>
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -48,12 +50,12 @@
         
         
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
-        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Source+Sans+3:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Source Sans 3";--md-code-font:"JetBrains Mono"}</style>
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../stylesheets/extra.css">
     
     <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -94,10 +96,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Cabecera">
-    <a href=".." title="wsbuilder" class="md-header__button md-logo" aria-label="wsbuilder" data-md-component="logo">
+    <a href=".." title="WSBuilder Docs" class="md-header__button md-logo" aria-label="WSBuilder Docs" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+  <img src="../assets/wsbuilder-mark.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -108,7 +109,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            wsbuilder
+            WSBuilder Docs
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -127,7 +128,21 @@
     
     
     
-    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber"  aria-label="Cambiar a modo oscuro"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Cambiar a modo oscuro" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="amber"  aria-label="Cambiar a modo claro"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Cambiar a modo claro" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
     
   
 </form>
@@ -157,16 +172,13 @@
       </label>
       <nav class="md-search__options" aria-label="Buscar">
         
-          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Compartir" aria-label="Compartir" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
-            
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
-          </a>
-        
         <button type="reset" class="md-search__icon md-icon" title="Limpiar" aria-label="Limpiar" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
       </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
       
     </form>
     <div class="md-search__output">
@@ -183,6 +195,18 @@
 </div>
       
     
+    
+      <div class="md-header__source">
+        <a href="https://github.com/jorgelsc-dev/wsbuilder" title="Ir al repositorio" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    WSBuilder
+  </div>
+</a>
+      </div>
     
   </nav>
   
@@ -221,99 +245,61 @@
   
   
   
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Guia
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
   
     <li class="md-tabs__item">
-      <a href="../getting-started/" class="md-tabs__link">
+      <a href="../reference/" class="md-tabs__link">
         
   
   
     
-  
-  Empezar
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../application/" class="md-tabs__link">
-          
-  
-  
-  Aplicacion
-
-        </a>
-      </li>
-    
-  
-
-      
-        
-  
-  
-  
-    
-  
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="./" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Arquitectura
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../help/" class="md-tabs__link">
-          
-  
-  
-  Ayuda
-
-        </a>
-      </li>
-    
-  
-
-      
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../reference/" class="md-tabs__link">
-          
-  
   
   Referencia
 
-        </a>
-      </li>
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../help/" class="md-tabs__link">
+        
+  
+  
     
+  
+  Ayuda
+
+      </a>
+    </li>
   
 
       
@@ -339,14 +325,25 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navegación" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="wsbuilder" class="md-nav__button md-logo" aria-label="wsbuilder" data-md-component="logo">
+    <a href=".." title="WSBuilder Docs" class="md-nav__button md-logo" aria-label="WSBuilder Docs" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+  <img src="../assets/wsbuilder-mark.svg" alt="logo">
 
     </a>
-    wsbuilder
+    WSBuilder Docs
   </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/jorgelsc-dev/wsbuilder" title="Ir al repositorio" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    WSBuilder
+  </div>
+</a>
+    </div>
   
   <ul class="md-nav__list" data-md-scrollfix>
     
@@ -381,6 +378,89 @@
       
   
   
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guia
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guia
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
   
   
     <li class="md-nav__item">
@@ -403,152 +483,10 @@
     </li>
   
 
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
-        
-          
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Aplicacion
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Aplicacion
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../application/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Resumen
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
               
             
               
                 
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../application/easy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Facil
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../application/advanced/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Avanzada
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
   
   
     
@@ -614,10 +552,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#vista-general" class="md-nav__link">
+  <a href="#flujo-de-request" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Vista general
+        Flujo de request
       
     </span>
   </a>
@@ -625,44 +563,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#flujo-http" class="md-nav__link">
+  <a href="#tipos-de-ruta" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Flujo HTTP
+        Tipos de ruta
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#flujo-websocket" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Flujo WebSocket
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#modulos-principales" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Modulos principales
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Modulos principales">
+    <nav class="md-nav" aria-label="Tipos de ruta">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#wsbuilderapp" class="md-nav__link">
+  <a href="#view" class="md-nav__link">
     <span class="md-ellipsis">
       
-        wsbuilder.app
+        view
       
     </span>
   </a>
@@ -670,10 +586,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#wsbuilderserver" class="md-nav__link">
+  <a href="#api" class="md-nav__link">
     <span class="md-ellipsis">
       
-        wsbuilder.server
+        api
       
     </span>
   </a>
@@ -681,120 +597,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#wsbuilderhttp" class="md-nav__link">
+  <a href="#ws" class="md-nav__link">
     <span class="md-ellipsis">
       
-        wsbuilder.http
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderws" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.ws
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderorm" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.orm
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildercache-y-wsbuildercaches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.cache y wsbuilder.caches
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildersecurity" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.security
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildermetrics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.metrics
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildertasks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.tasks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderdns" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.dns
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderdb_replicas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.db_replicas
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildercookies-y-wsbuilderheaders" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.cookies y wsbuilder.headers
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderpredicts" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.predicts
+        ws
       
     </span>
   </a>
@@ -807,10 +613,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#como-interactuan-entre-si" class="md-nav__link">
+  <a href="#componentes-transversales" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Como interactuan entre si
+        Componentes transversales
       
     </span>
   </a>
@@ -818,60 +624,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#piezas-de-orquestacion" class="md-nav__link">
+  <a href="#threads-por-ruta" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Piezas de orquestacion
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Piezas de orquestacion">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#rutas-view-con-workers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Rutas view() con workers
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cache-declarativa" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cache declarativa
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#seguridad-antes-del-negocio" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Seguridad antes del negocio
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cierre-y-ciclo-de-vida" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cierre y ciclo de vida
+        Threads por ruta
       
     </span>
   </a>
@@ -879,10 +635,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#resumen-operativo" class="md-nav__link">
+  <a href="#docs-nativas" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Resumen operativo
+        Docs nativas
       
     </span>
   </a>
@@ -890,10 +646,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cuando-este-diseno-funciona-mejor" class="md-nav__link">
+  <a href="#cuando-usar-cada-capa" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cuando este diseño funciona mejor
+        Cuando usar cada capa
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nota-practica" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nota practica
       
     </span>
   </a>
@@ -907,58 +674,7 @@
     </li>
   
 
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
-        
-          
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Ayuda
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Ayuda
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
+              
             
               
                 
@@ -967,14 +683,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../help/" class="md-nav__link">
+      <a href="../http/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Resumen
+    HTTP
   
 
     
@@ -995,150 +711,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../help/microservices/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Microservicios
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
-        
-          
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Referencia
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Referencia
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Resumen
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/http/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    HTTP y respuesta
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/websocket/" class="md-nav__link">
+      <a href="../websocket/" class="md-nav__link">
         
   
   
@@ -1166,14 +739,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../reference/orm/" class="md-nav__link">
+      <a href="../persistence/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    ORM
+    Persistencia
   
 
     
@@ -1194,7 +767,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reference/cache/" class="md-nav__link">
+      <a href="../cache/" class="md-nav__link">
         
   
   
@@ -1222,7 +795,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reference/security/" class="md-nav__link">
+      <a href="../security/" class="md-nav__link">
         
   
   
@@ -1250,14 +823,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../reference/metrics/" class="md-nav__link">
+      <a href="../observability/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Metricas
+    Observabilidad
   
 
     
@@ -1278,14 +851,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../reference/tasks/" class="md-nav__link">
+      <a href="../tasks/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Tareas en background
+    Tareas
   
 
     
@@ -1306,14 +879,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../reference/utilities/" class="md-nav__link">
+      <a href="../proxy/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Utilidades HTTP
+    Proxy
   
 
     
@@ -1334,14 +907,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../reference/dns/" class="md-nav__link">
+      <a href="../dns/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    DNS local
+    DNS
   
 
     
@@ -1362,14 +935,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../reference/advanced/" class="md-nav__link">
+      <a href="../ia/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Avanzado
+    IA
   
 
     
@@ -1386,6 +959,60 @@
           </ul>
         </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Referencia
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../help/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ayuda
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1417,10 +1044,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#vista-general" class="md-nav__link">
+  <a href="#flujo-de-request" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Vista general
+        Flujo de request
       
     </span>
   </a>
@@ -1428,44 +1055,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#flujo-http" class="md-nav__link">
+  <a href="#tipos-de-ruta" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Flujo HTTP
+        Tipos de ruta
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#flujo-websocket" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Flujo WebSocket
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#modulos-principales" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Modulos principales
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Modulos principales">
+    <nav class="md-nav" aria-label="Tipos de ruta">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#wsbuilderapp" class="md-nav__link">
+  <a href="#view" class="md-nav__link">
     <span class="md-ellipsis">
       
-        wsbuilder.app
+        view
       
     </span>
   </a>
@@ -1473,10 +1078,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#wsbuilderserver" class="md-nav__link">
+  <a href="#api" class="md-nav__link">
     <span class="md-ellipsis">
       
-        wsbuilder.server
+        api
       
     </span>
   </a>
@@ -1484,120 +1089,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#wsbuilderhttp" class="md-nav__link">
+  <a href="#ws" class="md-nav__link">
     <span class="md-ellipsis">
       
-        wsbuilder.http
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderws" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.ws
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderorm" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.orm
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildercache-y-wsbuildercaches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.cache y wsbuilder.caches
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildersecurity" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.security
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildermetrics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.metrics
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildertasks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.tasks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderdns" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.dns
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderdb_replicas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.db_replicas
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuildercookies-y-wsbuilderheaders" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.cookies y wsbuilder.headers
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#wsbuilderpredicts" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wsbuilder.predicts
+        ws
       
     </span>
   </a>
@@ -1610,10 +1105,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#como-interactuan-entre-si" class="md-nav__link">
+  <a href="#componentes-transversales" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Como interactuan entre si
+        Componentes transversales
       
     </span>
   </a>
@@ -1621,60 +1116,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#piezas-de-orquestacion" class="md-nav__link">
+  <a href="#threads-por-ruta" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Piezas de orquestacion
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Piezas de orquestacion">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#rutas-view-con-workers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Rutas view() con workers
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cache-declarativa" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cache declarativa
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#seguridad-antes-del-negocio" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Seguridad antes del negocio
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cierre-y-ciclo-de-vida" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cierre y ciclo de vida
+        Threads por ruta
       
     </span>
   </a>
@@ -1682,10 +1127,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#resumen-operativo" class="md-nav__link">
+  <a href="#docs-nativas" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Resumen operativo
+        Docs nativas
       
     </span>
   </a>
@@ -1693,10 +1138,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cuando-este-diseno-funciona-mejor" class="md-nav__link">
+  <a href="#cuando-usar-cada-capa" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cuando este diseño funciona mejor
+        Cuando usar cada capa
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nota-practica" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nota practica
       
     </span>
   </a>
@@ -1719,427 +1175,122 @@
                   
 
 
+  
+    <a href="https://github.com/jorgelsc-dev/wsbuilder/edit/main/docs/architecture.md" title="Editar esta página" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
 
 <h1 id="arquitectura">Arquitectura<a class="headerlink" href="#arquitectura" title="Permanent link">&para;</a></h1>
-<p><code>wsbuilder</code> esta organizado como una base pequena de transporte y orquestacion, con modulos especializados que se conectan alrededor de <code>App</code>.</p>
-<h2 id="vista-general">Vista general<a class="headerlink" href="#vista-general" title="Permanent link">&para;</a></h2>
-<div class="diagram">
-<div class="diagram-title">Vista general</div>
-<div class="diagram-track">
-<div class="diagram-node">Cliente HTTP o WS</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">HTTPServer</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">parse_http_request</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">App.dispatch</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Router</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Handler</div>
-</div>
-<div class="diagram-rows" style="margin-top: 1rem;">
-<div class="diagram-row">
-<div class="diagram-step">SecurityPolicy</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">Cache / Metrics / Tasks</div>
-<div class="diagram-note">Capas transversales que se activan antes o despues del handler.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">Handler HTTP</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">ORM / Replicas / DNS / Cookies</div>
-<div class="diagram-note">El handler resuelve negocio y usa utilidades segun el caso.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">Handshake WS</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">WebSocket</div>
-<div class="diagram-note">Cuando la ruta es WebSocket, el flujo cambia a frames persistentes.</div>
-</div>
-</div>
-</div>
-
-<p>La idea es simple:</p>
-<ul>
-<li><code>HTTPServer</code> solo acepta sockets, lee, valida y delega.</li>
-<li><code>App</code> decide que hacer con la request.</li>
-<li>Los modulos alrededor de <code>App</code> agregan seguridad, cache, metricas, tareas y persistencia.</li>
-</ul>
-<h2 id="flujo-http">Flujo HTTP<a class="headerlink" href="#flujo-http" title="Permanent link">&para;</a></h2>
-<div class="diagram">
-<div class="diagram-title">Flujo HTTP</div>
-<div class="diagram-lanes">
-<div class="diagram-lane">Cliente</div>
-<div class="diagram-lane">HTTPServer</div>
-<div class="diagram-lane">App.dispatch</div>
-<div class="diagram-lane">Router</div>
-<div class="diagram-lane">Handler</div>
-<div class="diagram-lane">Response</div>
-</div>
-<div class="diagram-stack">
-<div class="diagram-row">
-<div class="diagram-step">Cliente</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">HTTPServer</div>
-<div class="diagram-note">Conexion TCP y lectura de cabeceras.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">HTTPServer</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">App.dispatch</div>
-<div class="diagram-note">Convierte bytes en una `Request` utilizable.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">App.dispatch</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">Router / Policy</div>
-<div class="diagram-note">Evalua seguridad, cache y ruta.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">Router</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">Handler</div>
-<div class="diagram-note">Ejecuta la logica de negocio.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">Handler</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">Response</div>
-<div class="diagram-note">Serializa JSON, texto, HTML o stream.</div>
-</div>
-</div>
+<p>WSBuilder se organiza alrededor de una idea simple: una aplicacion central que enruta requests y va
+activando componentes transversales cuando hacen falta.</p>
+<h2 id="flujo-de-request">Flujo de request<a class="headerlink" href="#flujo-de-request" title="Permanent link">&para;</a></h2>
+<ol>
+<li><code>HTTPServer</code> recibe la conexion.</li>
+<li><code>parse_http_request</code> crea un <code>Request</code>.</li>
+<li><code>App.dispatch</code> aplica seguridad, cache y resolucion de ruta.</li>
+<li>El handler devuelve <code>Response</code>, <code>dict</code>, <code>list</code>, texto o <code>None</code>.</li>
+<li><code>App</code> ajusta CORS, cookies de afinidad, metricas y logs.</li>
+</ol>
+<h2 id="tipos-de-ruta">Tipos de ruta<a class="headerlink" href="#tipos-de-ruta" title="Permanent link">&para;</a></h2>
+<h3 id="view"><code>view</code><a class="headerlink" href="#view" title="Permanent link">&para;</a></h3>
+<p>Rutas HTML o texto. Pueden usar un pool de workers por ruta si configuras <code>min_threads</code> y <code>max_threads</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@app</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="s2">"/dashboard"</span><span class="p">,</span> <span class="n">min_threads</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">requests_per_thread</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">dashboard</span><span class="p">(</span><span class="n">_request</span><span class="p">):</span>
+    <span class="k">return</span> <span class="s2">"ok"</span>
+</code></pre></div>
+<h3 id="api"><code>api</code><a class="headerlink" href="#api" title="Permanent link">&para;</a></h3>
+<p>Rutas JSON para APIs y servicios de control.</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@app</span><span class="o">.</span><span class="n">api</span><span class="p">(</span><span class="s2">"/api/users"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">users</span><span class="p">(</span><span class="n">_request</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">[{</span><span class="s2">"id"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">"name"</span><span class="p">:</span> <span class="s2">"Alice"</span><span class="p">}]</span>
+</code></pre></div>
+<h3 id="ws"><code>ws</code><a class="headerlink" href="#ws" title="Permanent link">&para;</a></h3>
+<p>Rutas WebSocket con handshake y callbacks de ciclo de vida.</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@app</span><span class="o">.</span><span class="n">ws</span><span class="p">(</span><span class="s2">"/ws/"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">chat</span><span class="p">(</span><span class="n">ws</span><span class="p">,</span> <span class="n">_request</span><span class="p">):</span>
+    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="n">frame</span> <span class="o">=</span> <span class="n">ws</span><span class="o">.</span><span class="n">recv_frame</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">frame</span><span class="o">.</span><span class="n">opcode</span> <span class="o">==</span> <span class="mh">0x8</span><span class="p">:</span>
+            <span class="k">break</span>
+        <span class="n">ws</span><span class="o">.</span><span class="n">send_text</span><span class="p">(</span><span class="n">frame</span><span class="o">.</span><span class="n">payload</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s2">"ignore"</span><span class="p">))</span>
+</code></pre></div>
+<h2 id="componentes-transversales">Componentes transversales<a class="headerlink" href="#componentes-transversales" title="Permanent link">&para;</a></h2>
+<div class="ws-grid ws-grid-compact">
+  <article class="ws-card">
+    <h3>Seguridad</h3>
+    <p>Bloquea, limita y audita requests antes de entrar al handler.</p>
+  </article>
+  <article class="ws-card">
+    <h3>Cache</h3>
+    <p>Guarda respuestas de `view` y aplica reglas globales o por ruta.</p>
+  </article>
+  <article class="ws-card">
+    <h3>Metricas</h3>
+    <p>Expone snapshots JSON y streaming continuo para observabilidad en vivo.</p>
+  </article>
+  <article class="ws-card">
+    <h3>Tareas</h3>
+    <p>Ejecuta trabajo en background con cancelacion y control de concurrencia.</p>
+  </article>
 </div>
 
-<h2 id="flujo-websocket">Flujo WebSocket<a class="headerlink" href="#flujo-websocket" title="Permanent link">&para;</a></h2>
-<div class="diagram">
-<div class="diagram-title">Flujo WebSocket</div>
-<div class="diagram-track">
-<div class="diagram-node">Cliente</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">HTTP Upgrade</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">App.dispatch</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Handshake WS</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Handler WS</div>
-</div>
-<div class="diagram-note" style="margin-top: 0.85rem;">Cuando el upgrade es valido, el canal deja de ser request/response y pasa a ser una sesion persistente por frames.</div>
-</div>
-
-<h2 id="modulos-principales">Modulos principales<a class="headerlink" href="#modulos-principales" title="Permanent link">&para;</a></h2>
-<h3 id="wsbuilderapp"><code>wsbuilder.app</code><a class="headerlink" href="#wsbuilderapp" title="Permanent link">&para;</a></h3>
-<p>Es la fachada de orquestacion.</p>
-<p>Responsabilidades:</p>
+<h2 id="threads-por-ruta">Threads por ruta<a class="headerlink" href="#threads-por-ruta" title="Permanent link">&para;</a></h2>
+<p>Las rutas <code>view</code> pueden correr en directo o en un pool controlado por la propia ruta.</p>
 <ul>
-<li>registrar rutas HTTP con <code>view()</code> y <code>api()</code>;</li>
-<li>registrar rutas WebSocket con <code>ws()</code>;</li>
-<li>aplicar CORS;</li>
-<li>coordinar cache, seguridad, metricas y tareas;</li>
-<li>cerrar pools y recursos al apagar la aplicacion.</li>
+<li><code>thread_count=0</code> usa ejecucion directa.</li>
+<li><code>min_threads</code> y <code>max_threads</code> habilitan el pool.</li>
+<li><code>requests_per_thread</code> limita cuanta carga acepta cada worker.</li>
+<li><code>affinity_ttl_seconds</code> y <code>thread_cookie_name</code> ayudan a mantener afinidad por cookie.</li>
 </ul>
-<p>Punto clave:</p>
-<ul>
-<li><code>App.dispatch()</code> es el centro de decision.</li>
-<li>ahi se evalua seguridad, se resuelve la ruta, se busca cache, se ejecuta el handler y se serializa la salida.</li>
-</ul>
-<h3 id="wsbuilderserver"><code>wsbuilder.server</code><a class="headerlink" href="#wsbuilderserver" title="Permanent link">&para;</a></h3>
-<p>Es la capa de transporte.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>aceptar conexiones TCP;</li>
-<li>aplicar timeout y limite de workers de conexion;</li>
-<li>leer HTTP y escribir respuestas;</li>
-<li>detectar upgrades WebSocket;</li>
-<li>cerrar todo de forma segura al terminar.</li>
-</ul>
-<p>Punto clave:</p>
-<ul>
-<li>no decide negocio;</li>
-<li>solo transporta bytes y llama a <code>App</code>.</li>
-</ul>
-<h3 id="wsbuilderhttp"><code>wsbuilder.http</code><a class="headerlink" href="#wsbuilderhttp" title="Permanent link">&para;</a></h3>
-<p>Es la capa de modelo y serializacion HTTP.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>representar <code>Request</code> y <code>Response</code>;</li>
-<li>parsear query strings;</li>
-<li>leer requests HTTP desde el socket;</li>
-<li>serializar respuestas y streams chunked.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li><code>Request</code> alimenta <code>App.dispatch()</code>;</li>
-<li><code>Response</code> sale hacia <code>send_http_response()</code>;</li>
-<li><code>Response.stream()</code> permite salida incremental.</li>
-</ul>
-<h3 id="wsbuilderws"><code>wsbuilder.ws</code><a class="headerlink" href="#wsbuilderws" title="Permanent link">&para;</a></h3>
-<p>Es la capa de WebSocket.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>detectar upgrades;</li>
-<li>validar handshake;</li>
-<li>leer y escribir frames;</li>
-<li>manejar ping/pong, close y errores de protocolo;</li>
-<li>exponer <code>WebSocket</code> y <code>WebSocketFrame</code>.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li><code>HTTPServer</code> detecta upgrade;</li>
-<li><code>App</code> localiza la ruta WS;</li>
-<li>el handler recibe el objeto <code>WebSocket</code> ya preparado.</li>
-</ul>
-<h3 id="wsbuilderorm"><code>wsbuilder.orm</code><a class="headerlink" href="#wsbuilderorm" title="Permanent link">&para;</a></h3>
-<p>Es la persistencia declarativa sobre SQLite.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>definir modelos con <code>Model</code> y campos;</li>
-<li>crear tablas;</li>
-<li>consultar con <code>QuerySet</code>;</li>
-<li>agrupar escritura con <code>Transaction</code>.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li>normalmente vive dentro de un handler HTTP;</li>
-<li>se apoya en <code>Database</code> o en replicas de lectura;</li>
-<li>funciona mejor cuando cada servicio posee su propia base.</li>
-</ul>
-<h3 id="wsbuildercache-y-wsbuildercaches"><code>wsbuilder.cache</code> y <code>wsbuilder.caches</code><a class="headerlink" href="#wsbuildercache-y-wsbuildercaches" title="Permanent link">&para;</a></h3>
-<p>Son dos capas distintas:</p>
-<ul>
-<li><code>cache.py</code> resuelve almacenamiento y expulsion en memoria;</li>
-<li><code>caches.py</code> resuelve cache de respuestas HTTP y reglas declarativas.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li><code>App.dispatch()</code> consulta <code>ViewResponseCache</code> antes de ejecutar una <code>view()</code>;</li>
-<li>la respuesta se guarda si la ruta lo permite;</li>
-<li>se limpian headers no reutilizables como cookies o metadatos de worker.</li>
-</ul>
-<h3 id="wsbuildersecurity"><code>wsbuilder.security</code><a class="headerlink" href="#wsbuildersecurity" title="Permanent link">&para;</a></h3>
-<p>Es la politica de acceso.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>ACL por ruta, metodo, IP y headers;</li>
-<li>listas blanca y negra;</li>
-<li>rate limiting;</li>
-<li>bloqueos temporales;</li>
-<li>decision de permitir o rechazar.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li><code>HTTPServer.handle_conn()</code> puede aplicar seguridad antes del upgrade WS;</li>
-<li><code>App.dispatch()</code> aplica seguridad al flujo HTTP general;</li>
-<li>la decision se convierte en <code>Response</code> lista para el cliente.</li>
-</ul>
-<h3 id="wsbuildermetrics"><code>wsbuilder.metrics</code><a class="headerlink" href="#wsbuildermetrics" title="Permanent link">&para;</a></h3>
-<p>Es la observabilidad interna.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>contar conexiones TCP, requests HTTP y sesiones WS;</li>
-<li>medir duracion y volumen de trafico;</li>
-<li>emitir snapshots JSON;</li>
-<li>emitir stream NDJSON para dashboards.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li><code>HTTPServer</code> y <code>App.dispatch()</code> reportan eventos;</li>
-<li><code>app.enable_metrics()</code> instala endpoints de inspeccion;</li>
-<li>puede mezclar informacion extra de cache, seguridad y threads.</li>
-</ul>
-<h3 id="wsbuildertasks"><code>wsbuilder.tasks</code><a class="headerlink" href="#wsbuildertasks" title="Permanent link">&para;</a></h3>
-<p>Es el sistema de trabajo en background.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>lanzar tareas con limite de concurrencia;</li>
-<li>controlar estados;</li>
-<li>manejar cancelacion y errores;</li>
-<li>agrupar por <code>group</code>.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li><code>App</code> crea un <code>TaskManager</code> por defecto;</li>
-<li>los handlers lo usan para trabajo que no debe bloquear la request;</li>
-<li>el cierre de <code>App</code> detiene tareas pendientes.</li>
-</ul>
-<h3 id="wsbuilderdns"><code>wsbuilder.dns</code><a class="headerlink" href="#wsbuilderdns" title="Permanent link">&para;</a></h3>
-<p>Es un resolver DNS local minimo.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>responder en entornos de laboratorio o desarrollo;</li>
-<li>resolver <code>localhost</code>;</li>
-<li>registrar nombres personalizados.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li>suele usarse fuera del flujo HTTP, pero complementa demos o topologias locales.</li>
-</ul>
-<h3 id="wsbuilderdb_replicas"><code>wsbuilder.db_replicas</code><a class="headerlink" href="#wsbuilderdb_replicas" title="Permanent link">&para;</a></h3>
-<p>Es la capa de lectura optimizada sobre SQLite.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>separar escrituras de lecturas;</li>
-<li>usar replicas para reducir contencion;</li>
-<li>ajustar pragmas y parametros de rendimiento.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li>encaja bien en servicios con muchas lecturas;</li>
-<li>normalmente se consume desde handlers HTTP o tareas.</li>
-</ul>
-<h3 id="wsbuildercookies-y-wsbuilderheaders"><code>wsbuilder.cookies</code> y <code>wsbuilder.headers</code><a class="headerlink" href="#wsbuildercookies-y-wsbuilderheaders" title="Permanent link">&para;</a></h3>
-<p>Son utilidades de protocolo.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>construir y leer cookies;</li>
-<li>normalizar nombres de header;</li>
-<li>consultar y setear cabeceras de forma consistente.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li><code>App.dispatch()</code> las usa para CORS, cookies de afinidad y respuestas de worker.</li>
-</ul>
-<h3 id="wsbuilderpredicts"><code>wsbuilder.predicts</code><a class="headerlink" href="#wsbuilderpredicts" title="Permanent link">&para;</a></h3>
-<p>Es una utilidad matematica exportada para casos especificos.</p>
-<p>Responsabilidades:</p>
-<ul>
-<li>encapsular una logica numerica sencilla reutilizable.</li>
-</ul>
-<p>Interacciones:</p>
-<ul>
-<li>no forma parte del camino HTTP principal;</li>
-<li>se usa solo si tu app necesita esa utilidad.</li>
-</ul>
-<h2 id="como-interactuan-entre-si">Como interactuan entre si<a class="headerlink" href="#como-interactuan-entre-si" title="Permanent link">&para;</a></h2>
-<div class="diagram">
-<div class="diagram-title">Como interactuan entre si</div>
-<div class="diagram-track">
-<div class="diagram-node">Request</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">HTTPServer</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">SecurityPolicy</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Router</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Handler</div>
-</div>
-<div class="diagram-rows" style="margin-top: 1rem;">
-<div class="diagram-row">
-<div class="diagram-step">API</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">JSON / Response</div>
-<div class="diagram-note">Ideal para endpoints publicos o internos.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">View</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">Texto / HTML / Stream</div>
-<div class="diagram-note">Bueno para UI o respuestas progresivas.</div>
-</div>
-<div class="diagram-row">
-<div class="diagram-step">WS</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-step">WebSocket</div>
-<div class="diagram-note">Conecta una sesion persistente.</div>
-</div>
-</div>
-</div>
-
-<p>La secuencia real cambia segun la ruta:</p>
-<ul>
-<li>en <code>api()</code>, el handler suele devolver <code>dict</code>, <code>list</code> o <code>Response.json()</code>;</li>
-<li>en <code>view()</code>, el handler puede devolver texto, HTML o un stream;</li>
-<li>en <code>ws()</code>, el handler vive dentro de un canal persistente;</li>
-<li>en rutas con cache, <code>ViewResponseCache</code> puede responder antes de ejecutar el handler;</li>
-<li>en rutas protegidas, <code>SecurityPolicy</code> puede cortar el flujo antes de llegar al negocio.</li>
-</ul>
-<h2 id="piezas-de-orquestacion">Piezas de orquestacion<a class="headerlink" href="#piezas-de-orquestacion" title="Permanent link">&para;</a></h2>
-<h3 id="rutas-view-con-workers">Rutas <code>view()</code> con workers<a class="headerlink" href="#rutas-view-con-workers" title="Permanent link">&para;</a></h3>
-<p><code>view()</code> puede usar un pool dedicado de threads por ruta.</p>
-<div class="diagram">
-<div class="diagram-title">Rutas `view()` con workers</div>
-<div class="diagram-track">
-<div class="diagram-node">Request</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">RouteThreadPool</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Worker 1</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Handler</div>
-</div>
-<div class="diagram-note" style="margin-top: 0.85rem;">La ruta puede distribuir carga entre workers para aislar endpoints pesados y controlar concurrencia.</div>
-</div>
-
-<p>Esto sirve cuando quieres:</p>
-<ul>
-<li>aislar carga pesada de una ruta;</li>
-<li>limitar concurrencia por endpoint;</li>
-<li>devolver metadatos de worker en headers o cookie.</li>
-</ul>
-<h3 id="cache-declarativa">Cache declarativa<a class="headerlink" href="#cache-declarativa" title="Permanent link">&para;</a></h3>
-<p>La cache de respuestas no reemplaza al ORM ni al almacenamiento de dominio.</p>
-<div class="diagram">
-<div class="diagram-title">Cache declarativa</div>
-<div class="diagram-track">
-<div class="diagram-node">Request GET/HEAD</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">ViewResponseCache</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Hit o Miss</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Response</div>
-</div>
-<div class="diagram-note" style="margin-top: 0.85rem;">En hit, responde de inmediato. En miss, ejecuta el handler y guarda el resultado si aplica.</div>
-</div>
-
-<h3 id="seguridad-antes-del-negocio">Seguridad antes del negocio<a class="headerlink" href="#seguridad-antes-del-negocio" title="Permanent link">&para;</a></h3>
-<div class="diagram">
-<div class="diagram-title">Seguridad antes del negocio</div>
-<div class="diagram-track">
-<div class="diagram-node">Request</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">SecurityPolicy</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Allow / Deny</div>
-<div class="diagram-arrow">→</div>
-<div class="diagram-node">Handler o Error</div>
-</div>
-<div class="diagram-note" style="margin-top: 0.85rem;">La política decide si la request llega al dominio o se corta con 401, 403 o 429.</div>
-</div>
-
-<h2 id="cierre-y-ciclo-de-vida">Cierre y ciclo de vida<a class="headerlink" href="#cierre-y-ciclo-de-vida" title="Permanent link">&para;</a></h2>
-<p>Cuando la aplicacion termina:</p>
-<ul>
-<li><code>HTTPServer</code> cierra el socket;</li>
-<li><code>App.close()</code> detiene tareas;</li>
-<li><code>App.close()</code> libera caches;</li>
-<li>los pools de workers de las rutas se cierran;</li>
-<li>el sistema vuelve a un estado consistente.</li>
-</ul>
-<h2 id="resumen-operativo">Resumen operativo<a class="headerlink" href="#resumen-operativo" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>server</code> mueve bytes.</li>
-<li><code>http</code> modela request y response.</li>
-<li><code>ws</code> maneja upgrade y frames.</li>
-<li><code>app</code> decide y coordina.</li>
-<li><code>orm</code> guarda estado.</li>
-<li><code>cache</code> acelera lecturas.</li>
-<li><code>security</code> filtra acceso.</li>
-<li><code>metrics</code> observa.</li>
-<li><code>tasks</code> desacopla trabajo lento.</li>
-<li><code>dns</code> ayuda en entornos locales.</li>
-<li><code>db_replicas</code> optimiza lecturas.</li>
-<li><code>cookies</code> y <code>headers</code> simplifican protocolo.</li>
-</ul>
-<h2 id="cuando-este-diseno-funciona-mejor">Cuando este diseño funciona mejor<a class="headerlink" href="#cuando-este-diseno-funciona-mejor" title="Permanent link">&para;</a></h2>
-<ul>
-<li>APIs pequenas y medianas.</li>
-<li>Servicios con una frontera clara de responsabilidad.</li>
-<li>Aplicaciones que necesitan HTTP, WebSocket y utilidades de infraestructura sin depender de un framework grande.</li>
-<li>Proyectos donde la trazabilidad del flujo importa mas que una abstraccion opaca.</li>
-</ul>
+<h2 id="docs-nativas">Docs nativas<a class="headerlink" href="#docs-nativas" title="Permanent link">&para;</a></h2>
+<p><code>App.enable_docs()</code> usa <code>App.describe()</code> para construir el JSON de la aplicacion y una pagina HTML simple.
+Esto es util cuando quieres introspeccion interna sin montar una documentacion externa.</p>
+<h2 id="cuando-usar-cada-capa">Cuando usar cada capa<a class="headerlink" href="#cuando-usar-cada-capa" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Necesidad</th>
+<th>Capa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HTML o texto</td>
+<td><code>view</code></td>
+</tr>
+<tr>
+<td>JSON o API</td>
+<td><code>api</code></td>
+</tr>
+<tr>
+<td>Conexion persistente</td>
+<td><code>ws</code></td>
+</tr>
+<tr>
+<td>Tareas de fondo</td>
+<td><code>tasks</code></td>
+</tr>
+<tr>
+<td>Control de acceso</td>
+<td><code>security</code></td>
+</tr>
+<tr>
+<td>Telemetria</td>
+<td><code>metrics</code></td>
+</tr>
+<tr>
+<td>Respuesta repetida</td>
+<td><code>cache</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="nota-practica">Nota practica<a class="headerlink" href="#nota-practica" title="Permanent link">&para;</a></h2>
+<p>La libreria intenta mantenerse en la stdlib. Eso simplifica despliegue, reduce friccion en entornos pequenos y
+hace mas obvio el flujo de ejecucion desde socket hasta respuesta.</p>
 
 
 
@@ -2197,10 +1348,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tabs", "navigation.sections", "navigation.top", "search.highlight", "search.share", "content.code.copy", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado al portapapeles", "clipboard.copy": "Copiar al portapapeles", "search.result.more.one": "1 m\u00e1s en esta p\u00e1gina", "search.result.more.other": "# m\u00e1s en esta p\u00e1gina", "search.result.none": "No se encontraron documentos", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Teclee para comenzar b\u00fasqueda", "search.result.term.missing": "Falta", "select.version": "Seleccionar versi\u00f3n"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.indexes", "navigation.expand", "navigation.tracking", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.action.edit", "content.tabs.link", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copiado al portapapeles", "clipboard.copy": "Copiar al portapapeles", "search.result.more.one": "1 m\u00e1s en esta p\u00e1gina", "search.result.more.other": "# m\u00e1s en esta p\u00e1gina", "search.result.none": "No se encontraron documentos", "search.result.one": "1 documento encontrado", "search.result.other": "# documentos encontrados", "search.result.placeholder": "Teclee para comenzar b\u00fasqueda", "search.result.term.missing": "Falta", "select.version": "Seleccionar versi\u00f3n"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
