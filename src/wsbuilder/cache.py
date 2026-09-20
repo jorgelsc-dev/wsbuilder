@@ -51,12 +51,12 @@ class _ValueCodec:
                 separators=(",", ":"),
             ).encode("utf-8")
             return "json", payload
-        except Exception:
+        except Exception as exc:
             if not self.allow_pickle:
                 raise TypeError(
                     "Unsupported cache value type. Use JSON-compatible values, bytes, text, "
                     "numbers, booleans or enable allow_pickle=True."
-                )
+                ) from exc
             return "pickle", pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
 
     def decode(self, value_type, payload):

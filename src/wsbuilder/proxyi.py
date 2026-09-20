@@ -1143,7 +1143,7 @@ class ProxyRouteBuilder:
     def upstream(self, target, **kwargs):
         row = normalize_target(target, **kwargs)
         self._targets.append(row)
-        rule = self._apply()
+        self._apply()
         return self
 
     def to(self, target, **kwargs):
@@ -1325,7 +1325,6 @@ class ProxyI:
             headers["Host"] = target.authority
 
         conn = target.open_connection()
-        started = time.time()
         try:
             conn.request(request.method, forward_path, body=body, headers=headers)
             upstream = conn.getresponse()
@@ -1343,7 +1342,6 @@ class ProxyI:
             response_headers.setdefault("X-ProxyI-Rule", rule.name or rule.path_prefix or rule.path or "default")
             response_headers.setdefault("X-ProxyI-Target", target.name)
             response_headers.setdefault("X-ProxyI-Upstream", target.url)
-            elapsed_ms = (time.time() - started) * 1000.0
             return Response(status=status, body=raw_body, headers=response_headers, reason=reason)
         finally:
             try:
