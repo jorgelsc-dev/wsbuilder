@@ -200,3 +200,71 @@ class TestPersistence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHTTP09Framing(unittest.TestCase):
+    """A one-line request with no headers, answered with a bare body."""
+
+    def test_the_request_ends_at_the_first_crlf(self):
+        from wsbuilder.http import parse_http_request
+
+        reader = _reader(b"GET /old\r\n")
+        self.assertEqual(
+            parse_http_request(reader),
+            {
+                "method": "GET",
+                "path": "/old",
+                "version": HTTP_0_9,
+                "headers": {},
+                "remainder": b"",
+            },
+        )
+
+    def test_only_get_is_defined(self):
+        from wsbuilder.http import parse_http_request
+
+        with self.assertRaisesRegex(ValueError, "only supports GET"):
+            parse_http_request(_reader(b"POST /old\r\n"))
+
+    def test_the_response_carries_no_status_line_or_headers(self):
+        from wsbuilder.http import Response, send_http_response
+
+        sock = FakeSocket(b"")
+        sock.sent = bytearray()
+        sock.sendall = sock.sent.extend
+        send_http_response(sock, Response.text("body"), version=HTTP_0_9)
+        self.assertEqual(bytes(sock.sent), b"body")
+
+    def test_a_head_style_suppression_sends_nothing(self):
+        from wsbuilder.http import Response, send_http_response
+
+        sock = FakeSocket(b"")
+        sock.sent = bytearray()
+        sock.sendall = sock.sent.extend
+        send_http_response(sock, Response.text("body"), send_body=False, version=HTTP_0_9)
+        self.assertEqual(bytes(sock.sent), b"")
+
+
+class TestPrefixProbe(unittest.TestCase):
+    """starts_with decides without waiting for bytes that will never come."""
+
+    def test_a_matching_prefix_is_recognised(self):
+        self.assertTrue(_reader(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n").starts_with(b"PRI * HTTP/2.0"))
+
+    def test_a_short_message_that_differs_does_not_block(self):
+        # A 19-octet HTTP/1.0 request is shorter than the 24-octet HTTP/2
+        # preface; comparing by reading a fixed count would hang here.
+        reader = _reader(b"GET /x HTTP/1.0\r\n\r\n", slice_size=64)
+        self.assertFalse(reader.starts_with(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"))
+
+    def test_the_bytes_stay_available_afterwards(self):
+        reader = _reader(b"GET /x HTTP/1.0\r\n\r\n", slice_size=64)
+        reader.starts_with(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        self.assertEqual(reader.read_line(64), b"GET /x HTTP/1.0")
+
+    def test_an_empty_stream_does_not_match(self):
+        self.assertFalse(_reader(b"").starts_with(b"PRI"))
+
+    def test_a_prefix_split_across_reads_is_still_found(self):
+        reader = _reader(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", slice_size=3)
+        self.assertTrue(reader.starts_with(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"))

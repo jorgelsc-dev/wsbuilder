@@ -4,6 +4,7 @@ import threading
 import time
 
 from .http import Request, Response, parse_http_request, send_http_response
+from .http2 import CONNECTION_PREFACE as HTTP2_PREFACE
 from .http1 import (
     BufferedReader,
     connection_header_value,
@@ -11,6 +12,22 @@ from .http1 import (
     should_keep_alive,
 )
 from .ws import _websocket_handshake_error_response, handshake_websocket_with_options, is_ws_request
+
+
+class _ReaderWriter:
+    """Reads through the connection's buffer, writes straight to the socket."""
+
+    __slots__ = ("_reader", "_conn")
+
+    def __init__(self, reader, conn):
+        self._reader = reader
+        self._conn = conn
+
+    def recv(self, size):
+        return self._reader.recv(size)
+
+    def sendall(self, payload):
+        return self._conn.sendall(payload)
 
 
 class HTTPServer:
@@ -24,6 +41,10 @@ class HTTPServer:
     KEEPALIVE_TIMEOUT_SECONDS = 5.0
     #: Requests served per connection; 0 means unlimited, 1 disables reuse.
     MAX_KEEPALIVE_REQUESTS = 100
+    #: Answer HTTP/2 over ALPN and to a cleartext preface.
+    ENABLE_HTTP2 = True
+    #: Concurrent HTTP/2 streams advertised in SETTINGS.
+    MAX_CONCURRENT_STREAMS = 100
 
     def __init__(self, host, port, app, ssl_context=None):
         self.host = host
@@ -183,6 +204,9 @@ class HTTPServer:
                 return
         with conn:
             reader = BufferedReader(conn)
+            if self._negotiated_http2(conn, reader):
+                self._serve_http2(conn, reader, addr, tls_meta)
+                return
             served = 0
             while True:
                 if served:
@@ -201,6 +225,48 @@ class HTTPServer:
                     return
                 if 0 < self.MAX_KEEPALIVE_REQUESTS <= served:
                     return
+
+    def _negotiated_http2(self, conn, reader):
+        """Decide whether this connection speaks HTTP/2.
+
+        Over TLS the answer comes from ALPN. In the clear there is no
+        negotiation, so RFC 9113 section 3.3 has the client simply open with
+        the connection preface; peeking for it costs one buffered read.
+        """
+        if not self.ENABLE_HTTP2:
+            return False
+        selected = getattr(conn, "selected_alpn_protocol", None)
+        if callable(selected):
+            try:
+                if selected() == "h2":
+                    return True
+            except Exception:
+                pass
+        try:
+            return reader.starts_with(HTTP2_PREFACE)
+        except (ConnectionError, OSError):
+            return False
+
+    def _serve_http2(self, conn, reader, addr, tls_meta):
+        from .http2 import Http2Connection
+
+        metrics = getattr(self.app, "metrics", None)
+        connection = Http2Connection(
+            reader,
+            self.app,
+            tls=tls_meta,
+            client_address=addr,
+            max_streams=self.MAX_CONCURRENT_STREAMS,
+        )
+        # The reader already owns any bytes read while sniffing, and writes
+        # still go straight to the socket.
+        connection.conn = _ReaderWriter(reader, conn)
+        try:
+            connection.serve()
+        except Exception as e:
+            print(f"[http2] connection error from {addr}: {e}")
+            if metrics:
+                metrics.error("http2", e)
 
     def _serve_one_request(self, reader, conn, addr, tls_meta):
         """Serve one message. Returns True when the connection may be reused."""
@@ -553,6 +619,7 @@ class HTTPServer:
                 response,
                 send_body=send_body,
                 keep_alive=keep_alive,
+                version=request.version,
             )
         except ValueError as e:
             if metrics:
