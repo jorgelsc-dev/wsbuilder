@@ -562,3 +562,74 @@ class TestServerIntegration(unittest.TestCase):
                 pass
         # Falls through to HTTP/1, which cannot parse the preface.
         self.assertNotIn(b"\x00\x00\x00\x04", received[:9])
+
+
+class TestOutputFlowControl(ConnectionHarness):
+    """A body larger than the peer's window waits for credit."""
+
+    def setUp(self):
+        super().setUp()
+
+        @self.app.route("/big", methods=("GET",))
+        def big(_request):
+            return Response.text("x" * 300)
+
+    def test_a_body_beyond_the_window_is_sent_in_instalments(self):
+        frames = self.run_connection(
+            Frame(
+                FRAME_SETTINGS, 0, 0, encode_settings({SETTINGS_INITIAL_WINDOW_SIZE: 100})
+            ).serialize(),
+            self.headers_frame(1, self.request("/big")),
+            Frame(FRAME_WINDOW_UPDATE, 0, 1, struct.pack(">I", 250)).serialize(),
+        )
+        data = [f for f in frames if f.type == FRAME_DATA]
+        self.assertEqual(b"".join(f.payload for f in data), b"x" * 300)
+        # The first 100 octets fit the window; the rest waited for credit.
+        self.assertGreater(len(data), 1)
+        self.assertEqual(len(data[0].payload), 100)
+        self.assertTrue(data[-1].flags & FLAG_END_STREAM)
+
+    def test_an_exhausted_window_no_longer_kills_the_stream(self):
+        frames = self.run_connection(
+            Frame(
+                FRAME_SETTINGS, 0, 0, encode_settings({SETTINGS_INITIAL_WINDOW_SIZE: 50})
+            ).serialize(),
+            self.headers_frame(1, self.request("/big")),
+        )
+        # It used to raise a flow control error and reset the stream.
+        self.assertFalse(any(f.type == FRAME_RST_STREAM for f in frames))
+        sent = b"".join(f.payload for f in frames if f.type == FRAME_DATA)
+        self.assertEqual(len(sent), 50)
+        self.assertFalse(
+            any(f.type == FRAME_DATA and f.flags & FLAG_END_STREAM for f in frames)
+        )
+
+    def test_raising_the_initial_window_releases_queued_output(self):
+        frames = self.run_connection(
+            Frame(
+                FRAME_SETTINGS, 0, 0, encode_settings({SETTINGS_INITIAL_WINDOW_SIZE: 60})
+            ).serialize(),
+            self.headers_frame(1, self.request("/big")),
+            Frame(
+                FRAME_SETTINGS, 0, 0, encode_settings({SETTINGS_INITIAL_WINDOW_SIZE: 400})
+            ).serialize(),
+        )
+        sent = b"".join(f.payload for f in frames if f.type == FRAME_DATA)
+        self.assertEqual(sent, b"x" * 300)
+
+    def test_a_connection_level_update_flushes_every_stream(self):
+        frames = self.run_connection(
+            Frame(
+                FRAME_SETTINGS, 0, 0, encode_settings({SETTINGS_INITIAL_WINDOW_SIZE: 400})
+            ).serialize(),
+            self.headers_frame(1, self.request("/big")),
+            self.headers_frame(3, self.request("/big")),
+            Frame(FRAME_WINDOW_UPDATE, 0, 0, struct.pack(">I", 1000)).serialize(),
+        )
+        by_stream = {}
+        for frame in frames:
+            if frame.type == FRAME_DATA:
+                by_stream.setdefault(frame.stream_id, b"")
+                by_stream[frame.stream_id] += frame.payload
+        self.assertEqual(by_stream[1], b"x" * 300)
+        self.assertEqual(by_stream[3], b"x" * 300)

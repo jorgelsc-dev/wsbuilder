@@ -75,15 +75,23 @@ class BufferedReader:
         del self._buffer[:take]
         return data
 
-    def peek(self, count):
-        """Look at the next bytes without consuming them."""
-        count = int(count)
-        while len(self._buffer) < count:
+    def starts_with(self, prefix):
+        """Whether the stream opens with ``prefix``, reading only as needed.
+
+        Reading a fixed number of bytes to compare would block whenever the
+        peer sends a shorter message and waits for an answer -- which a
+        19-octet ``GET / HTTP/1.0`` does. Comparing as the buffer grows means
+        a stream that already differs is rejected without another read.
+        """
+        prefix = bytes(prefix)
+        while len(self._buffer) < len(prefix):
+            if bytes(self._buffer) != prefix[: len(self._buffer)]:
+                return False
             try:
-                self._fill(count - len(self._buffer))
+                self._fill(len(prefix) - len(self._buffer))
             except ConnectionError:
-                break
-        return bytes(self._buffer[:count])
+                return False
+        return bytes(self._buffer[: len(prefix)]) == prefix
 
     def unread(self, data):
         """Push bytes back so the next read sees them first."""

@@ -7,6 +7,7 @@ from .headers import validate_header_name, validate_header_value
 
 
 MAX_QUERY_FIELDS = 1024
+HTTP_0_9 = "HTTP/0.9"
 HTTP_1_1 = "HTTP/1.1"
 _HTTP_METHOD_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
@@ -114,6 +115,22 @@ class Response:
         return cls(status=status, headers=hdrs, stream=chunks)
 
 
+def _parse_http09_request(data, line_end):
+    """Build the request a one-line HTTP/0.9 message describes."""
+    method, path = data[:line_end].decode("iso-8859-1").split()
+    if method != "GET":
+        raise ValueError("HTTP/0.9 only supports GET")
+    if not path or any(ord(char) < 32 for char in path):
+        raise ValueError("Invalid HTTP request target")
+    return {
+        "method": method,
+        "path": path,
+        "version": HTTP_0_9,
+        "headers": {},
+        "remainder": data[line_end + 2 :],
+    }
+
+
 def parse_http_request(conn, max_header_bytes=65536):
     max_header_bytes = int(max_header_bytes)
     if max_header_bytes <= 0:
@@ -125,6 +142,11 @@ def parse_http_request(conn, max_header_bytes=65536):
         if not chunk:
             break
         data += chunk
+        # An HTTP/0.9 request is one line with no header block at all, so
+        # waiting for a blank line would hang until the read timed out.
+        first_break = data.find(b"\r\n")
+        if first_break >= 0 and len(data[:first_break].split()) == 2:
+            return _parse_http09_request(data, first_break)
         delimiter_at = data.find(b"\r\n\r\n")
         if delimiter_at > max_header_bytes or (
             delimiter_at < 0 and len(data) > max_header_bytes
@@ -147,14 +169,22 @@ def parse_http_request(conn, max_header_bytes=65536):
 
     request_line = lines[0]
     parts = request_line.split()
-    if len(parts) != 3:
+    if len(parts) == 2:
+        # HTTP/0.9 predates the version token and only ever defined GET. The
+        # reply is the body alone: no status line, no headers.
+        method, path = parts
+        if method != "GET":
+            raise ValueError("HTTP/0.9 only supports GET")
+        version = HTTP_0_9
+    elif len(parts) == 3:
+        method, path, version = parts
+    else:
         raise ValueError("Invalid HTTP request line")
-    method, path, version = parts
     if not _HTTP_METHOD_RE.fullmatch(method):
         raise ValueError("Invalid HTTP method")
     if not path or any(ord(char) < 32 for char in path):
         raise ValueError("Invalid HTTP request target")
-    if version not in {"HTTP/1.0", "HTTP/1.1"}:
+    if version not in {HTTP_0_9, "HTTP/1.0", "HTTP/1.1"}:
         raise ValueError("Unsupported HTTP version")
 
     headers = {}
@@ -186,10 +216,24 @@ def parse_http_request(conn, max_header_bytes=65536):
     }
 
 
-def send_http_response(conn, response, *, send_body=True, keep_alive=False):
+def send_http_response(conn, response, *, send_body=True, keep_alive=False, version=None):
     status_code = int(response.status)
     if not 100 <= status_code <= 599:
         raise ValueError("HTTP response status must be between 100 and 599")
+    if version == HTTP_0_9:
+        # No status line and no headers exist in HTTP/0.9: the connection
+        # closing is what marks the end of the body.
+        if not send_body:
+            return
+        try:
+            if getattr(response, "is_stream", False):
+                for chunk in _iter_stream_chunks(response.stream):
+                    conn.sendall(chunk)
+            else:
+                conn.sendall(response.body)
+        except Exception as e:
+            print(f"[http] send error {status_code}: {e}")
+        return
     reason = validate_header_value(
         response.reason or STATUS_MESSAGES.get(status_code, "Unknown")
     )

@@ -695,7 +695,10 @@ class TestMutualTLS(unittest.TestCase):
         self.assertIn(b"client", received)
 
     def test_a_client_without_a_certificate_is_refused(self):
-        with self.assertRaises(ssl.SSLError):
+        # The refusal reaches the client either as a TLS alert or as a reset,
+        # depending on which side tears the socket down first. What matters is
+        # that the request does not succeed, not how it fails.
+        with self.assertRaises((ssl.SSLError, OSError)):
             self._request(present_certificate=False)
 
     def test_client_auth_certificates_declare_the_right_usage(self):

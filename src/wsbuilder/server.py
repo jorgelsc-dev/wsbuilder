@@ -243,10 +243,9 @@ class HTTPServer:
             except Exception:
                 pass
         try:
-            opening = reader.peek(len(HTTP2_PREFACE))
+            return reader.starts_with(HTTP2_PREFACE)
         except (ConnectionError, OSError):
             return False
-        return opening == HTTP2_PREFACE
 
     def _serve_http2(self, conn, reader, addr, tls_meta):
         from .http2 import Http2Connection
@@ -620,6 +619,7 @@ class HTTPServer:
                 response,
                 send_body=send_body,
                 keep_alive=keep_alive,
+                version=request.version,
             )
         except ValueError as e:
             if metrics:

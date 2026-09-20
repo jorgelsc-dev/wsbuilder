@@ -236,6 +236,9 @@ class Stream:
         self.inbound = FlowControlWindow(initial_window)
         self.outbound = FlowControlWindow(initial_window)
         self.reset_code = None
+        #: Body the peer's window has no room for yet.
+        self.pending_output = bytearray()
+        self.pending_end_stream = False
 
     @property
     def closed(self):
@@ -462,6 +465,8 @@ class Http2Connection:
             # Section 6.9.2: the change applies to every live stream at once.
             for stream in self.streams.values():
                 stream.outbound.adjust_initial(delta)
+            if delta > 0:
+                self._flush_all()
         if SETTINGS_HEADER_TABLE_SIZE in settings:
             self.encoder.set_max_size(settings[SETTINGS_HEADER_TABLE_SIZE])
         self.peer_settings.update(settings)
@@ -506,6 +511,7 @@ class Http2Connection:
         increment = struct.unpack(">I", frame.payload)[0] & 0x7FFFFFFF
         if frame.stream_id == 0:
             self.outbound.credit(increment)
+            self._flush_all()
             return
         stream = self.streams.get(frame.stream_id)
         if stream is None:
@@ -514,6 +520,7 @@ class Http2Connection:
             stream.outbound.credit(increment)
         except ConnectionError_ as exc:
             raise StreamError(str(exc), frame.stream_id, ERROR_FLOW_CONTROL_ERROR) from exc
+        self._flush_stream(stream)
 
     def _on_headers(self, frame):
         self._require_stream_id(frame, False)
@@ -642,11 +649,11 @@ class Http2Connection:
             fields.append(("content-length", str(len(body))))
 
         block = self.encoder.encode(fields)
-        end_stream = not body
-        self._send_header_block(stream.id, block, end_stream)
+        self._send_header_block(stream.id, block, not body)
         if body:
-            self._send_data(stream, body)
-        stream.end_local()
+            self._send_data(stream, body, end_stream=True)
+        else:
+            stream.end_local()
 
     @staticmethod
     def _response_body(response):
@@ -669,20 +676,42 @@ class Http2Connection:
                 Frame(FRAME_CONTINUATION, FLAG_END_HEADERS if not rest else 0, stream_id, piece)
             )
 
-    def _send_data(self, stream, body):
+    def _send_data(self, stream, body, end_stream=True):
+        """Send what the windows allow and queue the rest.
+
+        Blocking here would stall every other stream on the connection, so
+        the remainder waits for a WINDOW_UPDATE and is flushed from the frame
+        loop instead.
+        """
+        stream.pending_output.extend(body)
+        stream.pending_end_stream = end_stream
+        self._flush_stream(stream)
+
+    def _flush_stream(self, stream):
         limit = self.peer_settings[SETTINGS_MAX_FRAME_SIZE]
-        offset = 0
-        while offset < len(body):
+        while stream.pending_output:
             allowed = min(limit, stream.outbound.available, self.outbound.available)
             if allowed <= 0:
-                # No window left and no way to wait for one in this loop.
-                raise StreamError("peer window exhausted", stream.id, ERROR_FLOW_CONTROL_ERROR)
-            chunk = body[offset : offset + allowed]
-            offset += len(chunk)
+                return False
+            chunk = bytes(stream.pending_output[:allowed])
+            del stream.pending_output[:allowed]
             stream.outbound.consume(len(chunk))
             self.outbound.consume(len(chunk))
-            flags = FLAG_END_STREAM if offset >= len(body) else 0
-            self._send(Frame(FRAME_DATA, flags, stream.id, chunk))
+            last = not stream.pending_output and stream.pending_end_stream
+            self._send(Frame(FRAME_DATA, FLAG_END_STREAM if last else 0, stream.id, chunk))
+        if stream.pending_end_stream:
+            stream.pending_end_stream = False
+            stream.end_local()
+        return True
+
+    def _flush_all(self):
+        for stream in list(self.streams.values()):
+            if stream.pending_output and not stream.closed:
+                self._flush_stream(stream)
+
+    @property
+    def pending_output_bytes(self):
+        return sum(len(s.pending_output) for s in self.streams.values())
 
     def describe(self):
         return {
