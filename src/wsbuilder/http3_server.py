@@ -17,8 +17,16 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
 from . import http3
+from .quic.address import AddressValidator
 from .quic.connection import MAX_DATAGRAM_SIZE, QuicConnection
-from .quic.packet import is_long_header, parse_long_header
+from .quic.crypto import retry_integrity_tag
+from .quic.packet import (
+    PACKET_INITIAL,
+    build_retry,
+    is_long_header,
+    new_connection_id,
+    parse_long_header,
+)
 from .quic.varint import decode_varint
 
 DEFAULT_MAX_CONNECTIONS = 256
@@ -48,12 +56,18 @@ class Http3Server:
 
     ACCEPT_TIMEOUT_SECONDS = 0.5
 
-    def __init__(self, host, port, app, tls, *, max_connections=DEFAULT_MAX_CONNECTIONS):
+    def __init__(self, host, port, app, tls, *, max_connections=DEFAULT_MAX_CONNECTIONS,
+                 require_address_validation=False):
         self.host = host
         self.port = port
         self.app = app
         self.tls = tls
         self.max_connections = int(max_connections)
+        #: Answer a first Initial with a Retry, so the client proves it can
+        #: receive at the address it claims before we commit any work.
+        self.require_address_validation = bool(require_address_validation)
+        self.addresses = AddressValidator()
+        self.retries_sent = 0
         self.server_address = (host, port)
         self.connections = {}
         self._sock = None
@@ -145,15 +159,38 @@ class Http3Server:
         if connection is None:
             if len(self.connections) >= self.max_connections:
                 return []
+            retry = self._maybe_retry(datagram, address)
+            if retry is not None:
+                return [retry]
             connection = self._new_connection(address)
             # The client's chosen id routes its first flight; ours routes
             # everything after the handshake tells it which to use.
             self.connections[bytes(key)] = connection
             self.connections[connection.host_cid] = connection
-        replies = connection.receive_datagram(datagram)
+        replies = connection.receive_datagram(datagram, address=address)
         if connection.closed:
             self._drop(connection)
         return replies
+
+    def _maybe_retry(self, datagram, address):
+        """Answer an unvalidated Initial with a Retry, or None to proceed."""
+        if not self.require_address_validation or not is_long_header(datagram[0]):
+            return None
+        try:
+            header = parse_long_header(datagram)
+        except Exception:
+            return None
+        if header.packet_type != PACKET_INITIAL:
+            return None
+        if header.token and self.addresses.validate(header.token, address) is not None:
+            return None  # Already proved; let the handshake run.
+
+        token = self.addresses.issue(address, header.destination_cid)
+        new_cid = new_connection_id(8)
+        body = build_retry(header.version, header.source_cid, new_cid, token, b"")
+        packet = body + retry_integrity_tag(header.destination_cid, body)
+        self.retries_sent += 1
+        return packet
 
     def _new_connection(self, address):
         material = self._material()
@@ -214,6 +251,8 @@ class Http3Server:
             "address": f"{self.server_address[0]}:{self.server_address[1]}",
             "connections": len({id(c) for c in self.connections.values()}),
             "alt_svc": alt_svc_header(self.server_address[1]),
+            "address_validation": self.require_address_validation,
+            "retries_sent": self.retries_sent,
             "recovery": [
                 c.recovery.describe()
                 for c in {id(c): c for c in self.connections.values()}.values()

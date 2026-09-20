@@ -7,15 +7,15 @@ traffic secrets out at each stage. CPython's ``ssl`` exposes neither, which
 leaves writing the handshake on top of the primitives ``cryptography``
 provides.
 
-Scope is deliberately narrow, and narrow here is safer than general:
+Scope stays deliberately small, because narrow is safer than general here:
 
-* one cipher suite, TLS_AES_128_GCM_SHA256
-* one key exchange group, X25519
+* three cipher suites, all AEAD and all TLS 1.3 only
+* two key exchange groups, X25519 and secp256r1
 * server side only, no client certificates, no session resumption, no 0-RTT
 
 Everything else in a ClientHello is parsed far enough to answer or refuse.
 Refusing an unsupported parameter is the correct outcome; quietly picking
-something weaker is not.
+something weaker is not, which is why there is no fallback path at all.
 """
 
 import os
@@ -45,7 +45,26 @@ EXT_KEY_SHARE = 0x0033
 EXT_QUIC_TRANSPORT_PARAMETERS = 0x0039
 
 TLS_AES_128_GCM_SHA256 = 0x1301
+TLS_AES_256_GCM_SHA384 = 0x1302
+TLS_CHACHA20_POLY1305_SHA256 = 0x1303
+
+#: In preference order. All three are AEAD and exist only in TLS 1.3.
+SUPPORTED_CIPHER_SUITES = (
+    TLS_AES_128_GCM_SHA256,
+    TLS_CHACHA20_POLY1305_SHA256,
+    TLS_AES_256_GCM_SHA384,
+)
+
+#: What each suite means to the QUIC packet protection and the key schedule.
+CIPHER_SUITE_PARAMETERS = {
+    TLS_AES_128_GCM_SHA256: ("aes-128-gcm", "sha256", 32),
+    TLS_AES_256_GCM_SHA384: ("aes-256-gcm", "sha384", 48),
+    TLS_CHACHA20_POLY1305_SHA256: ("chacha20-poly1305", "sha256", 32),
+}
+
 GROUP_X25519 = 0x001D
+GROUP_SECP256R1 = 0x0017
+SUPPORTED_GROUPS = (GROUP_X25519, GROUP_SECP256R1)
 TLS_1_3_VERSION = 0x0304
 TLS_1_2_LEGACY = 0x0303
 
@@ -246,21 +265,49 @@ def _parse_key_shares(body):
     return shares
 
 
+def generate_key_share(group):
+    """A fresh ephemeral key pair for the negotiated group."""
+    if group == GROUP_X25519:
+        private = x25519.X25519PrivateKey.generate()
+        public = private.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
+        )
+        return private, public
+    if group == GROUP_SECP256R1:
+        private = ec.generate_private_key(ec.SECP256R1())
+        public = private.public_key().public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint,
+        )
+        return private, public
+    raise TLSError(f"unsupported group 0x{group:04x}", ALERT_ILLEGAL_PARAMETER)
+
+
+def derive_shared_secret(group, private_key, peer_share):
+    if group == GROUP_X25519:
+        return private_key.exchange(x25519.X25519PublicKey.from_public_bytes(peer_share))
+    if group == GROUP_SECP256R1:
+        peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), bytes(peer_share))
+        return private_key.exchange(ec.ECDH(), peer)
+    raise TLSError(f"unsupported group 0x{group:04x}", ALERT_ILLEGAL_PARAMETER)
+
+
 def build_handshake(message_type, body):
     return _u8(message_type) + _block24(body)
 
 
-def build_server_hello(client_random_session_id, public_key):
-    """A ServerHello answering with X25519 and TLS_AES_128_GCM_SHA256."""
+def build_server_hello(client_random_session_id, public_key, *,
+                       cipher_suite=TLS_AES_128_GCM_SHA256, group=GROUP_X25519):
+    """A ServerHello naming the suite and group the server picked."""
     extensions = (
         _u16(EXT_SUPPORTED_VERSIONS) + _block16(_u16(TLS_1_3_VERSION))
-        + _u16(EXT_KEY_SHARE) + _block16(_u16(GROUP_X25519) + _block16(public_key))
+        + _u16(EXT_KEY_SHARE) + _block16(_u16(group) + _block16(public_key))
     )
     body = (
         _u16(TLS_1_2_LEGACY)
         + os.urandom(32)
         + _block8(client_random_session_id)
-        + _u16(TLS_AES_128_GCM_SHA256)
+        + _u16(cipher_suite)
         + _u8(0)  # null compression
         + _block16(extensions)
     )
@@ -319,11 +366,24 @@ def build_certificate_verify(private_key, transcript_hash, offered_schemes=()):
     return build_handshake(CERTIFICATE_VERIFY, _u16(scheme) + _block16(signature))
 
 
-def build_finished(traffic_secret, transcript_hash):
-    key = hkdf_expand_label(traffic_secret, "finished", b"", 32)
+def hash_for(cipher_suite):
+    """The hash the suite's key schedule and transcript use."""
+    _aead, digest, _length = CIPHER_SUITE_PARAMETERS[cipher_suite]
+    return hashes.SHA384() if digest == "sha384" else hashes.SHA256()
+
+
+def secret_length(cipher_suite):
+    return CIPHER_SUITE_PARAMETERS[cipher_suite][2]
+
+
+def build_finished(traffic_secret, transcript_hash, cipher_suite=TLS_AES_128_GCM_SHA256):
+    algorithm = hash_for(cipher_suite)
+    key = hkdf_expand_label(
+        traffic_secret, "finished", b"", secret_length(cipher_suite), algorithm
+    )
     from cryptography.hazmat.primitives.hmac import HMAC
 
-    mac = HMAC(key, hashes.SHA256())
+    mac = HMAC(key, algorithm)
     mac.update(transcript_hash)
     return build_handshake(FINISHED, mac.finalize())
 
@@ -331,14 +391,15 @@ def build_finished(traffic_secret, transcript_hash):
 class Transcript:
     """Running hash of every handshake message, in order."""
 
-    def __init__(self):
+    def __init__(self, algorithm=None):
         self._messages = bytearray()
+        self.algorithm = algorithm or hashes.SHA256()
 
     def add(self, message):
         self._messages.extend(bytes(message))
 
     def hash(self):
-        digest = hashes.Hash(hashes.SHA256())
+        digest = hashes.Hash(self.algorithm)
         digest.update(bytes(self._messages))
         return digest.finalize()
 
@@ -351,10 +412,13 @@ class KeySchedule:
 
     EMPTY_HASH = None
 
-    def __init__(self):
-        digest = hashes.Hash(hashes.SHA256())
+    def __init__(self, algorithm=None, length=32):
+        self.algorithm = algorithm or hashes.SHA256()
+        self.length = int(length)
+        digest = hashes.Hash(self.algorithm)
         self.empty_hash = digest.finalize()
-        self.early_secret = hkdf_extract(b"\x00" * 32, b"\x00" * 32)
+        zeros = b"\x00" * self.length
+        self.early_secret = hkdf_extract(zeros, zeros, self.algorithm)
         self.handshake_secret = None
         self.master_secret = None
         self.client_handshake_secret = None
@@ -362,25 +426,28 @@ class KeySchedule:
         self.client_application_secret = None
         self.server_application_secret = None
 
+    def _expand(self, secret, label, context):
+        return hkdf_expand_label(secret, label, context, self.length, self.algorithm)
+
     def enter_handshake(self, shared_secret, transcript_hash):
-        derived = hkdf_expand_label(self.early_secret, "derived", self.empty_hash, 32)
-        self.handshake_secret = hkdf_extract(derived, shared_secret)
-        self.client_handshake_secret = hkdf_expand_label(
-            self.handshake_secret, "c hs traffic", transcript_hash, 32
+        derived = self._expand(self.early_secret, "derived", self.empty_hash)
+        self.handshake_secret = hkdf_extract(derived, shared_secret, self.algorithm)
+        self.client_handshake_secret = self._expand(
+            self.handshake_secret, "c hs traffic", transcript_hash
         )
-        self.server_handshake_secret = hkdf_expand_label(
-            self.handshake_secret, "s hs traffic", transcript_hash, 32
+        self.server_handshake_secret = self._expand(
+            self.handshake_secret, "s hs traffic", transcript_hash
         )
         return self.client_handshake_secret, self.server_handshake_secret
 
     def enter_application(self, transcript_hash):
-        derived = hkdf_expand_label(self.handshake_secret, "derived", self.empty_hash, 32)
-        self.master_secret = hkdf_extract(derived, b"\x00" * 32)
-        self.client_application_secret = hkdf_expand_label(
-            self.master_secret, "c ap traffic", transcript_hash, 32
+        derived = self._expand(self.handshake_secret, "derived", self.empty_hash)
+        self.master_secret = hkdf_extract(derived, b"\x00" * self.length, self.algorithm)
+        self.client_application_secret = self._expand(
+            self.master_secret, "c ap traffic", transcript_hash
         )
-        self.server_application_secret = hkdf_expand_label(
-            self.master_secret, "s ap traffic", transcript_hash, 32
+        self.server_application_secret = self._expand(
+            self.master_secret, "s ap traffic", transcript_hash
         )
         return self.client_application_secret, self.server_application_secret
 
@@ -397,9 +464,11 @@ class ServerHandshake:
         self.transcript = Transcript()
         self.schedule = KeySchedule()
         self.selected_alpn = None
+        self.cipher_suite = None
+        self.group = None
         self.client_hello = None
         self.peer_transport_parameters = None
-        self._private = x25519.X25519PrivateKey.generate()
+        self._private = None
 
     def _choose_alpn(self, offered):
         if not offered:
@@ -425,26 +494,39 @@ class ServerHandshake:
 
         if TLS_1_3_VERSION not in (hello.supported_versions or ()):
             raise TLSError("client does not offer TLS 1.3", ALERT_PROTOCOL_VERSION)
-        if TLS_AES_128_GCM_SHA256 not in (hello.cipher_suites or ()):
-            raise TLSError("no supported cipher suite", ALERT_HANDSHAKE_FAILURE)
-        peer_share = next(
-            (share for group, share in (hello.key_shares or ()) if group == GROUP_X25519), None
+        offered = hello.cipher_suites or ()
+        self.cipher_suite = next(
+            (suite for suite in SUPPORTED_CIPHER_SUITES if suite in offered), None
         )
-        if peer_share is None:
-            # A HelloRetryRequest would ask for one; refusing is correct too.
-            raise TLSError("no X25519 key share offered", ALERT_MISSING_EXTENSION)
+        if self.cipher_suite is None:
+            raise TLSError("no supported cipher suite", ALERT_HANDSHAKE_FAILURE)
+
+        shares = dict(hello.key_shares or ())
+        self.group = next((g for g in SUPPORTED_GROUPS if g in shares), None)
+        if self.group is None:
+            # A HelloRetryRequest would ask for a group we do accept;
+            # refusing outright is also a correct answer, and simpler.
+            raise TLSError("no supported key share offered", ALERT_MISSING_EXTENSION)
+        peer_share = shares[self.group]
+
+        algorithm = hash_for(self.cipher_suite)
+        length = secret_length(self.cipher_suite)
+        self.transcript = Transcript(algorithm)
+        self.schedule = KeySchedule(algorithm, length)
 
         self.selected_alpn = self._choose_alpn(hello.alpn)
         self.peer_transport_parameters = hello.transport_parameters
 
         self.transcript.add(message)
-        public_bytes = self._private.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
+        self._private, public_bytes = generate_key_share(self.group)
+        server_hello = build_server_hello(
+            hello.legacy_session_id,
+            public_bytes,
+            cipher_suite=self.cipher_suite,
+            group=self.group,
         )
-        server_hello = build_server_hello(hello.legacy_session_id, public_bytes)
         self.transcript.add(server_hello)
-
-        shared = self._private.exchange(x25519.X25519PublicKey.from_public_bytes(peer_share))
+        shared = derive_shared_secret(self.group, self._private, peer_share)
         client_hs, server_hs = self.schedule.enter_handshake(shared, self.transcript.hash())
 
         flight = bytearray()
@@ -464,7 +546,7 @@ class ServerHandshake:
         flight += verify
         self.transcript.add(verify)
 
-        finished = build_finished(server_hs, self.transcript.hash())
+        finished = build_finished(server_hs, self.transcript.hash(), self.cipher_suite)
         flight += finished
         self.transcript.add(finished)
 
@@ -487,7 +569,7 @@ class ServerHandshake:
             raise TLSError("expected a Finished", ALERT_ILLEGAL_PARAMETER)
         received = reader.read(reader.u24())
         expected_message = build_finished(
-            self.schedule.client_handshake_secret, self.transcript.hash()
+            self.schedule.client_handshake_secret, self.transcript.hash(), self.cipher_suite
         )
         expected = expected_message[4:]
         import hmac as _hmac
@@ -509,6 +591,16 @@ __all__ = [
     "ServerHandshake",
     "TLSError",
     "TLS_AES_128_GCM_SHA256",
+    "TLS_AES_256_GCM_SHA384",
+    "TLS_CHACHA20_POLY1305_SHA256",
+    "SUPPORTED_CIPHER_SUITES",
+    "SUPPORTED_GROUPS",
+    "GROUP_SECP256R1",
+    "CIPHER_SUITE_PARAMETERS",
+    "derive_shared_secret",
+    "generate_key_share",
+    "hash_for",
+    "secret_length",
     "TLS_1_3_VERSION",
     "EXT_ALPN",
     "EXT_KEY_SHARE",

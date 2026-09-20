@@ -64,8 +64,10 @@ class TestQPACK(unittest.TestCase):
         with self.assertRaisesRegex(QPACKError, "dynamic table"):
             decode_field_section(b"\x00\x00\x80")
 
-    def test_a_blocking_prefix_is_refused(self):
-        with self.assertRaisesRegex(QPACKError, "requires dynamic table"):
+    def test_a_blocking_prefix_is_refused_without_a_table(self):
+        # A section that names dynamic entries cannot be decoded against a
+        # table that does not exist; refusing beats stalling the stream.
+        with self.assertRaises(QPACKError):
             decode_field_section(b"\x05\x00")
 
     def test_a_string_past_the_end_is_refused(self):
@@ -265,3 +267,106 @@ class TestEndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQpackDynamicTable(unittest.TestCase):
+    """The table is what keeps repeated custom fields from costing full size."""
+
+    def setUp(self):
+        from wsbuilder.qpack import DynamicTable, Encoder, decode_encoder_stream
+
+        self.Encoder = Encoder
+        self.DynamicTable = DynamicTable
+        self.apply = decode_encoder_stream
+        self.encoder = Encoder(capacity=4096)
+        self.table = DynamicTable(4096)
+
+    def _round_trip(self, fields):
+        block = self.encoder.encode(fields)
+        # The encoder stream always reaches the peer before the section that
+        # references it; that ordering is what stops a block from blocking.
+        self.apply(self.encoder.take_encoder_stream(), self.table)
+        return block, decode_field_section(block, self.table)
+
+    def test_a_repeated_section_shrinks_to_indices(self):
+        fields = [
+            (":method", "GET"),
+            (":path", "/api/v1/items"),
+            ("x-tenant", "acme-prod"),
+            ("accept", "application/json"),
+        ]
+        first, decoded_first = self._round_trip(fields)
+        second, decoded_second = self._round_trip(fields)
+
+        self.assertEqual(decoded_first, fields)
+        self.assertEqual(decoded_second, fields)
+        self.assertLess(len(second), len(encode_field_section(fields)))
+
+    def test_it_beats_the_static_only_encoding(self):
+        fields = [("x-request-id", "9f2c"), ("x-tenant", "acme-prod")]
+        self._round_trip(fields)
+        second, decoded = self._round_trip(fields)
+        self.assertEqual(decoded, fields)
+        self.assertLess(len(second), len(encode_field_section(fields)))
+
+    def test_sensitive_fields_never_enter_the_table(self):
+        self.encoder.encode([("authorization", "Bearer secret")])
+        self.encoder.encode([("cookie", "session=abc")])
+        # An intermediary shares the table; a value recovered there is a
+        # credential.
+        self.assertEqual(len(self.encoder.table), 0)
+
+    def test_a_capacity_of_zero_disables_the_table(self):
+        encoder = self.Encoder(capacity=0)
+        encoder.encode([("x-custom", "value")])
+        self.assertEqual(len(encoder.table), 0)
+        self.assertEqual(encoder.take_encoder_stream(), b"")
+
+    def test_an_entry_larger_than_the_table_is_not_inserted(self):
+        table = self.DynamicTable(60)
+        self.assertIsNone(table.add("name", "v" * 200))
+        self.assertEqual(len(table), 0)
+
+    def test_eviction_drops_the_oldest_and_keeps_absolute_indices(self):
+        table = self.DynamicTable(2 * self.DynamicTable.entry_size("k", "v"))
+        first = table.add("k", "1")
+        table.add("k", "2")
+        third = table.add("k", "3")
+        self.assertEqual(table.insert_count, 3)
+        self.assertEqual(table.get(third), ("k", "3"))
+        with self.assertRaisesRegex(QPACKError, "no longer held"):
+            table.get(first)
+
+    def test_a_section_needing_unseen_entries_is_refused(self):
+        block = self.encoder.encode([("x-tenant", "acme")])
+        self.encoder.take_encoder_stream()  # deliberately not delivered
+        with self.assertRaisesRegex(QPACKError, "requires dynamic table"):
+            decode_field_section(block, self.DynamicTable(4096))
+
+    def test_duplicate_and_name_reference_instructions_are_applied(self):
+        from wsbuilder.qpack import (
+            encode_duplicate,
+            encode_insert_with_literal_name,
+            encode_insert_with_name_reference,
+        )
+
+        table = self.DynamicTable(4096)
+        self.apply(encode_insert_with_literal_name("x-a", "1"), table)
+        self.apply(encode_insert_with_name_reference(17, "POST"), table)  # :method
+        self.apply(encode_duplicate(0), table)
+        self.assertEqual(table.insert_count, 3)
+        self.assertEqual(table.get(1), (":method", "POST"))
+        self.assertEqual(table.get(2), (":method", "POST"))
+
+    def test_capacity_instructions_resize_the_peer_table(self):
+        from wsbuilder.qpack import encode_capacity_instruction
+
+        table = self.DynamicTable(4096)
+        table.add("x", "y")
+        self.apply(encode_capacity_instruction(0), table)
+        self.assertEqual(table.capacity, 0)
+        self.assertEqual(len(table), 0)
+
+    def test_static_only_encoding_still_decodes_without_a_table(self):
+        fields = [(":status", "200"), ("content-type", "application/json")]
+        self.assertEqual(decode_field_section(encode_field_section(fields)), fields)

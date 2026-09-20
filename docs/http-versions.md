@@ -110,11 +110,56 @@ de las dos cosas. Por eso existe `wsbuilder/quic/tls.py`.
 
 Esto importa mas que la lista de lo que funciona:
 
-- Sin 0-RTT, sin reanudacion de sesion, sin migracion de conexion, sin Retry.
-- QPACK no usa tabla dinamica: se anuncia capacidad cero. Es un modo valido del
-  RFC 9204, pero cuesta compresion en cabeceras propias repetidas.
-- TLS 1.3 con una sola suite (`TLS_AES_128_GCM_SHA256`) y un solo grupo
-  (X25519), solo servidor, sin certificados de cliente.
+- **Sin 0-RTT ni reanudacion de sesion.** Cada conexion hace el handshake
+  completo. Es la unica pieza grande que falta, y es la mas delicada: los datos
+  de 0-RTT son reproducibles por definicion, asi que exigen que la aplicacion
+  decida que peticiones toleran repetirse.
+- TLS 1.3 solo del lado servidor, sin certificados de cliente sobre QUIC.
+
+### Validacion de direccion y migracion
+
+Un servidor que responde a un Initial falsificado con un vuelo grande se
+convierte en un amplificador apuntando a la victima. Por eso, hasta validar la
+direccion, no se envia mas del **triple** de lo recibido.
+
+`require_address_validation=True` va un paso mas alla: el primer Initial recibe
+un **Retry** con un token, y solo un cliente que realmente escuche en esa
+direccion puede devolverlo. El token es un MAC sobre la direccion y el id de
+conexion original, asi que no se puede falsificar ni reutilizar desde otro sitio.
+
+```python
+h3 = Http3Server("0.0.0.0", 8443, app, app.tls, require_address_validation=True)
+```
+
+Cuando llegan paquetes desde una direccion nueva, la conexion **no se mueve
+todavia**: se envia un `PATH_CHALLENGE` con datos impredecibles y solo se migra
+cuando el par los devuelve desde esa misma direccion. Sin eso, falsificar un
+paquete bastaria para redirigir el trafico.
+
+### Suites y grupos
+
+| Suite | Hash | Secretos |
+| --- | --- | --- |
+| `TLS_AES_128_GCM_SHA256` | SHA-256 | 32 octetos |
+| `TLS_CHACHA20_POLY1305_SHA256` | SHA-256 | 32 octetos |
+| `TLS_AES_256_GCM_SHA384` | SHA-384 | 48 octetos |
+
+Grupos: **X25519** y **secp256r1**. Manda la preferencia del servidor, no el
+orden del cliente. Lo que no este en esas listas se **rechaza**; no hay camino
+de respaldo a nada mas debil.
+
+### QPACK con tabla dinamica
+
+La tabla esta implementada, sobre su propio stream ordenado. El codificador solo
+referencia entradas que ya empujo, asi que una seccion nunca queda bloqueada
+esperando estado de tabla -- que es justo el bloqueo de cabeza de linea que
+QPACK existe para acotar.
+
+En una seccion repetida de cuatro campos con cabeceras propias, la diferencia es
+de **45 a 6 octetos**. `authorization`, `cookie` y `set-cookie` nunca entran en
+la tabla: un intermediario la comparte entre conexiones.
+
+Capacidad cero sigue siendo valido y desactiva la tabla por completo.
 
 ### Recuperacion de perdidas
 

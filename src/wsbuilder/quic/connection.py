@@ -21,6 +21,7 @@ from .crypto import (
     initial_secrets,
     remove_header_protection,
 )
+from .address import AmplificationLimit, PathValidator
 from .recovery import LossRecovery, SentPacket
 from .packet import (
     FIXED_BIT,
@@ -143,6 +144,8 @@ class QuicConnection:
         self.recovery = LossRecovery(
             levels=(LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION)
         )
+        self.amplification = AmplificationLimit()
+        self.paths = PathValidator()
         self._tls = ServerHandshake(
             certificate_chain_der,
             private_key,
@@ -183,11 +186,14 @@ class QuicConnection:
 
     # -- receiving -----------------------------------------------------
 
-    def receive_datagram(self, datagram):
+    def receive_datagram(self, datagram, address=None):
         """Process one UDP datagram, returning the datagrams to send back."""
         data = bytes(datagram)
+        self.amplification.on_received(len(data))
         offset = 0
         outgoing = []
+        if address is not None and tuple(address) != tuple(self.client_address):
+            outgoing.extend(self._on_address_change(address))
         while offset < len(data) and not self.closed:
             if not is_long_header(data[offset]):
                 consumed = self._receive_short(data[offset:], outgoing)
@@ -255,6 +261,8 @@ class QuicConnection:
                     self._advance_handshake(level, outgoing)
             elif isinstance(frame, qframes.StreamFrame):
                 self._on_stream_frame(frame, outgoing)
+            elif isinstance(frame, qframes.PathFrame):
+                self._on_path_frame(frame, outgoing)
             elif isinstance(frame, qframes.AckFrame):
                 self._on_ack(level, frame, outgoing)
             elif isinstance(frame, qframes.ConnectionCloseFrame):
@@ -262,6 +270,33 @@ class QuicConnection:
             elif isinstance(frame, qframes.SimpleFrame):
                 if frame.frame_type == qframes.FRAME_HANDSHAKE_DONE:
                     self.handshake_complete = True
+
+    def _on_address_change(self, address):
+        """A packet from somewhere new: probe the path before trusting it.
+
+        The connection is not moved yet. Until the peer echoes the challenge
+        from that address, treating it as the peer's would let anyone
+        redirect the traffic by spoofing one packet.
+        """
+        if self.paths.is_validated(address):
+            self.client_address = tuple(address)
+            return []
+        data = self.paths.challenge(address)
+        self._probe_address = tuple(address)
+        return [(LEVEL_APPLICATION, [qframes.PathFrame(qframes.FRAME_PATH_CHALLENGE, data)])]
+
+    def _on_path_frame(self, frame, outgoing):
+        if frame.frame_type == qframes.FRAME_PATH_CHALLENGE:
+            # Echoing it is how we let the peer validate its own new path.
+            outgoing.append(
+                (LEVEL_APPLICATION, [qframes.PathFrame(qframes.FRAME_PATH_RESPONSE, frame.data)])
+            )
+            return
+        candidate = getattr(self, "_probe_address", None)
+        if candidate and self.paths.on_response(frame.data, candidate):
+            self.client_address = candidate
+            self.amplification.validate()
+            self._probe_address = None
 
     def _on_ack(self, level, frame, outgoing):
         _acked, lost = self.recovery.on_ack_received(
@@ -340,6 +375,8 @@ class QuicConnection:
                     self.closed = True
                     return
                 self.handshake_complete = True
+                # Finishing the handshake proves the peer is where it claims.
+                self.amplification.validate()
                 outgoing.append(
                     (LEVEL_APPLICATION, [qframes.SimpleFrame(qframes.FRAME_HANDSHAKE_DONE)])
                 )
@@ -424,7 +461,15 @@ class QuicConnection:
         # ciphertext and the peer cannot open it.
         if carries_initial and datagrams and len(datagrams[0]) < MIN_INITIAL_DATAGRAM:
             datagrams[0] = qframes.pad_to(datagrams[0], MIN_INITIAL_DATAGRAM)
-        return datagrams
+        allowed = []
+        for datagram in datagrams:
+            if not self.amplification.may_send(len(datagram)):
+                # Section 8: answering a possibly spoofed address with more
+                # than three times what arrived turns us into an amplifier.
+                break
+            self.amplification.on_sent(len(datagram))
+            allowed.append(datagram)
+        return allowed
 
     def _build_packet(self, level, frame_list):
         keys = self.keys.get(level, {}).get("send")
@@ -477,6 +522,8 @@ class QuicConnection:
             "levels": sorted(self.keys),
             "streams": len(self.streams),
             "recovery": self.recovery.describe(),
+            "amplification": self.amplification.describe(),
+            "paths": self.paths.describe(),
         }
 
 

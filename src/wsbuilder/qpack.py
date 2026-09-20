@@ -6,11 +6,14 @@ streams are delivered independently, so block 5 may arrive before block 3.
 QPACK answers that by moving table updates onto their own ordered stream and
 having each block declare which table state it needs.
 
-This encoder never inserts into the dynamic table and advertises a capacity
-of zero, so blocks never block on table state. That is a supported mode, not
-a shortcut -- RFC 9204 section 3.2.2 makes the dynamic table optional -- and
-it costs compression on repeated custom headers while keeping the static
-table, which covers the fields that matter most.
+The dynamic table lives here too, on its own ordered stream. Insertions are
+numbered, a field section declares the insert count it needs, and a decoder
+that has not seen that far would have to wait -- which is the head-of-line
+blocking QPACK exists to bound. This encoder therefore only references
+entries it has already pushed and acknowledged as inserted, so a block is
+never blocked, and it falls back to literals whenever the table cannot help.
+Capacity zero, the mode the server advertises by default, disables the table
+entirely and is still fully supported.
 """
 
 from .hpack import HPACKError, decode_integer, encode_integer, huffman_decode, huffman_encode
@@ -80,6 +83,161 @@ for _index, (_name, _value) in enumerate(STATIC_TABLE):
 
 class QPACKError(Exception):
     """A field section that cannot be decoded."""
+
+
+#: An entry costs its octets plus 32, as in HPACK (RFC 9204 section 3.2.1).
+ENTRY_OVERHEAD = 32
+
+#: Never placed in the table: an intermediary shares it across connections,
+#: and a value recovered from there is a credential (RFC 9204 section 7.1).
+NEVER_INDEXED = frozenset(
+    {"authorization", "cookie", "set-cookie", "proxy-authorization"}
+)
+
+
+def _never_index(name):
+    return name in NEVER_INDEXED
+
+# Encoder stream instructions (RFC 9204 section 4.3).
+INSERT_WITH_NAME_REFERENCE = 0x80
+INSERT_WITH_LITERAL_NAME = 0x40
+SET_DYNAMIC_TABLE_CAPACITY = 0x20
+DUPLICATE = 0x00
+
+# Decoder stream instructions (section 4.4).
+SECTION_ACKNOWLEDGEMENT = 0x80
+STREAM_CANCELLATION = 0x40
+INSERT_COUNT_INCREMENT = 0x00
+
+
+class DynamicTable:
+    """Insertions both peers replay in the same order.
+
+    Entries are addressed by *absolute* index, counted from the first
+    insertion ever made, which is what lets a field section name an entry
+    without depending on how much has been evicted since.
+    """
+
+    def __init__(self, capacity=0):
+        self._entries = []
+        self._size = 0
+        self._capacity = int(capacity)
+        #: Total insertions ever made, never reduced by eviction.
+        self.insert_count = 0
+
+    def __len__(self):
+        return len(self._entries)
+
+    @property
+    def size(self):
+        return self._size
+
+    @property
+    def capacity(self):
+        return self._capacity
+
+    def set_capacity(self, capacity):
+        self._capacity = int(capacity)
+        self._evict()
+
+    @staticmethod
+    def entry_size(name, value):
+        return len(name.encode("utf-8")) + len(value.encode("utf-8")) + ENTRY_OVERHEAD
+
+    def _evict(self):
+        while self._size > self._capacity and self._entries:
+            name, value = self._entries.pop(0)
+            self._size -= self.entry_size(name, value)
+
+    def add(self, name, value):
+        """Insert, returning the absolute index, or None if it does not fit."""
+        cost = self.entry_size(name, value)
+        if cost > self._capacity:
+            return None
+        self._entries.append((name, value))
+        self._size += cost
+        self.insert_count += 1
+        self._evict()
+        return self.insert_count - 1
+
+    @property
+    def dropped(self):
+        """How many insertions have been evicted; the first index still held."""
+        return self.insert_count - len(self._entries)
+
+    def get(self, absolute_index):
+        position = absolute_index - self.dropped
+        if not 0 <= position < len(self._entries):
+            raise QPACKError(f"dynamic table index {absolute_index} is no longer held")
+        return self._entries[position]
+
+    def find(self, name, value=None):
+        """Absolute index of a match, newest first, plus whether it was exact."""
+        named = None
+        for position in range(len(self._entries) - 1, -1, -1):
+            entry_name, entry_value = self._entries[position]
+            if entry_name != name:
+                continue
+            absolute = self.dropped + position
+            if value is not None and entry_value == value:
+                return absolute, True
+            if named is None:
+                named = absolute
+        return named, False
+
+    def entries(self):
+        return list(self._entries)
+
+
+def encode_capacity_instruction(capacity):
+    head = bytearray(encode_integer(capacity, 5))
+    head[0] |= SET_DYNAMIC_TABLE_CAPACITY
+    return bytes(head)
+
+
+def encode_insert_with_name_reference(index, value, static=True, huffman=True):
+    head = bytearray(encode_integer(index, 6))
+    head[0] |= INSERT_WITH_NAME_REFERENCE | (0x40 if static else 0x00)
+    return bytes(head) + _encode_string(value, 7, 0x00, huffman)
+
+
+def encode_insert_with_literal_name(name, value, huffman=True):
+    head = _encode_string(name, 5, INSERT_WITH_LITERAL_NAME, huffman)
+    return head + _encode_string(value, 7, 0x00, huffman)
+
+
+def encode_duplicate(relative_index):
+    return encode_integer(relative_index, 5)
+
+
+def decode_encoder_stream(data, table):
+    """Apply a peer's encoder stream instructions to ``table``."""
+    data = bytes(data)
+    offset = 0
+    applied = 0
+    while offset < len(data):
+        byte = data[offset]
+        if byte & SET_DYNAMIC_TABLE_CAPACITY and not byte & 0xC0:
+            capacity, offset = decode_integer(data, offset, 5)
+            table.set_capacity(capacity)
+        elif byte & INSERT_WITH_NAME_REFERENCE:
+            static = bool(byte & 0x40)
+            index, offset = decode_integer(data, offset, 6)
+            value, offset = _decode_string(data, offset, 7)
+            name = _static(index)[0] if static else table.get(index)[0]
+            table.add(name, value)
+            applied += 1
+        elif byte & INSERT_WITH_LITERAL_NAME:
+            name, offset = _decode_string(data, offset, 5)
+            value, offset = _decode_string(data, offset, 7)
+            table.add(name.lower(), value)
+            applied += 1
+        else:
+            relative, offset = decode_integer(data, offset, 5)
+            name, value = table.get(table.insert_count - 1 - relative)
+            table.add(name, value)
+            applied += 1
+    return applied
 
 
 def encode_prefix(required_insert_count=0, base=0):
@@ -156,14 +314,40 @@ def encode_field_section(headers, huffman=True):
     return bytes(out)
 
 
-def decode_field_section(data):
-    """Decode a field section, refusing any dynamic table reference."""
+def encode_required_insert_count(count, max_entries):
+    """The prefix encodes the count modulo the table, not the count itself."""
+    if count == 0 or not max_entries:
+        return 0
+    return (count % (2 * max_entries)) + 1
+
+
+def decode_required_insert_count(encoded, max_entries, total_inserted):
+    if encoded == 0:
+        return 0
+    if not max_entries:
+        raise QPACKError("insert count given for a table of no capacity")
+    full_range = 2 * max_entries
+    if encoded > full_range:
+        raise QPACKError("encoded insert count out of range")
+    max_value = total_inserted + max_entries
+    wrapped = max_value - (max_value % full_range) + encoded - 1
+    if wrapped > max_value:
+        wrapped -= full_range
+    return wrapped
+
+
+def decode_field_section(data, table=None):
+    """Decode a field section, resolving dynamic references against ``table``."""
     data = bytes(data)
-    required, _delta, _sign, offset = decode_prefix(data)
-    if required:
-        # We advertise a capacity of zero, so a peer asking us to wait for
-        # table entries is asking for something we said we would not do.
+    required_encoded, delta, sign, offset = decode_prefix(data)
+    max_entries = (table.capacity // ENTRY_OVERHEAD) if table is not None else 0
+    total = table.insert_count if table is not None else 0
+    required = decode_required_insert_count(required_encoded, max_entries, total)
+    if required and (table is None or required > table.insert_count):
+        # Waiting for entries we have not seen is the head-of-line blocking
+        # QPACK exists to bound; we decline rather than stall the stream.
         raise QPACKError("field section requires dynamic table entries")
+    base = required - delta if sign else required + delta
 
     headers = []
     while offset < len(data):
@@ -171,16 +355,18 @@ def decode_field_section(data):
         if byte & 0x80:
             static = bool(byte & 0x40)
             index, offset = decode_integer(data, offset, 6)
-            if not static:
-                raise QPACKError("dynamic table reference in an indexed field")
-            headers.append(_static(index))
+            if static:
+                headers.append(_static(index))
+            else:
+                headers.append(_dynamic(table, base - index - 1))
         elif byte & 0x40:
             static = bool(byte & 0x10)
             index, offset = decode_integer(data, offset, 4)
-            if not static:
-                raise QPACKError("dynamic table reference in a named field")
+            name = (
+                _static(index)[0] if static else _dynamic(table, base - index - 1)[0]
+            )
             value, offset = _decode_string(data, offset, 7)
-            headers.append((_static(index)[0], value))
+            headers.append((name, value))
         elif byte & 0x20:
             name, offset = _decode_string(data, offset, 3)
             value, offset = _decode_string(data, offset, 7)
@@ -192,14 +378,127 @@ def decode_field_section(data):
     return headers
 
 
+def _dynamic(table, absolute_index):
+    if table is None:
+        raise QPACKError("dynamic table reference without a table")
+    return table.get(absolute_index)
+
+
 def _static(index):
     if not 0 <= index < STATIC_TABLE_SIZE:
         raise QPACKError(f"static table index {index} out of range")
     return STATIC_TABLE[index]
 
 
+class Encoder:
+    """Encodes field sections, inserting into the dynamic table when useful.
+
+    Only entries this encoder has already pushed on the encoder stream are
+    referenced, so a peer decoding a section never has to wait for one.
+    """
+
+    def __init__(self, capacity=0):
+        self.table = DynamicTable(capacity)
+        self._pending_instructions = bytearray()
+        if capacity:
+            self._pending_instructions += encode_capacity_instruction(capacity)
+
+    def set_capacity(self, capacity):
+        self.table.set_capacity(capacity)
+        self._pending_instructions += encode_capacity_instruction(capacity)
+
+    def take_encoder_stream(self):
+        """Instructions to send before the sections that reference them."""
+        data = bytes(self._pending_instructions)
+        self._pending_instructions = bytearray()
+        return data
+
+    def encode(self, headers, huffman=True):
+        fields = []
+        for name, value in headers:
+            name = name.lower() if isinstance(name, str) else name.decode().lower()
+            fields.append((name, value if isinstance(value, str) else value.decode()))
+
+        # Two passes. Insertions during the first change insert_count, and a
+        # relative index only means anything against the Base in the prefix,
+        # which is that final count -- so nothing is emitted until it settles.
+        plan = []
+        required = 0
+        for name, value in fields:
+            exact = _STATIC_EXACT.get((name, value))
+            if exact is not None:
+                plan.append(("static", exact, None))
+                continue
+
+            absolute, is_exact = self.table.find(name, value)
+            if not is_exact and self.table.capacity and not _never_index(name):
+                inserted = self._insert(name, value)
+                if inserted is not None:
+                    absolute, is_exact = inserted, True
+
+            if is_exact and absolute is not None:
+                required = max(required, absolute + 1)
+                plan.append(("dynamic", absolute, None))
+                continue
+
+            named = _STATIC_BY_NAME.get(name)
+            if named is not None:
+                plan.append(("static-name", named, value))
+                continue
+            plan.append(("literal", name, value))
+
+        base = self.table.insert_count
+        body = bytearray()
+        for kind, first, value in plan:
+            if kind == "static":
+                head = bytearray(encode_integer(first, 6))
+                head[0] |= 0xC0
+                body += head
+            elif kind == "dynamic":
+                head = bytearray(encode_integer(base - first - 1, 6))
+                head[0] |= 0x80
+                body += head
+            elif kind == "static-name":
+                head = bytearray(encode_integer(first, 4))
+                head[0] |= 0x50
+                body += head
+                body += _encode_string(value, 7, 0x00, huffman)
+            else:
+                pattern = 0x30 if _never_index(first) else 0x20
+                body += _encode_string(first, 3, pattern, huffman)
+                body += _encode_string(value, 7, 0x00, huffman)
+
+        max_entries = self.table.capacity // ENTRY_OVERHEAD
+        encoded_required = encode_required_insert_count(required, max_entries)
+        if required:
+            prefix = encode_integer(encoded_required, 8) + encode_integer(base - required, 7)
+        else:
+            prefix = encode_prefix(0, 0)
+        return prefix + bytes(body)
+
+    def _insert(self, name, value):
+        named = _STATIC_BY_NAME.get(name)
+        if named is not None:
+            instruction = encode_insert_with_name_reference(named, value, static=True)
+        else:
+            instruction = encode_insert_with_literal_name(name, value)
+        absolute = self.table.add(name, value)
+        if absolute is None:
+            return None
+        self._pending_instructions += instruction
+        return absolute
+
+
 __all__ = [
+    "DynamicTable",
+    "ENTRY_OVERHEAD",
+    "NEVER_INDEXED",
+    "Encoder",
     "QPACKError",
+    "decode_encoder_stream",
+    "encode_capacity_instruction",
+    "encode_insert_with_literal_name",
+    "encode_insert_with_name_reference",
     "STATIC_TABLE",
     "STATIC_TABLE_SIZE",
     "decode_field_section",
