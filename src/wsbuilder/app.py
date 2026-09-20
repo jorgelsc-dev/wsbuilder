@@ -420,6 +420,7 @@ class App:
         self.proxyi = None
         self.caches = None
         self.logs = None
+        self.tls = None
         self.tasks = TaskManager(app=self)
 
         raw_secret = str(thread_cookie_secret or "").strip()
@@ -683,6 +684,37 @@ class App:
         from .caches import install_caches
 
         return install_caches(self, caches=caches)
+
+    def enable_tls(
+        self,
+        manager=None,
+        ca=None,
+        common_name="localhost",
+        dns_names=None,
+        ip_addresses=("127.0.0.1",),
+        rotate=False,
+        attr_name="tls",
+        **kwargs,
+    ):
+        """Attach a certificate manager as ``app.tls``.
+
+        Pass the result to ``app.run(..., ssl_context=app.tls)``; the server
+        asks it for a context per connection, so a rotating certificate takes
+        effect without a restart.
+        """
+        from .pki import install_tls
+
+        return install_tls(
+            self,
+            manager=manager,
+            ca=ca,
+            common_name=common_name,
+            dns_names=dns_names,
+            ip_addresses=ip_addresses,
+            rotate=rotate,
+            attr_name=attr_name,
+            **kwargs,
+        )
 
     def enable_logs(self, path="logs/wsbuilder.ndjson", attr_name="logs", ensure_parent=True):
         from .logs import install_logs
