@@ -10,7 +10,7 @@ from .constants import DEFAULT_CORS_ALLOW_ORIGIN
 from .cookies import build_set_cookie, get_cookie
 from .http import Response
 from .tasks import TaskManager
-from .ws import _normalize_protocols, sha1
+from .ws import _normalize_protocols
 
 THREAD_COOKIE_NAME = "wsbuilder-thread"
 THREAD_RESPONSE_ID_HEADER = "WSBuilder-Thread"
@@ -450,7 +450,7 @@ class App:
         if not value or "." not in value:
             return ""
         parts = value.split(".")
-        if len(parts) not in {2, 3}:
+        if len(parts) != 3:
             return ""
         thread_id = parts[0]
         try:
@@ -458,32 +458,21 @@ class App:
         except Exception:
             return ""
 
-        if len(parts) == 2:
-            sig = parts[1]
-            payload = f"{route_path}|{normalized}".encode("utf-8")
-            expected = sha1(
-                self._thread_cookie_secret
-                + b"|"
-                + payload
-                + b"|"
-                + self._thread_cookie_secret
-            ).hex()
-        else:
-            issued_text, sig = parts[1], parts[2]
-            try:
-                issued = int(issued_text)
-            except (TypeError, ValueError):
-                return ""
-            now = int(time.time())
-            ttl = max(0.0, float(ttl_seconds or 0.0))
-            if issued > now + 60 or (ttl > 0 and now - issued > ttl):
-                return ""
-            payload = f"{route_path}|{normalized}|{issued}".encode("utf-8")
-            expected = hmac.new(
-                self._thread_cookie_secret,
-                payload,
-                hashlib.sha256,
-            ).hexdigest()
+        issued_text, sig = parts[1], parts[2]
+        try:
+            issued = int(issued_text)
+        except (TypeError, ValueError):
+            return ""
+        now = int(time.time())
+        ttl = max(0.0, float(ttl_seconds or 0.0))
+        if issued > now + 60 or (ttl > 0 and now - issued > ttl):
+            return ""
+        payload = f"{route_path}|{normalized}|{issued}".encode("utf-8")
+        expected = hmac.new(
+            self._thread_cookie_secret,
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
         if not _constant_time_equals(sig, expected):
             return ""
         return normalized

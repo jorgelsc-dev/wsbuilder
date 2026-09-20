@@ -607,8 +607,15 @@ def _is_valid_close_code(code):
 
 
 def sha1(data_bytes):
-    """SHA-1 digest of ``data_bytes`` (WebSocket handshake accept token)."""
-    return hashlib.sha1(bytes(data_bytes)).digest()
+    """SHA-1 digest for the WebSocket handshake accept token.
+
+    RFC 6455 section 4.2.2 fixes this algorithm: the token proves the peer
+    read the request, not that anything is authentic, and a server that used
+    anything else would fail every handshake. ``usedforsecurity=False`` says
+    so to the runtime and to auditors, and keeps the digest working on hosts
+    where the FIPS policy disables SHA-1 for security use.
+    """
+    return hashlib.sha1(bytes(data_bytes), usedforsecurity=False).digest()
 
 
 B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
