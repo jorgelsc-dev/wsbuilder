@@ -7,6 +7,7 @@ from .headers import validate_header_name, validate_header_value
 
 
 MAX_QUERY_FIELDS = 1024
+HTTP_1_1 = "HTTP/1.1"
 _HTTP_METHOD_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
@@ -26,7 +27,18 @@ def parse_query_string(qs):
 
 
 class Request:
-    def __init__(self, method, path, query_string, headers, body, client, tls=None):
+    def __init__(
+        self,
+        method,
+        path,
+        query_string,
+        headers,
+        body,
+        client,
+        tls=None,
+        version=HTTP_1_1,
+        trailers=None,
+    ):
         self.method = (method or "").upper()
         self.path = path or "/"
         self.query_string = query_string or ""
@@ -35,6 +47,10 @@ class Request:
         self.body = body or b""
         self.client = client
         self.tls = tls or {}
+        #: Protocol version that carried this request, e.g. ``"HTTP/1.1"``.
+        self.version = str(version or HTTP_1_1)
+        #: Fields from a chunked body's trailer section, empty for other framings.
+        self.trailers = dict(trailers or {})
         self.app = None
 
     def text(self, encoding="utf-8"):

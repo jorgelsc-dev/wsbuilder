@@ -4,6 +4,7 @@ import threading
 import time
 
 from .http import Request, Response, parse_http_request, send_http_response
+from .http1 import BufferedReader, read_chunked_body
 from .ws import _websocket_handshake_error_response, handshake_websocket_with_options, is_ws_request, recv_exact
 
 
@@ -181,19 +182,32 @@ class HTTPServer:
                     ),
                 )
                 return
+            chunked_request = False
             if transfer_encoding:
-                send_http_response(
-                    conn,
-                    Response.text("Transfer-Encoding is not supported", status=501),
-                )
-                return
+                codings = [
+                    coding.strip().lower()
+                    for coding in transfer_encoding.split(",")
+                    if coding.strip()
+                ]
+                # chunked must be the final coding, and it is the only one this
+                # server applies; gzip/deflate request bodies stay unsupported.
+                if codings != ["chunked"]:
+                    send_http_response(
+                        conn,
+                        Response.text(
+                            f"Unsupported Transfer-Encoding: {transfer_encoding}",
+                            status=501,
+                        ),
+                    )
+                    return
+                chunked_request = True
             if expectation and expectation != "100-continue":
                 send_http_response(
                     conn,
                     Response.text("Expectation Failed", status=417),
                 )
                 return
-            if expectation and content_length is None:
+            if expectation and content_length is None and not chunked_request:
                 send_http_response(
                     conn,
                     Response.text(
@@ -203,7 +217,33 @@ class HTTPServer:
                 )
                 return
 
-            if content_length is not None:
+            trailers = {}
+            if chunked_request:
+                if expectation == "100-continue":
+                    try:
+                        conn.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+                    except (ConnectionError, OSError):
+                        return
+                reader = BufferedReader(conn, body)
+                try:
+                    body, trailers = read_chunked_body(
+                        reader,
+                        max_body_bytes=self.MAX_REQUEST_BODY_BYTES,
+                    )
+                except socket.timeout:
+                    send_http_response(conn, Response.text("Request Timeout", status=408))
+                    return
+                except (ConnectionError, OSError):
+                    send_http_response(
+                        conn,
+                        Response.text("Incomplete Request Body", status=400),
+                    )
+                    return
+                except ValueError as e:
+                    status = 413 if "Too Large" in str(e) else 400
+                    send_http_response(conn, Response.text(str(e), status=status))
+                    return
+            elif content_length is not None:
                 if not content_length or any(
                     char < "0" or char > "9"
                     for char in content_length
@@ -267,6 +307,8 @@ class HTTPServer:
                     body=body,
                     client=addr,
                     tls=tls_meta,
+                    version=req["version"],
+                    trailers=trailers,
                 )
             except (TypeError, ValueError) as e:
                 send_http_response(

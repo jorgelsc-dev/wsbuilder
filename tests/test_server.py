@@ -178,9 +178,11 @@ class TestHTTPServer(unittest.TestCase):
 
         requests = (
             (
+                # chunked is decoded now, but a coding the server cannot apply
+                # still has to be refused.
                 b"POST /echo HTTP/1.1\r\n"
                 b"Host: example.test\r\n"
-                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"Transfer-Encoding: gzip, chunked\r\n\r\n"
                 b"5\r\nhello\r\n0\r\n\r\n",
                 b"HTTP/1.1 501 Not Implemented",
             ),
@@ -384,3 +386,108 @@ class TestHTTPServerLifecycle(unittest.TestCase):
         server.stop()
         thread.join(timeout=5.0)
         self.assertFalse(thread.is_alive())
+
+
+class TestChunkedRequests(unittest.TestCase):
+    def _app(self, seen):
+        app = App()
+
+        @app.api("/echo", methods=("POST",))
+        def echo(request):
+            seen.append(request)
+            return {"body": request.body.decode(), "trailers": request.trailers}
+
+        return app
+
+    def test_chunked_body_reaches_the_handler_reassembled(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"5\r\nhello\r\n",
+                b"6\r\n world\r\n0\r\n\r\n",
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        sent = b"".join(conn.sent)
+        self.assertIn(b"HTTP/1.1 200 OK", sent)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].body, b"hello world")
+        self.assertEqual(seen[0].version, "HTTP/1.1")
+
+    def test_trailers_are_exposed_on_the_request(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"4\r\nbody\r\n0\r\nX-Checksum: abc\r\n\r\n"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(seen[0].body, b"body")
+        self.assertEqual(seen[0].trailers, {"x-checksum": "abc"})
+
+    def test_expect_100_continue_works_without_content_length(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Expect: 100-continue\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n",
+                b"2\r\nhi\r\n0\r\n\r\n",
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        sent = b"".join(conn.sent)
+        self.assertIn(b"HTTP/1.1 100 Continue", sent)
+        self.assertIn(b"HTTP/1.1 200 OK", sent)
+        self.assertEqual(seen[0].body, b"hi")
+
+    def test_chunked_body_over_the_limit_returns_413(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        server.MAX_REQUEST_BODY_BYTES = 8
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"10\r\n" + b"x" * 16 + b"\r\n0\r\n\r\n"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"HTTP/1.1 413 Payload Too Large", b"".join(conn.sent))
+        self.assertEqual(seen, [])
+
+    def test_truncated_chunked_body_returns_400(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen))
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                b"9\r\nshort"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"HTTP/1.1 400 Bad Request", b"".join(conn.sent))
+        self.assertEqual(seen, [])
