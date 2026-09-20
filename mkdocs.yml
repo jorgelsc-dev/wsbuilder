@@ -17,6 +17,7 @@ nav:
   - Guias por modulo:
       - Arquitectura: architecture.md
       - App y HTTP: app-http.md
+      - Versiones de HTTP: http-versions.md
       - WebSocket: websocket.md
       - Datos y ORM: data-orm.md
       - Cache y Seguridad: cache-security.md
