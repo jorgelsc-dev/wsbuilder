@@ -186,7 +186,7 @@ def parse_http_request(conn, max_header_bytes=65536):
     }
 
 
-def send_http_response(conn, response, *, send_body=True):
+def send_http_response(conn, response, *, send_body=True, keep_alive=False):
     status_code = int(response.status)
     if not 100 <= status_code <= 599:
         raise ValueError("HTTP response status must be between 100 and 599")
@@ -218,7 +218,10 @@ def send_http_response(conn, response, *, send_body=True):
     elif "content-length" not in lowermap:
         headers["Content-Length"] = str(len(response.body))
         lowermap = {k.lower(): v for k, v in headers.items()}
-    if "connection" not in lowermap:
+    if "connection" not in lowermap and not keep_alive:
+        # HTTP/1.1 keeps connections alive by default, so an explicit
+        # keep-alive token is only noise; announcing close when the server
+        # means to reuse the socket would make the client drop it.
         headers["Connection"] = "close"
         lowermap = {k.lower(): v for k, v in headers.items()}
     status_line = f"HTTP/1.1 {status_code} {reason}\r\n"

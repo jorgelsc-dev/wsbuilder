@@ -62,6 +62,24 @@ class BufferedReader:
             raise ConnectionError("connection closed")
         self._buffer.extend(chunk)
 
+    def recv(self, size):
+        """Socket-compatible read so existing parsers can take a reader."""
+        size = int(size)
+        if not self._buffer:
+            try:
+                self._fill(size)
+            except ConnectionError:
+                return b""
+        take = min(size, len(self._buffer))
+        data = bytes(self._buffer[:take])
+        del self._buffer[:take]
+        return data
+
+    def unread(self, data):
+        """Push bytes back so the next read sees them first."""
+        if data:
+            self._buffer[:0] = bytes(data)
+
     def read_exactly(self, count):
         count = int(count)
         if count < 0:
