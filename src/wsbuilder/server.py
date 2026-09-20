@@ -10,7 +10,7 @@ from .http1 import (
     read_chunked_body,
     should_keep_alive,
 )
-from .ws import _websocket_handshake_error_response, handshake_websocket_with_options, is_ws_request, recv_exact
+from .ws import _websocket_handshake_error_response, handshake_websocket_with_options, is_ws_request
 
 
 class HTTPServer:
