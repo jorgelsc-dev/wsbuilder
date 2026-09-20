@@ -367,7 +367,9 @@ class ViewResponseCache:
             key_data["custom"] = str(custom_key)
 
         raw = json.dumps(key_data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        digest = hashlib.sha1(raw).hexdigest()
+        # A cache key, not a credential: collisions cost a wrong hit, and
+        # the input never leaves this process.
+        digest = hashlib.sha1(raw, usedforsecurity=False).hexdigest()
         return f"resp:{digest}"
 
     def _resolve_ttl(self, route, request, response):
