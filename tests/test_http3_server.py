@@ -221,8 +221,9 @@ class TestHandshakeOverUdp(QuicClientHarness):
         split = header.payload_offset + pn_length
         opened = keys.open(number, cleaned[:split], cleaned[split:])
         frames = qf.parse_frames(opened)
-        self.assertIsInstance(frames[0], qf.CryptoFrame)
-        self.assertEqual(frames[0].data[0], 0x02)  # a ServerHello
+        # An ACK precedes it, so find the CRYPTO rather than assume position.
+        crypto = next(f for f in frames if isinstance(f, qf.CryptoFrame))
+        self.assertEqual(crypto.data[0], 0x02)  # a ServerHello
 
 
 class TestRequestsOverUdp(QuicClientHarness):
@@ -318,3 +319,82 @@ class TestServerHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAcknowledgements(unittest.TestCase):
+    """Without ACKs a peer never sees a packet confirmed and gives up."""
+
+    def test_ranges_for_one_packet(self):
+        self.assertEqual(QuicConnection.ack_ranges([0]), (0, [0]))
+
+    def test_contiguous_packets_form_one_range(self):
+        self.assertEqual(QuicConnection.ack_ranges([0, 1, 2]), (2, [2]))
+
+    def test_a_gap_starts_a_second_range(self):
+        largest, ranges = QuicConnection.ack_ranges([0, 1, 3, 4])
+        self.assertEqual(largest, 4)
+        self.assertEqual(ranges, [1, (0, 1)])
+
+    def test_alternating_packets(self):
+        largest, ranges = QuicConnection.ack_ranges([1, 3, 5])
+        self.assertEqual(largest, 5)
+        self.assertEqual(ranges, [0, (0, 0), (0, 0)])
+
+    def test_nothing_received_means_nothing_to_acknowledge(self):
+        self.assertEqual(QuicConnection.ack_ranges([]), (None, []))
+
+    def test_an_ack_frame_survives_serialization(self):
+        largest, ranges = QuicConnection.ack_ranges([0, 1, 3, 4])
+        decoded = qf.parse_frames(qf.AckFrame(largest, 0, ranges).serialize())[0]
+        self.assertEqual(decoded.largest, 4)
+        self.assertEqual(decoded.ranges, [1, (0, 1)])
+
+
+class TestAcknowledgementsOverUdp(QuicClientHarness):
+    def test_the_handshake_flight_acknowledges_the_initial(self):
+        replies = self._handshake()
+        _client, server_secret = initial_secrets(self.dcid)
+        keys = PacketKeys(server_secret)
+        header = parse_long_header(replies[0])
+        cleaned, number, pn_length = remove_header_protection(
+            keys, replies[0][: header.packet_length], header.payload_offset
+        )
+        split = header.payload_offset + pn_length
+        frames = qf.parse_frames(keys.open(number, cleaned[:split], cleaned[split:]))
+        acks = [frame for frame in frames if isinstance(frame, qf.AckFrame)]
+        self.assertEqual(len(acks), 1)
+        self.assertEqual(acks[0].largest, 0)
+
+    def test_a_one_rtt_reply_acknowledges_the_request(self):
+        self._handshake()
+        connection = self._connection()
+        recv = connection.keys["application"]["recv"]
+        send = connection.keys["application"]["send"]
+        payload = http3.encode_frame(
+            http3.FRAME_HEADERS,
+            encode_field_section(
+                [
+                    (":method", "GET"),
+                    (":scheme", "https"),
+                    (":path", "/hi"),
+                    (":authority", "localhost"),
+                ]
+            ),
+        )
+        frames = qf.pad_to(qf.serialize_frames([qf.StreamFrame(0, 0, payload, fin=True)]), 60)
+        header = build_short_header(connection.host_cid, packet_number=0)
+        self.sock.sendto(
+            apply_header_protection(
+                recv, header + recv.seal(0, header, frames), len(header) - 4, 4
+            ),
+            self.server.server_address,
+        )
+        data, _ = self.sock.recvfrom(65535)
+        pn_offset = 1 + len(self.scid)
+        cleaned, number, pn_length = remove_header_protection(send, data, pn_offset)
+        opened = send.open(
+            number, cleaned[: pn_offset + pn_length], cleaned[pn_offset + pn_length :]
+        )
+        decoded = qf.parse_frames(opened)
+        self.assertTrue(any(isinstance(frame, qf.AckFrame) for frame in decoded))
+        self.assertTrue(any(isinstance(frame, qf.StreamFrame) for frame in decoded))

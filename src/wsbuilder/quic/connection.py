@@ -309,10 +309,59 @@ class QuicConnection:
     def send_stream_data(self, stream_id, payload, fin=True, offset=0):
         return qframes.StreamFrame(stream_id, offset, payload, fin)
 
+    @staticmethod
+    def ack_ranges(numbers):
+        """Describe received packet numbers the way an ACK frame does.
+
+        Returns ``(largest, ranges)`` where ``ranges[0]`` counts the packets
+        contiguous below the largest and the rest are ``(gap, length)`` pairs,
+        which is the shape RFC 9000 section 19.3 puts on the wire.
+        """
+        ordered = sorted(set(numbers), reverse=True)
+        if not ordered:
+            return None, []
+        largest = ordered[0]
+        index = 0
+        run = 0
+        while index + 1 < len(ordered) and ordered[index + 1] == ordered[index] - 1:
+            index += 1
+            run += 1
+        ranges = [run]
+        while index + 1 < len(ordered):
+            smallest = ordered[index]
+            index += 1
+            next_largest = ordered[index]
+            gap = smallest - next_largest - 2
+            run = 0
+            while index + 1 < len(ordered) and ordered[index + 1] == ordered[index] - 1:
+                index += 1
+                run += 1
+            ranges.append((gap, run))
+        return largest, ranges
+
+    def _take_ack_frame(self, level):
+        """An ACK for what arrived at this level, or None if nothing has."""
+        pending = self._pending_acks.get(level)
+        if not pending:
+            return None
+        largest, ranges = self.ack_ranges(pending)
+        self._pending_acks[level] = []
+        return qframes.AckFrame(largest, 0, ranges)
+
     def _flush(self, outgoing):
         datagrams = []
         carries_initial = False
+        # Acknowledge at every level something arrived on, even where we have
+        # nothing else to send: without this a peer sees no packet confirmed,
+        # retransmits for ever and eventually gives up on the connection.
+        levels_sent = {level for level, frames in outgoing if frames}
+        for level in (LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION):
+            if level not in levels_sent and self._pending_acks.get(level):
+                outgoing.append((level, []))
         for level, frame_list in outgoing:
+            ack = self._take_ack_frame(level)
+            if ack is not None:
+                frame_list = [ack] + list(frame_list)
             if not frame_list:
                 continue
             packet = self._build_packet(level, frame_list)
