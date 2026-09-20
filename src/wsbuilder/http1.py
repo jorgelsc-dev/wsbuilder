@@ -75,6 +75,16 @@ class BufferedReader:
         del self._buffer[:take]
         return data
 
+    def peek(self, count):
+        """Look at the next bytes without consuming them."""
+        count = int(count)
+        while len(self._buffer) < count:
+            try:
+                self._fill(count - len(self._buffer))
+            except ConnectionError:
+                break
+        return bytes(self._buffer[:count])
+
     def unread(self, data):
         """Push bytes back so the next read sees them first."""
         if data:
