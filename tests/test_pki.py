@@ -374,6 +374,7 @@ class TestDatabaseBackedRotation(unittest.TestCase):
         self.assertTrue(server.wait_until_serving(timeout=5.0))
 
         client = ssl.create_default_context(cadata=self.ca.certificate_pem.decode())
+        client.minimum_version = ssl.TLSVersion.TLSv1_2
         with socket.create_connection(server.server_address, timeout=5.0) as raw:
             with client.wrap_socket(raw, server_hostname="localhost") as tls:
                 tls.sendall(b"GET /secure HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
@@ -672,6 +673,7 @@ class TestMutualTLS(unittest.TestCase):
 
     def _request(self, present_certificate):
         context = ssl.create_default_context(cadata=self.ca.certificate_pem.decode())
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         if present_certificate:
             with self.client_cert.materialize() as files:
                 context.load_cert_chain(files.certificate, files.private_key)
