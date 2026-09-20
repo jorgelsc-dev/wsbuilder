@@ -1,76 +1,88 @@
 # WebSocket
 
-## Registro de rutas WS
+WSBuilder incluye handshake, framing y una clase `WebSocket` para manejar la conexion ya abierta.
 
-Las rutas WebSocket se registran con `@app.ws(path, ...)`.
+## Registro
 
 ```python
-@app.ws("/ws/echo", keepalive_interval=30.0, pong_timeout=10.0)
-def ws_echo(ws, _request):
-    while True:
-        frame = ws.recv_frame()
-        if frame.opcode == 0x1:
-            ws.send_text(frame.payload.decode("utf-8"))
-        elif frame.opcode == 0x8:
-            ws.close(1000, "bye")
-            break
+@app.ws(
+    "/ws/",
+    subprotocols=("json", "msgpack"),
+    idle_timeout=15.0,
+    keepalive_interval=5.0,
+    pong_timeout=3.0,
+)
+def handler(ws, _request):
+    ...
 ```
 
-## Opciones del decorador
+## Handshake
 
-| Opcion | Uso |
-| --- | --- |
-| `subprotocols` | lista de subprotocolos soportados |
-| `idle_timeout` | cierre por inactividad |
-| `keepalive_interval` | envio automatico de ping |
-| `pong_timeout` | tiempo maximo esperando pong |
-| `auto_pong` | respuesta automatica a ping |
-| `on_close` | callback al cerrar |
-| `on_error` | callback en error |
-| `on_timeout` | callback en timeout |
-| `io_poll_interval` | granularidad de espera de I/O |
-| `ping_payload` | payload fijo para pings de keepalive |
+La funcion `handshake_websocket_with_options()` valida:
+
+- `Sec-WebSocket-Key`
+- `Connection: Upgrade`
+- `Upgrade: websocket`
+- `Sec-WebSocket-Version: 13`
+
+Tambien negocia subprotocolos compatibles cuando se declaran en `supported_subprotocols`.
 
 ## `WebSocket`
 
-Metodos publicos mas usados:
+Metodos mas utiles:
 
 - `recv_frame()`
-- `send_frame(opcode, payload)`
 - `send_text(text)`
 - `send_binary(data)`
 - `send_ping(payload=b"")`
 - `send_pong(payload=b"")`
+- `send_frame(opcode, payload=b"")`
 - `close(code=1000, reason="")`
 
-`recv_frame()` devuelve un `WebSocketFrame` con `opcode`, `payload`, `fin` y
-metadatos del mensaje leido. Los mensajes fragmentados se reensamblan antes de
-devolverse; los frames de control intercalados se procesan durante el
-reensamblado.
+Callbacks opcionales:
 
-## Handshake y utilidades
+- `on_close`
+- `on_error`
+- `on_timeout`
 
-El modulo `ws.py` tambien expone helpers de bajo nivel:
+## Ciclo de vida
 
-- `is_ws_request(headers)`
-- `handshake_websocket(...)`
-- `handshake_websocket_with_options(...)`
-- `read_ws_frame_raw(conn)`
-- `make_ws_frame_bytes(opcode, payload=b"")`
-- `parse_close_payload(payload)`
-- `recv_exact(conn, n)`
+`WebSocket` puede cerrar por:
 
-Son utiles cuando quieres inspeccionar o reutilizar piezas del protocolo sin
-pasar por `App`.
+- frame de cierre remoto
+- timeout de inactividad
+- fallo de ping/pong
+- error de protocolo
 
-## Buenas practicas
+## Ejemplo echo
 
-- Usa `keepalive_interval` y `pong_timeout` cuando el cliente puede quedar
-  mucho tiempo ocioso.
-- Trata `opcode == 0x8` como cierre ordenado.
-- Declara en `subprotocols` cada protocolo que el servidor realmente soporta;
-  el handshake nunca refleja uno no declarado.
-- Los upgrades requieren `GET` sobre HTTP/1.1. El servidor valida mascaras,
-  opcodes, longitudes minimas, limites de payload, UTF-8 y frames de control.
-- Si necesitas limitar trafico o ACL, habilita `SecurityPolicy` tambien en la
-  aplicacion HTTP; el handshake pasa por la evaluacion de seguridad.
+```python
+from wsbuilder import App
+
+app = App()
+
+@app.ws("/ws/")
+def echo(ws, _request):
+    while True:
+        frame = ws.recv_frame()
+        if frame.opcode == 0x8:
+            ws.close(1000, "bye")
+            break
+        if frame.opcode == 0x9:
+            ws.send_pong(frame.payload)
+            continue
+        if frame.opcode == 0x1:
+            ws.send_text(frame.payload.decode("utf-8", errors="ignore"))
+```
+
+## Consejos
+
+- Usa `subprotocols` si tu cliente exige un formato concreto.
+- Activa `keepalive_interval` y `pong_timeout` en conexiones largas.
+- Mantener `auto_pong=True` simplifica clientes sencillos.
+
+## Utilidades relacionadas
+
+- `parse_close_payload()` para interpretar el frame final.
+- `make_ws_frame_bytes()` y `read_ws_frame_raw()` si necesitas trabajar a nivel bajo.
+- `is_ws_request()` para checks rapidos de upgrade.
