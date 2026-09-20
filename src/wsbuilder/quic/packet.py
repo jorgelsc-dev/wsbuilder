@@ -198,6 +198,25 @@ def build_short_header(destination_cid, *, packet_number, packet_number_length=4
     )
 
 
+def build_retry(version, destination_cid, source_cid, token, integrity_tag):
+    """A Retry packet: no packet number, no payload, just a new token.
+
+    The tag proves the Retry came from something on the path, which is what
+    stops an off-path attacker from sending one to break a connection.
+    """
+    first = HEADER_FORM_LONG | FIXED_BIT | (PACKET_RETRY << 4)
+    return (
+        bytes([first])
+        + int(version).to_bytes(4, "big")
+        + bytes([len(destination_cid)])
+        + bytes(destination_cid)
+        + bytes([len(source_cid)])
+        + bytes(source_cid)
+        + bytes(token)
+        + bytes(integrity_tag)
+    )
+
+
 def parse_short_header(datagram, connection_id_length):
     """Short headers give no length, so the destination id size must be known."""
     data = bytes(datagram)
@@ -241,6 +260,7 @@ __all__ = [
     "PACKET_ZERO_RTT",
     "QuicPacketError",
     "build_long_header",
+    "build_retry",
     "build_short_header",
     "is_long_header",
     "iter_packets",

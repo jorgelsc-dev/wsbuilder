@@ -158,3 +158,117 @@ class TestServerHandshake(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def build_client_hello(suites, group=None, alpn=(b"h3",)):
+    """A ClientHello we control, for the cases OpenSSL will not produce."""
+    import os
+
+    from wsbuilder.quic.tls import (
+        CLIENT_HELLO,
+        EXT_ALPN,
+        EXT_KEY_SHARE,
+        EXT_SUPPORTED_VERSIONS,
+        GROUP_X25519,
+        _block8,
+        _block16,
+        _u16,
+        build_handshake,
+        generate_key_share,
+    )
+
+    group = GROUP_X25519 if group is None else group
+    try:
+        _private, public = generate_key_share(group)
+    except Exception:
+        public = b"\x00" * 32  # a group we cannot generate for, on purpose
+    extensions = (
+        _u16(EXT_SUPPORTED_VERSIONS) + _block16(_block8(_u16(TLS_1_3_VERSION)))
+        + _u16(EXT_KEY_SHARE) + _block16(_block16(_u16(group) + _block16(public)))
+        + _u16(0x000D) + _block16(_block16(_u16(0x0804) + _u16(0x0403)))
+        + _u16(EXT_ALPN) + _block16(_block16(b"".join(_block8(p) for p in alpn)))
+    )
+    body = (
+        _u16(0x0303)
+        + os.urandom(32)
+        + _block8(b"")
+        + _block16(b"".join(_u16(suite) for suite in suites))
+        + _block8(b"\x00")
+        + _block16(extensions)
+    )
+    return build_handshake(CLIENT_HELLO, body)
+
+
+class TestCipherSuiteNegotiation(unittest.TestCase):
+    def setUp(self):
+        ca = CertificateAuthority.create("Suite CA")
+        leaf = ca.issue("localhost", dns_names=["localhost"])
+        certificate = x509.load_pem_x509_certificate(leaf.certificate_pem)
+        self.der = certificate.public_bytes(serialization.Encoding.DER)
+        self.key = serialization.load_pem_private_key(leaf.private_key_pem, password=None)
+
+    def _handshake(self):
+        return ServerHandshake([self.der], self.key, alpn_protocols=("h3",))
+
+    def test_each_supported_suite_is_selectable(self):
+        from wsbuilder.quic.tls import (
+            TLS_AES_128_GCM_SHA256,
+            TLS_AES_256_GCM_SHA384,
+            TLS_CHACHA20_POLY1305_SHA256,
+        )
+
+        for suite, secret_size in (
+            (TLS_AES_128_GCM_SHA256, 32),
+            (TLS_CHACHA20_POLY1305_SHA256, 32),
+            (TLS_AES_256_GCM_SHA384, 48),
+        ):
+            with self.subTest(suite=hex(suite)):
+                handshake = self._handshake()
+                _hello, _flight, secrets = handshake.handle_client_hello(
+                    build_client_hello([suite])
+                )
+                self.assertEqual(handshake.cipher_suite, suite)
+                # SHA-384 gives longer secrets, all the way through.
+                self.assertEqual(len(secrets["server_application"]), secret_size)
+
+    def test_our_preference_decides_not_the_clients_order(self):
+        from wsbuilder.quic.tls import TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384
+
+        handshake = self._handshake()
+        handshake.handle_client_hello(
+            build_client_hello([TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256])
+        )
+        self.assertEqual(handshake.cipher_suite, TLS_AES_128_GCM_SHA256)
+
+    def test_an_unknown_suite_is_refused(self):
+        with self.assertRaisesRegex(TLSError, "no supported cipher suite"):
+            self._handshake().handle_client_hello(build_client_hello([0x1305]))
+
+    def test_both_groups_are_selectable(self):
+        from wsbuilder.quic.tls import GROUP_SECP256R1, TLS_AES_128_GCM_SHA256
+
+        for group in (GROUP_X25519, GROUP_SECP256R1):
+            with self.subTest(group=hex(group)):
+                handshake = self._handshake()
+                handshake.handle_client_hello(
+                    build_client_hello([TLS_AES_128_GCM_SHA256], group=group)
+                )
+                self.assertEqual(handshake.group, group)
+
+    def test_a_group_we_do_not_support_is_refused(self):
+        from wsbuilder.quic.tls import TLS_AES_128_GCM_SHA256
+
+        with self.assertRaises(TLSError):
+            self._handshake().handle_client_hello(
+                build_client_hello([TLS_AES_128_GCM_SHA256], group=0x0018)
+            )
+
+    def test_the_secret_length_follows_the_hash(self):
+        from wsbuilder.quic.tls import (
+            TLS_AES_128_GCM_SHA256,
+            TLS_AES_256_GCM_SHA384,
+            secret_length,
+        )
+
+        self.assertEqual(secret_length(TLS_AES_128_GCM_SHA256), 32)
+        self.assertEqual(secret_length(TLS_AES_256_GCM_SHA384), 48)
