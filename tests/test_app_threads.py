@@ -273,3 +273,63 @@ class TestViewThreadRouting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestThreadCookieVerification(unittest.TestCase):
+    """The affinity cookie is the one place a forged value picks a worker."""
+
+    def setUp(self):
+        self.app = App()
+        self.addCleanup(self.app.close)
+
+        @self.app.view("/pinned", min_threads=2, max_threads=2)
+        def pinned(_request):
+            return threading.current_thread().name
+
+    def test_a_signed_cookie_round_trips(self):
+        worker = self.app.router.routes[0].thread_pool.workers[0]
+        signed = self.app._sign_thread_cookie("/pinned", worker.thread_id)
+        self.assertEqual(
+            self.app._verify_thread_cookie("/pinned", signed), worker.thread_id
+        )
+
+    def test_a_cookie_signed_for_another_route_is_refused(self):
+        worker = self.app.router.routes[0].thread_pool.workers[0]
+        signed = self.app._sign_thread_cookie("/other", worker.thread_id)
+        self.assertEqual(self.app._verify_thread_cookie("/pinned", signed), "")
+
+    def test_a_tampered_signature_is_refused(self):
+        worker = self.app.router.routes[0].thread_pool.workers[0]
+        signed = self.app._sign_thread_cookie("/pinned", worker.thread_id)
+        tampered = signed[:-1] + ("0" if signed[-1] != "0" else "1")
+        self.assertEqual(self.app._verify_thread_cookie("/pinned", tampered), "")
+
+    def test_the_legacy_two_part_form_is_no_longer_accepted(self):
+        # It was verified with a hand-rolled SHA-1 construction rather than a
+        # MAC, and nothing has issued that shape for some time.
+        worker = self.app.router.routes[0].thread_pool.workers[0]
+        self.assertEqual(
+            self.app._verify_thread_cookie("/pinned", f"{worker.thread_id}.deadbeef"), ""
+        )
+
+    def test_current_cookies_carry_three_parts(self):
+        worker = self.app.router.routes[0].thread_pool.workers[0]
+        self.assertEqual(
+            len(self.app._sign_thread_cookie("/pinned", worker.thread_id).split(".")), 3
+        )
+
+    def test_an_expired_cookie_is_refused(self):
+        worker = self.app.router.routes[0].thread_pool.workers[0]
+        stale = self.app._sign_thread_cookie(
+            "/pinned", worker.thread_id, issued_at=time.time() - 7200
+        )
+        self.assertEqual(
+            self.app._verify_thread_cookie("/pinned", stale, ttl_seconds=60), ""
+        )
+
+    def test_a_cookie_issued_in_the_future_is_refused(self):
+        worker = self.app.router.routes[0].thread_pool.workers[0]
+        ahead = self.app._sign_thread_cookie(
+            "/pinned", worker.thread_id, issued_at=time.time() + 3600
+        )
+        self.assertEqual(self.app._verify_thread_cookie("/pinned", ahead), "")

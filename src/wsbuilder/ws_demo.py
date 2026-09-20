@@ -25,7 +25,9 @@ try:
 except Exception:
     from metrics import AppMetrics, DEFAULT_STREAM_POINTS
 
-HOST = '0.0.0.0'
+# Loopback by default: the maintained entry point and the documentation both
+# say exposing the demo to the network is an explicit choice, not a default.
+HOST = '127.0.0.1'
 PORT = 8765
 
 MAGIC_WS = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
