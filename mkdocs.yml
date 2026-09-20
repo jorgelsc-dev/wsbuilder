@@ -20,6 +20,7 @@ nav:
       - WebSocket: websocket.md
       - Datos y ORM: data-orm.md
       - Cache y Seguridad: cache-security.md
+      - TLS y Certificados: tls-certificates.md
       - Observabilidad y Tareas: observability-tasks.md
       - Red y Edge: network-edge.md
       - IA y Prediccion: ai-predict.md

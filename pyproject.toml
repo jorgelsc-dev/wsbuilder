@@ -25,6 +25,12 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.optional-dependencies]
+# TLS material handling (wsbuilder.pki). Kept optional so the core framework
+# stays dependency-free and the offline install documented in docs/install.md
+# keeps working.
+tls = ["cryptography>=42"]
+
 [project.urls]
 Homepage = "https://github.com/jorgelsc-dev/wsbuilder"
 Documentation = "https://wsbuilder.jorgelsc.dev/"
