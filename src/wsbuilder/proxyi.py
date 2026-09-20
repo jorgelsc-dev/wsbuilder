@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from html import escape as html_escape
 from urllib.parse import urlsplit
 
-from .http import Request, Response
+from .http import Response
 
 DEFAULT_STREAM_POINTS = 5
 DEFAULT_MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024

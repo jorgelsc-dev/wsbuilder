@@ -25,6 +25,7 @@ import shutil
 import ssl
 import tempfile
 import threading
+import weakref
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -136,7 +137,26 @@ class MaterializedFiles:
         self.certificate = certificate
         self.private_key = private_key
         self.ca = ca
-        self._closed = False
+        # A caller who forgets to close would otherwise strand a private key
+        # on disk for the life of the machine. The finalizer runs on garbage
+        # collection and again at interpreter exit, and is idempotent, so
+        # close() simply invokes it.
+        self._finalizer = weakref.finalize(
+            self, self._erase, directory, (certificate, private_key, ca)
+        )
+
+    @staticmethod
+    def _erase(directory, paths):
+        # Deliberately free of any reference to the instance: holding one
+        # would keep it alive and the finalizer would never run.
+        for path in paths:
+            if path:
+                _wipe_file(path)
+        shutil.rmtree(directory, ignore_errors=True)
+
+    @property
+    def closed(self):
+        return not self._finalizer.alive
 
     def __enter__(self):
         return self
@@ -146,16 +166,7 @@ class MaterializedFiles:
         return False
 
     def close(self):
-        if self._closed:
-            return
-        self._closed = True
-        for path in (self.certificate, self.private_key, self.ca):
-            if path:
-                _wipe_file(path)
-        try:
-            shutil.rmtree(self.directory, ignore_errors=True)
-        except OSError:
-            pass
+        self._finalizer()
 
 
 class TLSMaterial:
@@ -172,6 +183,36 @@ class TLSMaterial:
         self.chain_pem = bytes(chain_pem or b"")
         self.key_password = key_password
         self._certificate = x509.load_pem_x509_certificate(self.certificate_pem)
+        self._check_key_matches_certificate()
+
+    def _check_key_matches_certificate(self):
+        """Reject a key that does not belong to the certificate.
+
+        Stored material can drift apart -- a half-written row, two rotations
+        interleaved. Without this the mismatch only surfaces inside OpenSSL as
+        `[X509: KEY_VALUES_MISMATCH]`, far from the cause.
+        """
+        secret = self.key_password
+        if secret is not None and not isinstance(secret, bytes):
+            secret = str(secret).encode("utf-8")
+        try:
+            private_key = serialization.load_pem_private_key(
+                self.private_key_pem, password=secret
+            )
+        except (ValueError, TypeError):
+            # Unreadable here (wrong or absent passphrase) is not the same as
+            # mismatched; leave that to whoever supplies the password.
+            return
+        public_format = dict(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        if private_key.public_key().public_bytes(**public_format) != self._certificate.public_key(
+        ).public_bytes(**public_format):
+            raise ValueError(
+                "the private key does not match the certificate "
+                f"(subject {self._certificate.subject.rfc4514_string()})"
+            )
 
     @property
     def certificate(self):
@@ -311,8 +352,11 @@ class CertificateAuthority:
     ):
         private_key = _generate_private_key(key_type, rsa_key_size)
         subject = _build_name(common_name, organization, country)
+        span = float(valid_days)
+        if span <= 0:
+            raise ValueError("valid_days must be greater than zero")
         start = not_before or (_utcnow() - _datetime.timedelta(minutes=5))
-        end = start + _datetime.timedelta(days=int(valid_days))
+        end = start + _datetime.timedelta(days=span)
         public_key = private_key.public_key()
         certificate = (
             x509.CertificateBuilder()
@@ -400,10 +444,13 @@ class CertificateAuthority:
         if self._certificate.not_valid_after_utc <= _utcnow():
             raise ValueError("the certificate authority has expired")
 
+        span = float(valid_days)
+        if span <= 0:
+            raise ValueError("valid_days must be greater than zero")
         private_key = _generate_private_key(key_type, rsa_key_size)
         public_key = private_key.public_key()
         start = not_before or (_utcnow() - _datetime.timedelta(minutes=5))
-        end = start + _datetime.timedelta(days=float(valid_days))
+        end = start + _datetime.timedelta(days=span)
         if end > self._certificate.not_valid_after_utc:
             # A leaf outliving its issuer is rejected by every verifier.
             end = self._certificate.not_valid_after_utc
@@ -681,6 +728,20 @@ def install_tls(
     With no ``manager`` and no ``ca`` a throwaway local authority is created,
     which is enough to serve HTTPS in development.
     """
+    if manager is not None:
+        ignored = {
+            "ca": ca,
+            "dns_names": dns_names,
+            "rotate": rotate or None,
+            "ip_addresses": None if ip_addresses == ("127.0.0.1",) else ip_addresses,
+            **kwargs,
+        }
+        supplied = sorted(name for name, value in ignored.items() if value)
+        if supplied or common_name != "localhost":
+            raise TypeError(
+                "install_tls takes either manager= or the arguments used to "
+                f"build one, not both; drop {', '.join(supplied) or 'common_name'}"
+            )
     if manager is None:
         if ca is None:
             ca = CertificateAuthority.create(f"{common_name} Local CA")

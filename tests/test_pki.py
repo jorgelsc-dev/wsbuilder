@@ -440,3 +440,272 @@ class TestOptionalDependency(unittest.TestCase):
 
         with self.assertRaises(AttributeError):
             wsbuilder.ThisDoesNotExist
+
+
+class TestMaterialValidation(unittest.TestCase):
+    """Regressions from review cycle 1."""
+
+    def setUp(self):
+        self.ca = CertificateAuthority.create("Test CA")
+
+    def test_key_that_belongs_to_another_certificate_is_caught_early(self):
+        one = self.ca.issue("one.test")
+        other = self.ca.issue("other.test")
+        # Without the check this only failed inside OpenSSL as
+        # [X509: KEY_VALUES_MISMATCH], far from where the pairing broke.
+        with self.assertRaisesRegex(ValueError, "does not match the certificate"):
+            TLSMaterial(one.certificate_pem, other.private_key_pem)
+
+    def test_matching_material_is_accepted(self):
+        good = self.ca.issue("good.test")
+        rebuilt = TLSMaterial(good.certificate_pem, good.private_key_pem, good.chain_pem)
+        self.assertEqual(rebuilt.serial_number, good.serial_number)
+
+    def test_an_unreadable_key_is_not_reported_as_a_mismatch(self):
+        good = self.ca.issue("good.test", key_password="secret")
+        # No password supplied here: unverifiable, but not proof of mismatch.
+        material = TLSMaterial(good.certificate_pem, good.private_key_pem)
+        self.assertEqual(material.subject, "CN=good.test")
+
+    def test_encrypted_key_is_verified_when_the_password_is_known(self):
+        good = self.ca.issue("good.test", key_password="secret")
+        other = self.ca.issue("other.test", key_password="secret")
+        self.assertEqual(
+            TLSMaterial(
+                good.certificate_pem, good.private_key_pem, key_password="secret"
+            ).subject,
+            "CN=good.test",
+        )
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            TLSMaterial(good.certificate_pem, other.private_key_pem, key_password="secret")
+
+    def test_fractional_validity_is_honoured_not_truncated(self):
+        # int(0.5) == 0 produced an authority that was already expired.
+        half_day = CertificateAuthority.create("Half CA", valid_days=0.5)
+        span = half_day.not_valid_after - half_day.certificate.not_valid_before_utc
+        self.assertAlmostEqual(span.total_seconds(), 43200, delta=1)
+
+    def test_non_positive_validity_is_rejected(self):
+        for days in (0, -1):
+            with self.subTest(days=days):
+                with self.assertRaisesRegex(ValueError, "greater than zero"):
+                    CertificateAuthority.create("X", valid_days=days)
+                with self.assertRaisesRegex(ValueError, "greater than zero"):
+                    self.ca.issue("x.test", valid_days=days)
+
+    def test_install_tls_refuses_a_manager_plus_build_arguments(self):
+        app = App()
+        self.addCleanup(app.close)
+        manager = CertificateManager(ca=self.ca, common_name="fixed")
+        with self.assertRaisesRegex(TypeError, "not both"):
+            install_tls(app, manager=manager, rotate=True)
+        with self.assertRaisesRegex(TypeError, "not both"):
+            install_tls(app, manager=manager, common_name="other")
+        # A manager on its own is still fine.
+        self.assertIs(install_tls(app, manager=manager), manager)
+
+
+class TestMaterializedFileLifetime(unittest.TestCase):
+    """Regressions from review cycle 2."""
+
+    def setUp(self):
+        self.ca = CertificateAuthority.create("Test CA")
+        self.leaf = self.ca.issue("localhost")
+
+    @staticmethod
+    def _leftovers():
+        import glob
+        import tempfile
+
+        return glob.glob(os.path.join(tempfile.gettempdir(), "wsbuilder-tls-*"))
+
+    def test_abandoned_material_is_erased_without_an_explicit_close(self):
+        import gc
+
+        before = len(self._leftovers())
+        for _ in range(5):
+            self.leaf.materialize()  # no close, no surviving reference
+        gc.collect()
+        self.assertEqual(len(self._leftovers()), before)
+
+    def test_closed_reports_the_state(self):
+        files = self.leaf.materialize()
+        self.assertFalse(files.closed)
+        key_path = files.private_key
+        files.close()
+        self.assertTrue(files.closed)
+        self.assertFalse(os.path.exists(key_path))
+
+    def test_repeated_close_is_idempotent(self):
+        files = self.leaf.materialize()
+        files.close()
+        files.close()
+        self.assertTrue(files.closed)
+
+    def test_building_many_contexts_leaves_nothing_behind(self):
+        before = len(self._leftovers())
+        for _ in range(5):
+            self.leaf.ssl_context()
+        self.assertEqual(len(self._leftovers()), before)
+
+    def test_concurrent_rotation_and_use_stay_consistent(self):
+        manager = CertificateManager(
+            ca=self.ca, common_name="localhost", rotate=True, valid_days=1
+        )
+        errors = []
+
+        def hammer(call):
+            for _ in range(15):
+                try:
+                    call()
+                except Exception as exc:  # noqa: BLE001 - recorded, then asserted
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=hammer, args=(manager.ssl_context,)) for _ in range(3)]
+        threads += [threading.Thread(target=hammer, args=(manager.rotate,)) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(manager.rotations, 31)
+
+
+class TestFailureAndIntegration(unittest.TestCase):
+    """Regressions from review cycle 3."""
+
+    class _Exploding:
+        def ssl_context(self):
+            raise RuntimeError("rotation failed")
+
+    def test_a_failed_context_refuses_the_connection_without_leaking_it(self):
+        app = App()
+        self.addCleanup(app.close)
+        app.enable_metrics()
+        server = HTTPServer("127.0.0.1", 0, app, ssl_context=self._Exploding())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5.0)
+        self.addCleanup(server.stop)
+        self.assertTrue(server.wait_until_serving(timeout=5.0))
+
+        before = len(os.listdir("/proc/self/fd"))
+        for _ in range(4):
+            try:
+                with socket.create_connection(server.server_address, timeout=2.0) as client:
+                    client.recv(16)
+            except OSError:
+                pass
+
+        deadline = __import__("time").monotonic() + 5.0
+        while __import__("time").monotonic() < deadline:
+            if app.metrics.total_errors >= 4:
+                break
+            __import__("time").sleep(0.05)
+
+        # The worker used to die with a traceback and strand the socket.
+        self.assertTrue(thread.is_alive())
+        self.assertEqual(app.metrics.total_errors, 4)
+        self.assertLessEqual(len(os.listdir("/proc/self/fd")) - before, 1)
+
+    def test_metrics_snapshot_carries_the_certificate_state(self):
+        app = App()
+        self.addCleanup(app.close)
+        metrics = app.enable_metrics()
+        manager = app.enable_tls(common_name="localhost", rotate=True)
+        manager.current()
+
+        snapshot = metrics.snapshot()
+
+        self.assertEqual(snapshot["tls"]["mode"], "rotating")
+        self.assertEqual(snapshot["tls"]["certificate"]["dns_names"], ["localhost"])
+        self.assertEqual(snapshot["tls"]["rotations"], 1)
+
+    def test_describe_before_first_use_reports_no_certificate_yet(self):
+        manager = CertificateManager(ca=CertificateAuthority.create("CA"))
+        self.assertIsNone(manager.describe()["certificate"])
+        manager.current()
+        self.assertIsNotNone(manager.describe()["certificate"])
+
+
+class TestInstallArgumentHygiene(unittest.TestCase):
+    """Regression from review cycle 4."""
+
+    def test_ip_addresses_beside_a_manager_is_refused_too(self):
+        app = App()
+        self.addCleanup(app.close)
+        manager = CertificateManager(ca=CertificateAuthority.create("CA"))
+        with self.assertRaisesRegex(TypeError, "ip_addresses"):
+            install_tls(app, manager=manager, ip_addresses=["10.0.0.1"])
+        # The default value must not trip the check.
+        self.assertIs(install_tls(app, manager=manager), manager)
+
+
+class TestMutualTLS(unittest.TestCase):
+    def setUp(self):
+        self.ca = CertificateAuthority.create("mTLS CA")
+        self.manager = CertificateManager(
+            ca=self.ca,
+            common_name="localhost",
+            dns_names=["localhost"],
+            ip_addresses=["127.0.0.1"],
+            client_ca_pem=self.ca.certificate_pem,
+            require_client_cert=True,
+        )
+        self.client_cert = self.ca.issue("client", client_auth=True, server_auth=False)
+
+        app = App()
+        self.addCleanup(app.close)
+
+        @app.api("/who", methods=("GET",))
+        def who(request):
+            peer = (request.tls or {}).get("peer_cert") or {}
+            return {"subject": str(peer.get("subject", ""))}
+
+        self.server = HTTPServer("127.0.0.1", 0, app, ssl_context=self.manager)
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5.0)
+        self.addCleanup(self.server.stop)
+        self.assertTrue(self.server.wait_until_serving(timeout=5.0))
+
+    def _request(self, present_certificate):
+        context = ssl.create_default_context(cadata=self.ca.certificate_pem.decode())
+        if present_certificate:
+            with self.client_cert.materialize() as files:
+                context.load_cert_chain(files.certificate, files.private_key)
+        with socket.create_connection(self.server.server_address, timeout=5.0) as raw:
+            with context.wrap_socket(raw, server_hostname="localhost") as tls:
+                tls.sendall(b"GET /who HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                received = b""
+                while True:
+                    chunk = tls.recv(4096)
+                    if not chunk:
+                        break
+                    received += chunk
+        return received
+
+    def test_a_client_certificate_reaches_the_handler(self):
+        received = self._request(present_certificate=True)
+        self.assertIn(b"200 OK", received)
+        self.assertIn(b"commonName", received)
+        self.assertIn(b"client", received)
+
+    def test_a_client_without_a_certificate_is_refused(self):
+        with self.assertRaises(ssl.SSLError):
+            self._request(present_certificate=False)
+
+    def test_client_auth_certificates_declare_the_right_usage(self):
+        from cryptography import x509
+
+        usage = self.client_cert.certificate.extensions.get_extension_for_class(
+            x509.ExtendedKeyUsage
+        ).value
+        oids = {u.dotted_string for u in usage}
+        self.assertIn("1.3.6.1.5.5.7.3.2", oids)  # clientAuth
+        self.assertNotIn("1.3.6.1.5.5.7.3.1", oids)  # serverAuth
+
+    def test_a_certificate_needs_at_least_one_usage(self):
+        with self.assertRaisesRegex(ValueError, "server_auth, client_auth or both"):
+            self.ca.issue("nobody", client_auth=False, server_auth=False)

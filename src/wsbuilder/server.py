@@ -129,7 +129,20 @@ class HTTPServer:
     def handle_conn(self, conn, addr):
         metrics = getattr(self.app, "metrics", None)
         security = getattr(self.app, "security", None)
-        context = self._resolve_ssl_context()
+        try:
+            context = self._resolve_ssl_context()
+        except Exception as e:
+            # A failed rotation (expired authority, unreachable store) must
+            # refuse the connection, not kill the worker and strand the socket.
+            print(f"[tls] could not resolve a context for {addr}: {e}")
+            metrics = getattr(self.app, "metrics", None)
+            if metrics:
+                metrics.error("tls_context", e)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return
         tls_meta = {
             "enabled": context is not None,
             "peer_cert": None,

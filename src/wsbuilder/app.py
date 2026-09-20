@@ -658,6 +658,12 @@ class App:
             security = getattr(self, "security", None)
             if security:
                 data["security"] = security.snapshot()
+            tls = getattr(self, "tls", None)
+            if tls and hasattr(tls, "describe"):
+                try:
+                    data["tls"] = tls.describe()
+                except Exception as e:
+                    data["tls_error"] = str(e)
             proxyi = getattr(self, "proxyi", None)
             if proxyi:
                 try:
