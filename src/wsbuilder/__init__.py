@@ -94,6 +94,37 @@ from .ia import (
 )
 from .predicts import Predictor
 
+#: Names served from wsbuilder.pki, which needs the optional `tls` extra.
+_PKI_EXPORTS = frozenset(
+    {
+        "CertificateAuthority",
+        "CertificateManager",
+        "MaterializedFiles",
+        "TLSMaterial",
+        "install_tls",
+    }
+)
+
+
+def __getattr__(name):
+    """Resolve TLS helpers lazily so cryptography stays an optional install."""
+    if name in _PKI_EXPORTS:
+        try:
+            from . import pki
+        except ImportError as exc:  # pragma: no cover - depends on the install
+            raise ImportError(
+                f"wsbuilder.{name} needs the 'cryptography' package. "
+                "Install it with: pip install wsbuilder[tls]"
+            ) from exc
+        value = getattr(pki, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | _PKI_EXPORTS)
+
 __version__ = "0.25.9.dev0"
 
 __all__ = [
@@ -196,4 +227,9 @@ __all__ = [
     "evaluate_errors",
     "submit_training_task",
     "Predictor",
+    "CertificateAuthority",
+    "CertificateManager",
+    "MaterializedFiles",
+    "TLSMaterial",
+    "install_tls",
 ]

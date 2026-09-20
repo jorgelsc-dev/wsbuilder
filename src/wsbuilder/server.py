@@ -122,16 +122,47 @@ class HTTPServer:
     def _reuse_allowed(self):
         return self.MAX_KEEPALIVE_REQUESTS != 1
 
+    def _resolve_ssl_context(self):
+        """Resolve the TLS context for one connection.
+
+        Taking a manager or a callable here, rather than one fixed context, is
+        what lets a rotating certificate reach new connections without
+        restarting the server.
+        """
+        source = self.ssl_context
+        if source is None:
+            return None
+        provider = getattr(source, "ssl_context", None)
+        if callable(provider):
+            return provider()
+        if callable(source):
+            return source()
+        return source
+
     def handle_conn(self, conn, addr):
+        try:
+            context = self._resolve_ssl_context()
+        except Exception as e:
+            # A failed rotation (expired authority, unreachable store) must
+            # refuse the connection, not kill the worker and strand the socket.
+            print(f"[tls] could not resolve a context for {addr}: {e}")
+            metrics = getattr(self.app, "metrics", None)
+            if metrics:
+                metrics.error("tls_context", e)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return
         tls_meta = {
-            "enabled": bool(self.ssl_context),
+            "enabled": context is not None,
             "peer_cert": None,
             "cipher": None,
             "version": None,
         }
-        if self.ssl_context:
+        if context is not None:
             try:
-                conn = self.ssl_context.wrap_socket(conn, server_side=True)
+                conn = context.wrap_socket(conn, server_side=True)
                 conn.settimeout(self.REQUEST_READ_TIMEOUT_SECONDS)
                 tls_meta["peer_cert"] = conn.getpeercert()
                 tls_meta["cipher"] = conn.cipher()
