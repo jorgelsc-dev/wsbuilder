@@ -11,6 +11,7 @@ of order, and only once a stream is contiguous does the layer above see it.
 """
 
 import os
+import threading
 
 from . import frames as qframes
 from .crypto import (
@@ -44,6 +45,8 @@ LEVEL_APPLICATION = "application"
 
 VERSION_1 = 0x00000001
 MAX_DATAGRAM_SIZE = 1350
+#: Largest stream payload put in one frame, leaving room for the packet header.
+STREAM_CHUNK_SIZE = 1000
 
 # Transport parameter identifiers (RFC 9000 section 18.2).
 TP_ORIGINAL_DESTINATION_CONNECTION_ID = 0x00
@@ -136,6 +139,11 @@ class QuicConnection:
         self.crypto_buffers = {level: StreamBuffer() for level in
                                (LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION)}
         self.streams = {}
+        # Stream bytes queued from other threads (a WebSocket handler, a
+        # streaming response) and sent by the thread that owns the socket.
+        self._outbound_lock = threading.Lock()
+        self._outbound = []
+        self._send_offsets = {}
         self.handshake_complete = False
         self.closed = False
         self.alpn = None
@@ -394,6 +402,46 @@ class QuicConnection:
 
     def send_stream_data(self, stream_id, payload, fin=True, offset=0):
         return qframes.StreamFrame(stream_id, offset, payload, fin)
+
+    def queue_stream_data(self, stream_id, payload, fin=False):
+        """Queue bytes for a stream from any thread; :meth:`drain_outbound` sends them.
+
+        Data is cut into frames small enough for one packet, and each stream
+        keeps its own send offset, so successive calls append to the stream.
+        """
+        data = bytes(payload)
+        pieces = [data[i:i + STREAM_CHUNK_SIZE] for i in range(0, len(data), STREAM_CHUNK_SIZE)]
+        if not pieces:
+            pieces = [b""]
+        with self._outbound_lock:
+            for index, piece in enumerate(pieces):
+                last = index == len(pieces) - 1
+                self._outbound.append((int(stream_id), piece, bool(fin) and last))
+
+    def drain_outbound(self):
+        """Packetize queued stream bytes. Call from the thread that owns the socket.
+
+        Returns the datagrams to send. Bytes stay queued until the 1-RTT send
+        keys exist, so nothing is lost while the handshake is still running.
+        """
+        if self.closed or self.keys.get(LEVEL_APPLICATION, {}).get("send") is None:
+            return []
+        with self._outbound_lock:
+            pending, self._outbound = self._outbound, []
+        datagrams = []
+        for index, (stream_id, piece, fin) in enumerate(pending):
+            offset = self._send_offsets.get(stream_id, 0)
+            frame = qframes.StreamFrame(stream_id, offset, piece, fin)
+            sent = self._flush([(LEVEL_APPLICATION, [frame])])
+            if not sent:
+                # The anti-amplification limit refused this packet. Keep it and
+                # everything after it for the next call, so no bytes are lost.
+                with self._outbound_lock:
+                    self._outbound[:0] = pending[index:]
+                break
+            self._send_offsets[stream_id] = offset + len(piece)
+            datagrams.extend(sent)
+        return datagrams
 
     @staticmethod
     def ack_ranges(numbers):
