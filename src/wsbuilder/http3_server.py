@@ -17,6 +17,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
 from . import http3
+from .http3_websocket import Http3WebSocketStream
 from .quic.address import AddressValidator
 from .quic.connection import MAX_DATAGRAM_SIZE, QuicConnection
 from .quic.crypto import retry_integrity_tag
@@ -51,10 +52,15 @@ def certificate_chain_der(material):
     return [c.public_bytes(serialization.Encoding.DER) for c in chain]
 
 
+#: Server-initiated unidirectional stream id 3 carries the control stream.
+CONTROL_STREAM_ID = 3
+
+
 class Http3Server:
     """Serves an app over QUIC on a UDP socket."""
 
-    ACCEPT_TIMEOUT_SECONDS = 0.5
+    #: Short enough that bytes queued by a handler thread leave promptly.
+    ACCEPT_TIMEOUT_SECONDS = 0.02
 
     def __init__(self, host, port, app, tls, *, max_connections=DEFAULT_MAX_CONNECTIONS,
                  require_address_validation=False):
@@ -116,12 +122,13 @@ class Http3Server:
                         sock.sendto(reply, address)
                 except Exception as e:
                     print(f"[http3] error from {address}: {e}")
+                self._send_outbound()
         finally:
             self._serving.clear()
             sock.close()
 
     def _tick(self, now=None):
-        """Fire any due loss timer and send what it asks for."""
+        """Fire any due loss timer, send queued stream bytes, and send what both ask for."""
         import time as _time
 
         moment = _time.monotonic() if now is None else now
@@ -131,6 +138,18 @@ class Http3Server:
             if deadline is None or deadline > moment:
                 continue
             for datagram in connection.on_timeout(now=moment):
+                try:
+                    self._sock.sendto(datagram, connection.client_address)
+                    sent += 1
+                except OSError:
+                    break
+        return sent + self._send_outbound()
+
+    def _send_outbound(self):
+        """Send stream bytes that handler threads queued. Runs on the socket thread."""
+        sent = 0
+        for connection in {id(c): c for c in self.connections.values()}.values():
+            for datagram in connection.drain_outbound():
                 try:
                     self._sock.sendto(datagram, connection.client_address)
                     sent += 1
@@ -167,7 +186,9 @@ class Http3Server:
             # everything after the handshake tells it which to use.
             self.connections[bytes(key)] = connection
             self.connections[connection.host_cid] = connection
-        replies = connection.receive_datagram(datagram, address=address)
+        replies = list(connection.receive_datagram(datagram, address=address))
+        # Answers queued while handling this datagram leave in the same reply.
+        replies.extend(connection.drain_outbound())
         if connection.closed:
             self._drop(connection)
         return replies
@@ -197,13 +218,17 @@ class Http3Server:
         private_key = serialization.load_pem_private_key(
             material.private_key_pem, password=material.key_password
         )
-        return QuicConnection(
+        connection = QuicConnection(
             certificate_chain_der(material),
             private_key,
             alpn_protocols=("h3",),
             client_address=address,
             on_stream_data=self._on_stream_data,
         )
+        # RFC 9114 section 6.2.1: the server opens a control stream carrying
+        # SETTINGS, which is where a client learns CONNECT is allowed.
+        connection.queue_stream_data(CONTROL_STREAM_ID, http3.build_control_stream(), fin=False)
+        return connection
 
     def _drop(self, connection):
         for key in [k for k, value in self.connections.items() if value is connection]:
@@ -230,7 +255,27 @@ class Http3Server:
             ready = stream.feed(data, fin=complete)
         except http3.H3Error as e:
             print(f"[http3] stream {stream_id}: {e}")
+            if stream.websocket is not None:
+                stream.websocket.push_eof()
             return []
+
+        if stream.websocket is not None:
+            self._pump_websocket(stream)
+            return []
+
+        if not stream.answered and stream.headers is not None:
+            try:
+                extended = http3.is_extended_connect(stream)
+            except http3.H3Error as e:
+                print(f"[http3] malformed request on stream {stream_id}: {e}")
+                return []
+            if extended:
+                # RFC 9220: a WebSocket request is answered at once and its
+                # stream stays open, so the body is never waited for.
+                stream.answered = True
+                self._open_websocket(connection, stream)
+                return []
+
         if not ready or stream.answered:
             return []
         stream.answered = True
@@ -242,8 +287,145 @@ class Http3Server:
         except http3.H3Error as e:
             print(f"[http3] malformed request on stream {stream_id}: {e}")
             return []
-        payload = http3.build_response_frames(response, send_body=request.method != "HEAD")
-        return [connection.send_stream_data(stream_id, payload, fin=True)]
+        self._send_response(connection, stream_id, response, send_body=request.method != "HEAD")
+        return []
+
+    def _send_response(self, connection, stream_id, response, *, send_body):
+        """Queue a response. A streamed body is sent chunk by chunk as it is produced."""
+        if not getattr(response, "is_stream", False) or not send_body:
+            payload = http3.build_response_frames(response, send_body=send_body)
+            connection.queue_stream_data(stream_id, payload, fin=True)
+            return
+
+        from .http import _iter_stream_chunks
+
+        connection.queue_stream_data(
+            stream_id,
+            http3.encode_headers_frame(http3.build_response_head(response.status, response.headers)),
+            fin=False,
+        )
+
+        def pump():
+            try:
+                for chunk in _iter_stream_chunks(response.stream):
+                    if connection.closed:
+                        break
+                    connection.queue_stream_data(stream_id, http3.encode_frame(http3.FRAME_DATA, chunk))
+            except Exception as e:
+                print(f"[http3] streaming response on stream {stream_id} failed: {e}")
+            finally:
+                # Closing the producer lets its own cleanup run (for example a
+                # realtime client deregistering itself) once the peer is gone.
+                close = getattr(response.stream, "close", None)
+                if callable(close):
+                    close()
+                connection.queue_stream_data(stream_id, b"", fin=True)
+
+        threading.Thread(target=pump, name=f"http3-stream-{stream_id}", daemon=True).start()
+
+    def _open_websocket(self, connection, stream):
+        """Answer an extended CONNECT: accept it onto a route, or refuse it."""
+        tls_meta = {"enabled": True, "version": "TLSv1.3", "alpn": connection.alpn}
+        try:
+            request = http3.build_request(stream, connection.client_address, tls_meta)
+        except http3.H3Error as e:
+            print(f"[http3] malformed WebSocket request on stream {stream.id}: {e}")
+            connection.queue_stream_data(stream.id, self._refusal(400, "Bad Request"), fin=True)
+            return
+
+        route = self.app.ws_routes.get(request.path)
+        if route is None:
+            connection.queue_stream_data(stream.id, self._refusal(404, "Not Found"), fin=True)
+            return
+        if request.headers.get("sec-websocket-version", "") != "13":
+            connection.queue_stream_data(
+                stream.id,
+                http3.encode_headers_frame(
+                    http3.build_response_head(426, {"sec-websocket-version": "13"})
+                ),
+                fin=True,
+            )
+            return
+
+        security = getattr(self.app, "security", None)
+        if security is not None:
+            decision = security.evaluate(request)
+            if not decision.allowed:
+                response = decision.to_response()
+                security.observe_response(request, response.status)
+                self._send_response(connection, stream.id, response, send_body=True)
+                return
+
+        subprotocol = self._choose_subprotocol(request, route)
+        headers = {"sec-websocket-protocol": subprotocol} if subprotocol else {}
+        connection.queue_stream_data(
+            stream.id,
+            http3.encode_headers_frame(http3.build_response_head(200, headers)),
+            fin=False,
+        )
+        transport = Http3WebSocketStream(connection, stream.id)
+        stream.websocket = transport
+        self._pump_websocket(stream)
+
+        threading.Thread(
+            target=self._run_websocket,
+            args=(route, transport, request, subprotocol),
+            name=f"http3-ws-{stream.id}",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _refusal(status, text):
+        """A complete small response, as the frames for a stream."""
+        from .http import Response
+
+        return http3.build_response_frames(Response.text(text, status=status))
+
+    @staticmethod
+    def _choose_subprotocol(request, route):
+        offered = [item.strip() for item in request.headers.get("sec-websocket-protocol", "").split(",")]
+        supported = tuple(route.get("subprotocols", ()) or ())
+        for candidate in offered:
+            if candidate and candidate in supported:
+                return candidate
+        return ""
+
+    def _pump_websocket(self, stream):
+        """Hand the WebSocket bytes that just arrived to the transport."""
+        transport = stream.websocket
+        payload = bytes(stream.body)
+        stream.body.clear()
+        transport.push(payload)
+        if stream.finished:
+            transport.push_eof()
+
+    @staticmethod
+    def _run_websocket(route, transport, request, subprotocol):
+        """Run the route's handler over the stream, the way the HTTP/1 path does."""
+        from .ws import WebSocket
+
+        ws = WebSocket(
+            transport,
+            request.client,
+            subprotocol,
+            request.headers,
+            supported_subprotocols=route.get("subprotocols", ()),
+            idle_timeout=route.get("idle_timeout", 0.0),
+            keepalive_interval=route.get("keepalive_interval", 0.0),
+            pong_timeout=route.get("pong_timeout", 0.0),
+            auto_pong=route.get("auto_pong", True),
+            on_close=route.get("on_close"),
+            on_error=route.get("on_error"),
+            on_timeout=route.get("on_timeout"),
+            io_poll_interval=route.get("io_poll_interval", 1.0),
+            ping_payload=route.get("ping_payload", b""),
+        )
+        try:
+            route["handler"](ws, request)
+        except Exception as e:
+            print(f"[ws] error over HTTP/3: {e}")
+        finally:
+            transport.close()
 
     def describe(self):
         return {

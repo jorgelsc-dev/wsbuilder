@@ -98,6 +98,19 @@ def algo(request):
     return Response.json({"ok": True}, headers={"Alt-Svc": alt_svc_header(8443)})
 ```
 
+### Streaming y WebSocket sobre HTTP/3
+
+- Una respuesta con `stream=` se envia por trozos a medida que el generador los
+  produce, en lugar de unirse en memoria. Sirve para SSE y respuestas largas.
+- Un `CONNECT` con `:protocol: websocket` (RFC 9220) se responde 200 y el stream
+  queda abierto en ambos sentidos. Las rutas `@app.ws(...)` se ejecutan sobre
+  ese stream con la misma API que en HTTP/1.1, asi que el handler no cambia.
+- El servidor anuncia `SETTINGS_ENABLE_CONNECT_PROTOCOL` en su control stream
+  (RFC 9114 section 6.2.1); sin eso un cliente no sabe que puede hacer CONNECT.
+
+Un cliente HTTP/3 que no soporte RFC 9220 no podra abrir WebSockets, pero sigue
+pudiendo hacer peticiones normales y recibir respuestas en streaming.
+
 ### Por que TLS 1.3 esta escrito a mano
 
 QUIC **no transporta registros TLS**. Los mensajes de handshake viajan dentro de
@@ -196,3 +209,4 @@ de perdidas real, pero sin las piezas que listo arriba.
 | Proteccion de paquetes | apendice A de RFC 9001: secretos, claves AES y ChaCha20, mascaras de cabecera |
 | TLS 1.3 | ClientHellos reales de OpenSSL; key schedule contra las constantes publicadas |
 | HTTP/3 | peticion y respuesta sobre UDP real |
+| HTTP/3 streaming y WebSocket | respuesta por trozos y CONNECT extendido (RFC 9220) sobre UDP real |

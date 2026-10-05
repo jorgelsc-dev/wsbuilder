@@ -40,6 +40,9 @@ STREAM_QPACK_DECODER = 0x03
 SETTINGS_QPACK_MAX_TABLE_CAPACITY = 0x01
 SETTINGS_MAX_FIELD_SECTION_SIZE = 0x06
 SETTINGS_QPACK_BLOCKED_STREAMS = 0x07
+#: RFC 9220: lets a client send ``CONNECT`` with a ``:protocol`` pseudo-header,
+#: which is how WebSocket runs over HTTP/3.
+SETTINGS_ENABLE_CONNECT_PROTOCOL = 0x08
 
 H3_NO_ERROR = 0x0100
 H3_GENERAL_PROTOCOL_ERROR = 0x0101
@@ -129,7 +132,7 @@ def validate_request_headers(headers):
         if name.startswith(":"):
             if seen_regular:
                 raise H3Error("pseudo-header after a regular field", H3_MESSAGE_ERROR)
-            if name not in (":method", ":scheme", ":authority", ":path"):
+            if name not in (":method", ":scheme", ":authority", ":path", ":protocol"):
                 raise H3Error(f"unknown request pseudo-header {name}", H3_MESSAGE_ERROR)
             if name in pseudo:
                 raise H3Error(f"duplicate pseudo-header {name}", H3_MESSAGE_ERROR)
@@ -144,10 +147,21 @@ def validate_request_headers(headers):
         regular.append((lowered, value))
 
     method = pseudo.get(":method")
-    if method == "CONNECT":
+    if method == "CONNECT" and ":protocol" not in pseudo:
         if ":authority" not in pseudo:
             raise H3Error("CONNECT requires :authority", H3_MESSAGE_ERROR)
+    elif method == "CONNECT":
+        # Extended CONNECT (RFC 9220 section 3) carries the full target.
+        if ":protocol" in pseudo and pseudo[":protocol"] != "websocket":
+            raise H3Error(f"unsupported :protocol {pseudo[':protocol']!r}", H3_MESSAGE_ERROR)
+        for required in (":scheme", ":authority", ":path"):
+            if required not in pseudo:
+                raise H3Error(f"extended CONNECT requires {required}", H3_MESSAGE_ERROR)
+        if not pseudo[":path"]:
+            raise H3Error(":path must not be empty", H3_MESSAGE_ERROR)
     else:
+        if ":protocol" in pseudo:
+            raise H3Error(":protocol is only valid with CONNECT", H3_MESSAGE_ERROR)
         for required in (":method", ":scheme", ":path"):
             if required not in pseudo:
                 raise H3Error(f"missing {required}", H3_MESSAGE_ERROR)
@@ -167,6 +181,8 @@ class RequestStream:
         self.trailers = None
         self.finished = False
         self.answered = False
+        #: Set to a transport once an extended CONNECT has been accepted.
+        self.websocket = None
 
     def feed(self, data, fin=False):
         """Add stream bytes; returns True once the request is complete."""
@@ -226,7 +242,7 @@ def build_request(stream, client_address, tls=None):
     headers = dict(regular)
     if ":authority" in pseudo:
         headers.setdefault("host", pseudo[":authority"])
-    return Request(
+    request = Request(
         method=pseudo.get(":method", "GET"),
         path=path,
         query_string=query,
@@ -237,16 +253,37 @@ def build_request(stream, client_address, tls=None):
         version="HTTP/3",
         trailers=dict(stream.trailers or []),
     )
+    # The RFC 9220 :protocol value, when this is an extended CONNECT.
+    request.h3_protocol = pseudo.get(":protocol")
+    return request
 
 
-def build_response_frames(response, *, send_body=True):
-    """Serialize a Response as the HEADERS and DATA frames of a stream."""
-    fields = [(":status", str(int(response.status)))]
-    for name, value in (response.headers or {}).items():
+def is_extended_connect(stream):
+    """True for a RFC 9220 WebSocket request, which keeps its stream open."""
+    if stream.headers is None:
+        return False
+    pseudo, _ = validate_request_headers(stream.headers)
+    return pseudo.get(":method") == "CONNECT" and ":protocol" in pseudo
+
+
+def build_response_head(status, headers=None):
+    """The HEADERS frame that opens a response, with no body after it."""
+    fields = [(":status", str(int(status)))]
+    for name, value in (headers or {}).items():
         lowered = str(name).lower()
         if lowered in FORBIDDEN_HEADERS:
             continue
         fields.append((lowered, str(value)))
+    return fields
+
+
+def encode_headers_frame(fields):
+    return encode_frame(FRAME_HEADERS, encode_field_section(fields))
+
+
+def build_response_frames(response, *, send_body=True):
+    """Serialize a Response as the HEADERS and DATA frames of a stream."""
+    fields = build_response_head(response.status, response.headers)
 
     body = b""
     if send_body:
@@ -258,7 +295,7 @@ def build_response_frames(response, *, send_body=True):
             body = bytes(response.body)
         fields.append(("content-length", str(len(body))))
 
-    out = encode_frame(FRAME_HEADERS, encode_field_section(fields))
+    out = encode_headers_frame(fields)
     if body:
         out += encode_frame(FRAME_DATA, body)
     return out
@@ -270,6 +307,7 @@ def build_control_stream(settings=None):
         SETTINGS_QPACK_MAX_TABLE_CAPACITY: 0,
         SETTINGS_QPACK_BLOCKED_STREAMS: 0,
         SETTINGS_MAX_FIELD_SECTION_SIZE: 65536,
+        SETTINGS_ENABLE_CONNECT_PROTOCOL: 1,
     }
     if settings:
         values.update(settings)
@@ -287,6 +325,7 @@ __all__ = [
     "H3_MESSAGE_ERROR",
     "H3_NO_ERROR",
     "RequestStream",
+    "SETTINGS_ENABLE_CONNECT_PROTOCOL",
     "SETTINGS_MAX_FIELD_SECTION_SIZE",
     "SETTINGS_QPACK_BLOCKED_STREAMS",
     "SETTINGS_QPACK_MAX_TABLE_CAPACITY",
@@ -296,9 +335,12 @@ __all__ = [
     "build_control_stream",
     "build_request",
     "build_response_frames",
+    "build_response_head",
     "decode_settings",
     "encode_frame",
+    "encode_headers_frame",
     "encode_settings",
+    "is_extended_connect",
     "is_reserved_frame_type",
     "parse_frames",
     "validate_request_headers",

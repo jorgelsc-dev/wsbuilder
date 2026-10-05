@@ -175,14 +175,9 @@ class QuicClientHarness(unittest.TestCase):
         )
         self.sock.sendto(packet, self.server.server_address)
 
-        data, _ = self.sock.recvfrom(65535)
-        pn_offset = 1 + len(self.scid)
-        cleaned, number, pn_length = remove_header_protection(send, data, pn_offset)
-        opened = send.open(
-            number, cleaned[: pn_offset + pn_length], cleaned[pn_offset + pn_length :]
-        )
-        for frame in qf.parse_frames(opened):
-            if isinstance(frame, qf.StreamFrame) and frame.data:
+        # The server also opens its control stream, so look across every reply.
+        for frame in _server_frames(self.sock, send, 1 + len(self.scid)):
+            if isinstance(frame, qf.StreamFrame) and frame.stream_id == stream_id and frame.data:
                 parsed, _tail = http3.parse_frames(frame.data)
                 headers = dict(decode_field_section(parsed[0][1]))
                 content = parsed[1][1] if len(parsed) > 1 else b""
@@ -194,7 +189,9 @@ class TestHandshakeOverUdp(QuicClientHarness):
     def test_the_server_answers_an_initial(self):
         replies = self._handshake()
         self.assertGreaterEqual(len(replies), 1)
-        self.assertTrue(all(is_long_header(reply[0]) for reply in replies))
+        # The Initial flight comes first; 1-RTT datagrams (such as the control
+        # stream) may follow it once the application keys exist.
+        self.assertTrue(is_long_header(replies[0][0]))
 
     def test_the_first_datagram_is_padded_against_amplification(self):
         replies = self._handshake()
@@ -350,6 +347,27 @@ class TestAcknowledgements(unittest.TestCase):
         self.assertEqual(decoded.ranges, [1, (0, 1)])
 
 
+def _server_frames(sock, send, pn_offset):
+    """Every frame in the server's replies until the socket goes quiet."""
+    frames = []
+    previous = sock.gettimeout()
+    sock.settimeout(0.5)
+    try:
+        while True:
+            try:
+                data, _ = sock.recvfrom(65535)
+            except socket.timeout:
+                break
+            cleaned, number, pn_length = remove_header_protection(send, data, pn_offset)
+            opened = send.open(
+                number, cleaned[:pn_offset + pn_length], cleaned[pn_offset + pn_length:]
+            )
+            frames.extend(qf.parse_frames(opened))
+    finally:
+        sock.settimeout(previous)
+    return frames
+
+
 class TestAcknowledgementsOverUdp(QuicClientHarness):
     def test_the_handshake_flight_acknowledges_the_initial(self):
         replies = self._handshake()
@@ -389,15 +407,10 @@ class TestAcknowledgementsOverUdp(QuicClientHarness):
             ),
             self.server.server_address,
         )
-        data, _ = self.sock.recvfrom(65535)
-        pn_offset = 1 + len(self.scid)
-        cleaned, number, pn_length = remove_header_protection(send, data, pn_offset)
-        opened = send.open(
-            number, cleaned[: pn_offset + pn_length], cleaned[pn_offset + pn_length :]
-        )
-        decoded = qf.parse_frames(opened)
+        decoded = _server_frames(self.sock, send, 1 + len(self.scid))
         self.assertTrue(any(isinstance(frame, qf.AckFrame) for frame in decoded))
-        self.assertTrue(any(isinstance(frame, qf.StreamFrame) for frame in decoded))
+        self.assertTrue(any(isinstance(frame, qf.StreamFrame) and frame.stream_id == 0
+                            for frame in decoded))
 
 
 class TestLossRecoveryInTheConnection(QuicClientHarness):
