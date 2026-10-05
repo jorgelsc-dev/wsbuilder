@@ -314,6 +314,11 @@ class Http3Server:
             except Exception as e:
                 print(f"[http3] streaming response on stream {stream_id} failed: {e}")
             finally:
+                # Closing the producer lets its own cleanup run (for example a
+                # realtime client deregistering itself) once the peer is gone.
+                close = getattr(response.stream, "close", None)
+                if callable(close):
+                    close()
                 connection.queue_stream_data(stream_id, b"", fin=True)
 
         threading.Thread(target=pump, name=f"http3-stream-{stream_id}", daemon=True).start()
