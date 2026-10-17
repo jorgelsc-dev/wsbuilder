@@ -1,3 +1,4 @@
+import os
 import re
 import tomllib
 import unittest
@@ -41,6 +42,10 @@ class TestPackageVersion(unittest.TestCase):
     def test_pyproject_and_module_versions_agree(self):
         self.assertEqual(self.project_version, self.module_version)
 
+    @unittest.skipIf(
+        os.environ.get("GITHUB_REF", "").startswith(("refs/tags/v", "refs/heads/release/")),
+        "release tags and branches declare the plain release version",
+    )
     def test_main_declares_an_unreleased_development_version(self):
         # release-from-main.yml strips the suffix on the release/vX.Y.Z branch
         # it cuts, so a plain version here means the tree claims to *be* a
