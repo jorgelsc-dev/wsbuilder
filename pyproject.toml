@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wsbuilder"
+version = "1.0.0.dev0"
+description = "Lightweight HTTP + WebSocket framework for Python."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "wsbuilder Authors" }]
+keywords = ["websocket", "http", "framework", "server", "python"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+# TLS material handling (wsbuilder.pki). Kept optional so the core framework
+# stays dependency-free and the offline install documented in docs/install.md
+# keeps working.
+tls = ["cryptography>=42"]
+# Multicast DNS and DNS-SD advertising/discovery (wsbuilder.mdns).
+mdns = ["zeroconf>=0.131"]
+
+[project.urls]
+Homepage = "https://github.com/jorgelsc-dev/wsbuilder"
+Documentation = "https://wsbuilder.jorgelsc.dev/"
+Repository = "https://github.com/jorgelsc-dev/wsbuilder"
+Issues = "https://github.com/jorgelsc-dev/wsbuilder/issues"
+
+[project.scripts]
+wsbuilder = "wsbuilder.__main__:main"
+wsbuilder-demo = "wsbuilder.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["wsbuilder*"]

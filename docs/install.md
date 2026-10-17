@@ -1,0 +1,165 @@
+# Instalacion
+
+`wsbuilder` se distribuye como paquete Python puro y no arrastra dependencias de
+runtime. Eso simplifica tanto la instalacion normal con `pip` como la instalacion
+local sin internet.
+
+## 1. Instalar con pip
+
+La ruta recomendada para la mayoria de usuarios es instalar desde PyPI:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install wsbuilder
+```
+
+En Debian, Kali, Ubuntu y otros entornos que aplican PEP 668, `pip` puede
+rechazar la instalacion sobre el Python del sistema con el error
+`externally-managed-environment`. En esos casos, instala dentro de un entorno
+virtual.
+
+### En un entorno virtual
+
+=== "Linux / macOS"
+
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade pip
+    python -m pip install wsbuilder
+    ```
+
+=== "Windows PowerShell"
+
+    ```powershell
+    py -m venv .venv
+    .venv\Scripts\Activate.ps1
+    py -m pip install --upgrade pip
+    py -m pip install wsbuilder
+    ```
+
+### Verificar la instalacion
+
+```bash
+python -c "import wsbuilder; print(wsbuilder.__version__)"
+wsbuilder --help
+```
+
+Tambien existe el alias `wsbuilder-demo`, que ejecuta la misma demo incluida.
+
+### Soporte mDNS opcional
+
+Para publicar y descubrir servicios en la red local, instala el extra `mdns`:
+
+```bash
+python -m pip install 'wsbuilder[mdns]'
+```
+
+Este extra agrega `zeroconf`; la instalacion base permanece sin dependencias de
+runtime. Consulta los [ejemplos de mDNS y DNS-SD](mdns.md).
+
+## 2. Compilar en local e instalar en local sin internet
+
+Usa esta ruta cuando ya tienes una copia local del repositorio y no quieres que
+`pip` ni el sistema de build intenten consultar PyPI.
+
+### Requisitos previos
+
+- Tener el repositorio clonado o copiado en la maquina local.
+- Tener Python `3.11+`.
+- Tener disponibles en el entorno `build`, `setuptools>=77` y `wheel`.
+- Si vas a usar un `venv`, crearlo antes de desconectarte o con herramientas ya instaladas localmente.
+
+### Compilar el wheel local sin red
+
+El flag `--no-isolation` es importante: evita que `build` cree un entorno aislado
+e intente descargar dependencias de compilacion.
+
+```bash
+python -m build --no-isolation
+```
+
+El resultado queda en `dist/`, por ejemplo:
+
+```text
+dist/wsbuilder-<version>-py3-none-any.whl
+dist/wsbuilder-<version>.tar.gz
+```
+
+`<version>` es la que declara `pyproject.toml` en el arbol que estas
+compilando. Un checkout de `main` lleva sufijo `.dev0` porque va por delante de
+la ultima version publicada; los artefactos publicados en PyPI salen de la rama
+`release/vX.Y.Z`, donde la version ya no lleva ese sufijo.
+
+### Instalar el wheel local sin consultar PyPI
+
+```bash
+python -m pip install --no-index dist/wsbuilder-*.whl
+```
+
+Si ese comando falla con `externally-managed-environment`, el wheel esta bien y
+el bloqueo viene del Python del sistema. La ruta soportada es:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --no-index dist/wsbuilder-*.whl
+```
+
+Solo si necesitas forzar una instalacion global en ese Python gestionado por el
+sistema, `pip` ofrece `--break-system-packages`, pero queda fuera del flujo
+recomendado porque puede interferir con paquetes de la distribucion:
+
+```bash
+python -m pip install --break-system-packages --no-index dist/wsbuilder-*.whl
+```
+
+### Instalar desde el codigo fuente local sin wheel
+
+Si no quieres pasar por `dist/`, puedes instalar directamente desde el arbol del
+repositorio. El flag `--no-build-isolation` evita que `pip` intente construir en
+un entorno aislado y el flag `--no-deps` evita cualquier resolucion externa.
+
+```bash
+python -m pip install --no-index --no-build-isolation --no-deps .
+```
+
+### Verificar la instalacion offline
+
+```bash
+python -c "import wsbuilder; print(wsbuilder.__version__)"
+wsbuilder --help
+```
+
+### Flujo recomendado para distribuir en una red cerrada
+
+1. En una maquina de build, ejecuta `python -m build --no-isolation`.
+2. Copia el archivo `dist/wsbuilder-*.whl` a la maquina destino.
+3. En la maquina destino, instala dentro de un `venv` con `python -m pip install --no-index dist/wsbuilder-*.whl`.
+
+Ese flujo es el mas estable porque instala desde un artefacto ya construido y no
+depende de herramientas de compilacion en la maquina final.
+
+## 3. Instalar para desarrollo
+
+Desde la raiz del repositorio:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Validar el paquete:
+
+```bash
+PYTHONPATH=src pytest -q
+```
+
+Validar la documentacion:
+
+```bash
+python -m pip install -r requirements-docs.txt
+mkdocs build --strict
+```

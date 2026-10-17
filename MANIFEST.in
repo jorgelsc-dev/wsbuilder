@@ -1,0 +1,11 @@
+include mkdocs.yml
+graft docs
+graft examples
+prune docs/site
+prune examples/full-project/data
+prune examples/full-project/logs
+global-exclude __pycache__ *.py[cod]
+exclude AGENTS.md CLAUDE.md CLAUDE.local.md GEMINI.md
+prune .claude
+prune .codex
+prune .agents

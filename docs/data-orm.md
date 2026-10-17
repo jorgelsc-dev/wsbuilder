@@ -1,0 +1,175 @@
+# Datos y ORM
+
+## `Database`
+
+`Database` es la capa SQLite incluida. Por defecto funciona bien como embebida
+para demos, herramientas locales y servicios pequenos o medianos.
+
+Constructor tipico:
+
+```python
+from wsbuilder import Database
+
+db = Database(
+    "data/app.sqlite3",
+    enable_replicas=True,
+    replica_count=2,
+    enable_wal=True,
+    cache_size_mb=10,
+)
+```
+
+`cache_size_mb` se interpreta en MiB reales y se traduce al `PRAGMA cache_size`
+de SQLite en KiB, que es la unidad esperada por SQLite cuando el valor es
+negativo.
+
+Capacidades principales:
+
+- `execute`, `executemany`, `fetchone`, `fetchall`, `scalar`.
+- `transaction()` para bloques transaccionales.
+- `read_replica_*` para lecturas balanceadas.
+- `set_pragma`, `get_pragma`, `checkpoint`, `vacuum`, `optimize`.
+
+Los lotes de escritura ejecutados con `executemany` son atomicos: si una fila
+falla, el prefijo ya procesado se revierte. `replica_count` debe ser mayor que
+cero cuando se construye un pool de replicas.
+
+## Modelos
+
+```python
+from datetime import UTC, datetime
+from wsbuilder import DateTimeField, IntegerField, JSONField, Model, TextField
+
+class Article(Model):
+    __tablename__ = "articles"
+
+    id = IntegerField(primary_key=True, auto_increment=True)
+    title = TextField(null=False, index=True)
+    body = TextField(default="", null=False)
+    tags = JSONField(default=list, null=False)
+    created_at = DateTimeField(default=lambda: datetime.now(UTC), null=False)
+```
+
+Operaciones tipicas:
+
+```python
+Article.create_table(db)
+Article.create(db, title="Hola", body="Contenido", tags=["docs"])
+first = Article.get(db, id=1)
+rows = Article.objects(db).filter(title__startswith="H").order_by("-id").all()
+```
+
+## `QuerySet`
+
+Operadores soportados:
+
+- `field=value`
+- `field__ne=value`
+- `field__gt=value`
+- `field__gte=value`
+- `field__lt=value`
+- `field__lte=value`
+- `field__like=value`
+- `field__ilike=value`
+- `field__contains=value`
+- `field__icontains=value`
+- `field__startswith=value`
+- `field__istartswith=value`
+- `field__endswith=value`
+- `field__iendswith=value`
+- `field__in=[...]`
+- `field__not_in=[...]`
+- `field__isnull=True`
+
+Metodos utiles:
+
+- `filter`, `exclude`
+- `order_by`, `order_by_raw`
+- `limit`, `offset`, `paginate`
+- `all`, `first`, `get`, `values`
+- `count`, `exists`, `update`, `delete`, `create`
+- `where_raw`, `using`
+
+Ejemplo con replica de lectura:
+
+```python
+rows = Article.objects(db).using("replica").order_by("-id").limit(20).all()
+```
+
+Los querysets con `using("replica")` son de solo lectura: `update()`,
+`delete()` y `create()` levantan error.
+
+## Transacciones
+
+```python
+with db.transaction():
+    Article.create(db, title="A")
+    Article.create(db, title="B")
+```
+
+Las transacciones se integran con `save()` y `delete()` de los modelos. Como
+`Database` comparte una conexion SQLite entre hilos, una transaccion exterior
+mantiene el bloqueo de esa conexion hasta terminar; otros hilos esperan y no
+pueden confirmar ni revertir trabajo ajeno. Las transacciones anidadas usan
+savepoints.
+
+## Campos incluidos
+
+- `IntegerField`
+- `RealField`
+- `TextField`
+- `BlobField`
+- `BooleanField`
+- `DateTimeField`
+- `JSONField`
+
+Opciones comunes de campos:
+
+- `primary_key`
+- `unique`
+- `null`
+- `default`
+- `index`
+- `auto_increment` en `IntegerField`
+
+`DateTimeField` serializa valores `datetime` en ISO 8601 y los reconstruye al
+leer. `JSONField` guarda estructuras JSON compatibles.
+
+Tambien existen helpers SQL:
+
+- `SQL`
+- `create_tables`
+- `drop_tables`
+- `quote_identifier`
+- `validate_identifier`
+
+## Lecturas optimizadas y replicas
+
+`db_replicas.py` amplia el escenario SQLite:
+
+- `SQLite3OptimizationConfig`: pragmas y ajustes de rendimiento.
+- `DatabaseReplica`: conexion de solo lectura.
+- `DatabaseReplicaPool`: pool round-robin para lecturas.
+- `OptimizedDatabase`: base optimizada con replicas activas por defecto.
+
+Usa `OptimizedDatabase` cuando quieres dejar activados WAL, cache y replicas con
+un constructor mas orientado a throughput de lectura.
+
+```python
+from wsbuilder import OptimizedDatabase, SQLite3OptimizationConfig
+
+config = SQLite3OptimizationConfig(cache_size=32768, wal_autocheckpoint=500)
+db = OptimizedDatabase(
+    "data/app.sqlite3",
+    optimization_config=config,
+    enable_replicas=True,
+    replica_count=4,
+)
+```
+
+Notas:
+
+- las replicas no se crean para `:memory:`.
+- `replica_count` debe ser mayor que cero.
+- las replicas usan conexiones read-only.
+- las escrituras deben ejecutarse en la conexion principal.

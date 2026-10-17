@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>wsbuilder</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #f5f7f7;
+      color: #17323c;
+      padding: 2rem;
+    }
+    main {
+      max-width: 42rem;
+      width: 100%;
+      background: #fff;
+      border: 1px solid #d5e2e5;
+      border-radius: 1rem;
+      padding: 2rem;
+      box-shadow: 0 12px 40px rgba(15, 40, 48, 0.08);
+    }
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: 1.75rem;
+    }
+    p {
+      line-height: 1.55;
+      margin: 0.75rem 0;
+    }
+    a {
+      color: #0d7c7a;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    code {
+      background: #edf5f4;
+      border-radius: 0.4rem;
+      padding: 0.15rem 0.35rem;
+    }
+  </style>
+  <script>
+    (function () {
+      var pathname = window.location.pathname || "";
+      if (!/\.md\/?$/.test(pathname)) {
+        return;
+      }
+
+      var target = pathname.replace(/\.md\/?$/, "");
+      if (target.endsWith("/index")) {
+        target = target.slice(0, -6) || "/";
+      } else if (!target.endsWith("/")) {
+        target += "/";
+      }
+
+      var destination = target + window.location.search + window.location.hash;
+      window.location.replace(destination);
+    })();
+  </script>
+</head>
+<body>
+  <main>
+    <h1>Página no encontrada</h1>
+    <p>
+      La URL solicitada apunta a una ruta antigua en Markdown.
+      Si la pagina existe, se redirige automaticamente a su ruta publica.
+    </p>
+    <p>
+      Si no ocurre la redireccion, vuelve a la
+      <a id="home-link" href="/">portada</a>
+      o abre la version publicada sin <code>.md</code>.
+    </p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,82 @@
+name: main-pr-policy-check
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  enforce-source:
+    runs-on: ubuntu-latest
+    env:
+      BASE_REF: ${{ github.base_ref }}
+      HEAD_REF: ${{ github.head_ref }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate PR source branch policy
+        run: |
+          set -euo pipefail
+          echo "base=${BASE_REF} head=${HEAD_REF} author=${PR_AUTHOR}"
+          if [ -z "${HEAD_REF}" ]; then
+            echo "ERROR: missing pull request source branch"
+            exit 1
+          fi
+          if [ "${HEAD_REF}" = "main" ]; then
+            echo "ERROR: PR source branch cannot be main"
+            exit 1
+          fi
+          if [ "${PR_AUTHOR}" = "dependabot[bot]" ] && [[ "${HEAD_REF}" =~ ^dependabot/ ]]; then
+            echo "OK: Dependabot PR hacia main."
+            exit 0
+          fi
+          if [ "${PR_AUTHOR}" = "github-actions[bot]" ] && [[ "${HEAD_REF}" =~ ^chore/open-[0-9]+\.[0-9]+\.[0-9]+\.dev0$ ]]; then
+            echo "OK: automated development version pull request."
+            exit 0
+          fi
+          if [ "${PR_AUTHOR}" != "jorgelsc-dev" ]; then
+            echo "ERROR: only jorgelsc-dev may submit human pull requests."
+            exit 1
+          fi
+          if [[ ! "${HEAD_REF}" =~ ^(feat|fix|docs|chore|refactor|test|perf)/[a-z0-9._-]+$ ]]; then
+            echo "ERROR: source branch must match <type>/<slug> using one of feat, fix, docs, chore, refactor, test, perf, or be a Dependabot branch"
+            exit 1
+          fi
+          echo "OK: PR hacia main con source branch valida."
+      - name: Validate commit identities
+        run: |
+          set -euo pipefail
+          invalid_commits="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" --paginate --jq '
+            def owner:
+              .name == "jorgelsc-dev" and
+              .email == "62909911+jorgelsc-dev@users.noreply.github.com";
+            def release_bot:
+              .name == "release-bot" and
+              .email == "release-bot@users.noreply.github.com";
+            def dependabot:
+              .name == "dependabot[bot]" and
+              .email == "49699333+dependabot[bot]@users.noreply.github.com";
+            def github:
+              .name == "GitHub" and .email == "noreply@github.com";
+            .[] | select(
+              (((.author.login == "jorgelsc-dev" and (.commit.author | owner)) or
+                (.commit.author | release_bot) or
+                (.author.login == "dependabot[bot]" and (.commit.author | dependabot))) | not) or
+              (((.committer.login == "jorgelsc-dev" and (.commit.committer | owner)) or
+                (.commit.committer | release_bot) or
+                (.committer.login == "dependabot[bot]" and (.commit.committer | dependabot)) or
+                (.committer.login == "web-flow" and (.commit.committer | github))) | not)
+            ) | .sha
+          ')"
+          if [ -n "${invalid_commits}" ]; then
+            echo "ERROR: commits use an unauthorized author or committer identity:"
+            echo "${invalid_commits}"
+            exit 1
+          fi
+          echo "OK: commit identities match the repository policy."

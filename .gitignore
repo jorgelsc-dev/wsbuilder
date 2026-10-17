@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+site/
+.pytest_cache/
+.venv*/
+
+# AI assistant files (local only)
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.codex/
+.agents/
+GEMINI.md
+.gemini/
+.cursor/
+.cursorrules
+.aider*
+.continue/
+.windsurf/
