@@ -11,6 +11,7 @@ of order, and only once a stream is contiguous does the layer above see it.
 """
 
 import threading
+import time
 
 from . import frames as qframes
 from .address import AmplificationLimit, PathValidator
@@ -54,6 +55,9 @@ CONNECTION_RECEIVE_WINDOW = 1048576
 MAX_PEER_STREAMS = 100
 #: CRYPTO bytes buffered per level before the handshake is refused.
 MAX_CRYPTO_BUFFER = 65536
+#: Bytes a 1-RTT packet adds around its STREAM data (header, frame, AEAD tag),
+#: used to ask the congestion controller before building the packet.
+PACKET_OVERHEAD_ESTIMATE = 64
 
 # Transport error codes (RFC 9000 section 20.1).
 ERROR_FLOW_CONTROL = 0x03
@@ -185,8 +189,18 @@ class QuicConnection:
         # Stream bytes queued from other threads (a WebSocket handler, a
         # streaming response) and sent by the thread that owns the socket.
         self._outbound_lock = threading.Lock()
+        #: Notified whenever queued bytes leave, so producers can wait for room.
+        self._outbound_room = threading.Condition(self._outbound_lock)
         self._outbound = []
+        self._queued_bytes = {}
         self._send_offsets = {}
+        # Send-side flow control (RFC 9000 section 4): what the peer allows.
+        # None means unlimited, used only when the peer sent no transport
+        # parameters at all.
+        self._peer_max_data = None
+        self._peer_stream_max = {}
+        self._sent_data_total = 0
+        self._blocked_reported = {}
         self.handshake_complete = False
         self.closed = False
         self.alpn = None
@@ -322,6 +336,13 @@ class QuicConnection:
                 self._on_path_frame(frame, outgoing)
             elif isinstance(frame, qframes.AckFrame):
                 self._on_ack(level, frame, outgoing)
+            elif isinstance(frame, qframes.MaxDataFrame):
+                if self._peer_max_data is not None:
+                    self._peer_max_data = max(self._peer_max_data, frame.maximum)
+            elif isinstance(frame, qframes.MaxStreamDataFrame):
+                current = self._stream_send_limit(frame.stream_id)
+                if current is not None:
+                    self._peer_stream_max[frame.stream_id] = max(current, frame.maximum)
             elif isinstance(frame, qframes.ConnectionCloseFrame):
                 self.closed = True
             elif isinstance(frame, qframes.SimpleFrame):
@@ -415,6 +436,7 @@ class QuicConnection:
             self.peer_transport_parameters = decode_transport_parameters(
                 self._tls.peer_transport_parameters
             )
+            self._peer_max_data = self._peer_parameter(TP_INITIAL_MAX_DATA)
             self._install(
                 LEVEL_HANDSHAKE, secrets["client_handshake"], secrets["server_handshake"]
             )
@@ -482,6 +504,91 @@ class QuicConnection:
         outgoing.append((level, [qframes.ConnectionCloseFrame(code, reason)]))
         self.closed = True
 
+    # -- send-side flow control ----------------------------------------
+
+    def _peer_parameter(self, key):
+        """A peer transport parameter as an int; absent means 0 (RFC 9000 18.2).
+
+        Returns None (no limit) when the peer sent no parameters at all.
+        """
+        if not self.peer_transport_parameters:
+            return None
+        raw = self.peer_transport_parameters.get(key)
+        if raw is None:
+            return 0
+        try:
+            value, _offset = decode_varint(bytes(raw), 0)
+        except Exception:
+            return 0
+        return int(value)
+
+    def _stream_send_limit(self, stream_id):
+        """Highest offset the peer lets us send on ``stream_id``, or None."""
+        if stream_id in self._peer_stream_max:
+            return self._peer_stream_max[stream_id]
+        if not self.peer_transport_parameters:
+            return None
+        kind = int(stream_id) & 0x03
+        if kind == 0:
+            # Client-initiated bidirectional: the peer's "local" stream.
+            return self._peer_parameter(TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL)
+        if kind == 1:
+            return self._peer_parameter(TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE)
+        return self._peer_parameter(TP_INITIAL_MAX_STREAM_DATA_UNI)
+
+    def _flow_allowance(self, stream_id, offset, size):
+        """How many of ``size`` bytes at ``offset`` the peer's limits admit."""
+        allowed = size
+        stream_limit = self._stream_send_limit(stream_id)
+        if stream_limit is not None:
+            allowed = min(allowed, stream_limit - offset)
+        if self._peer_max_data is not None:
+            allowed = min(allowed, self._peer_max_data - self._sent_data_total)
+        return max(0, allowed), stream_limit
+
+    def _blocked_frames(self, stream_id, offset, size, stream_limit):
+        """DATA_BLOCKED / STREAM_DATA_BLOCKED, once per limit value."""
+        frames = []
+        if stream_limit is not None and offset + size > stream_limit:
+            key = ("stream", stream_id)
+            if self._blocked_reported.get(key) != stream_limit:
+                self._blocked_reported[key] = stream_limit
+                frames.append(qframes.StreamDataBlockedFrame(stream_id, stream_limit))
+        if (
+            self._peer_max_data is not None
+            and self._sent_data_total + size > self._peer_max_data
+            and self._blocked_reported.get("connection") != self._peer_max_data
+        ):
+            self._blocked_reported["connection"] = self._peer_max_data
+            frames.append(qframes.DataBlockedFrame(self._peer_max_data))
+        return frames
+
+    def queued_stream_bytes(self, stream_id=None):
+        """Bytes queued and not yet packetized, for one stream or all of them."""
+        with self._outbound_lock:
+            if stream_id is None:
+                return sum(self._queued_bytes.values())
+            return self._queued_bytes.get(int(stream_id), 0)
+
+    def wait_for_send_room(self, stream_id, max_queued, timeout=None, poll=0.1):
+        """Block until ``stream_id`` has at most ``max_queued`` bytes queued.
+
+        Returns False on timeout or when the connection closes, so a producer
+        can stop instead of queueing without bound.
+        """
+        deadline = None if timeout is None else time.monotonic() + float(timeout)
+        stream_id = int(stream_id)
+        with self._outbound_room:
+            while not self.closed and self._queued_bytes.get(stream_id, 0) > max_queued:
+                wait_for = poll
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                    wait_for = min(poll, remaining)
+                self._outbound_room.wait(wait_for)
+            return not self.closed
+
     # -- sending -------------------------------------------------------
 
     def send_stream_data(self, stream_id, payload, fin=True, offset=0):
@@ -497,34 +604,76 @@ class QuicConnection:
         pieces = [data[i:i + STREAM_CHUNK_SIZE] for i in range(0, len(data), STREAM_CHUNK_SIZE)]
         if not pieces:
             pieces = [b""]
+        stream_id = int(stream_id)
         with self._outbound_lock:
             for index, piece in enumerate(pieces):
                 last = index == len(pieces) - 1
-                self._outbound.append((int(stream_id), piece, bool(fin) and last))
+                self._outbound.append((stream_id, piece, bool(fin) and last))
+            self._queued_bytes[stream_id] = self._queued_bytes.get(stream_id, 0) + len(data)
 
     def drain_outbound(self):
         """Packetize queued stream bytes. Call from the thread that owns the socket.
 
         Returns the datagrams to send. Bytes stay queued until the 1-RTT send
-        keys exist, so nothing is lost while the handshake is still running.
+        keys exist, and while the peer's flow control limits (MAX_DATA,
+        MAX_STREAM_DATA), the congestion window or the anti-amplification
+        limit hold them back; a blocked stream does not hold up the others.
         """
         if self.closed or self.keys.get(LEVEL_APPLICATION, {}).get("send") is None:
             return []
         with self._outbound_lock:
             pending, self._outbound = self._outbound, []
         datagrams = []
-        for index, (stream_id, piece, fin) in enumerate(pending):
+        keep = []
+        blocked_streams = set()
+        control = []
+        stopped = False
+        for stream_id, piece, fin in pending:
+            if stopped or stream_id in blocked_streams:
+                keep.append((stream_id, piece, fin))
+                continue
             offset = self._send_offsets.get(stream_id, 0)
+            allowed, stream_limit = self._flow_allowance(stream_id, offset, len(piece))
+            rest = None
+            if allowed < len(piece):
+                control.extend(self._blocked_frames(stream_id, offset, len(piece), stream_limit))
+                blocked_streams.add(stream_id)
+                if allowed == 0:
+                    keep.append((stream_id, piece, fin))
+                    continue
+                piece, rest = piece[:allowed], (stream_id, piece[allowed:], fin)
+                fin = False
+            if not self.recovery.congestion.can_send(len(piece) + PACKET_OVERHEAD_ESTIMATE):
+                # The congestion window is full: wait for acknowledgements.
+                stopped = True
+                keep.append((stream_id, piece, fin))
+                if rest is not None:
+                    keep.append(rest)
+                continue
             frame = qframes.StreamFrame(stream_id, offset, piece, fin)
             sent = self._flush([(LEVEL_APPLICATION, [frame])])
             if not sent:
                 # The anti-amplification limit refused this packet. Keep it and
                 # everything after it for the next call, so no bytes are lost.
-                with self._outbound_lock:
-                    self._outbound[:0] = pending[index:]
-                break
+                stopped = True
+                keep.append((stream_id, piece, fin))
+                if rest is not None:
+                    keep.append(rest)
+                continue
             self._send_offsets[stream_id] = offset + len(piece)
+            self._sent_data_total += len(piece)
             datagrams.extend(sent)
+            if rest is not None:
+                keep.append(rest)
+        if control:
+            datagrams.extend(self._flush([(LEVEL_APPLICATION, control)]))
+        with self._outbound_room:
+            self._outbound[:0] = keep
+            queued = {}
+            for stream_id, piece, _fin in self._outbound:
+                queued[stream_id] = queued.get(stream_id, 0) + len(piece)
+            self._queued_bytes = queued
+            self._outbound_room.notify_all()
         return datagrams
 
     @staticmethod
