@@ -18,7 +18,15 @@ _SUBPROTOCOL_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 class WebSocketProtocolError(Exception):
-    pass
+    close_code = 1002
+    close_reason = "Protocol Error"
+
+
+class WebSocketMessageTooBigError(WebSocketProtocolError):
+    """A frame or message is larger than the connection accepts (RFC 6455 1009)."""
+
+    close_code = 1009
+    close_reason = "Message Too Big"
 
 
 class WebSocketReadError(Exception):
@@ -62,6 +70,15 @@ def _header_token_contains(raw_value, token):
         return False
     values = [part.strip().lower() for part in str(raw_value or "").split(",")]
     return wanted in values
+
+
+def _payload_limit(value, default, name):
+    if value is None:
+        return default
+    limit = int(value)
+    if limit < 1:
+        raise ValueError(f"{name} must be at least 1 byte")
+    return limit
 
 
 def _is_valid_websocket_key(value):
@@ -134,6 +151,8 @@ def handshake_websocket_with_options(
     on_timeout=None,
     io_poll_interval=1.0,
     ping_payload=b"",
+    max_frame_bytes=None,
+    max_message_bytes=None,
 ):
     error_response = _websocket_handshake_error_response(headers)
     if error_response is not None:
@@ -187,6 +206,8 @@ def handshake_websocket_with_options(
         io_poll_interval=io_poll_interval,
         ping_payload=ping_payload.encode("utf-8") if isinstance(ping_payload, str) else ping_payload,
         supported_subprotocols=supported,
+        max_frame_bytes=max_frame_bytes,
+        max_message_bytes=max_message_bytes,
     )
     send_http_response(conn, Response(status=101, body=b"", headers=resp_headers))
     return websocket
@@ -214,6 +235,8 @@ class WebSocket:
         io_poll_interval=1.0,
         ping_payload=b"",
         supported_subprotocols=(),
+        max_frame_bytes=None,
+        max_message_bytes=None,
     ):
         self.sock = sock
         self.addr = addr
@@ -228,6 +251,15 @@ class WebSocket:
         self.on_error = on_error
         self.on_timeout = on_timeout
         self.io_poll_interval = max(0.1, float(io_poll_interval or 1.0))
+        #: Largest frame and reassembled message accepted from the peer.
+        self.max_message_bytes = _payload_limit(
+            max_message_bytes, MAX_WS_MESSAGE_PAYLOAD_BYTES, "max_message_bytes"
+        )
+        # A single unfragmented frame is a whole message, so it obeys both.
+        self.max_frame_bytes = min(
+            _payload_limit(max_frame_bytes, MAX_WS_FRAME_PAYLOAD_BYTES, "max_frame_bytes"),
+            self.max_message_bytes,
+        )
         self.ping_payload = (
             ping_payload.encode("utf-8")
             if isinstance(ping_payload, str)
@@ -323,7 +355,7 @@ class WebSocket:
     def recv_frame(self):
         while True:
             try:
-                frame = read_ws_frame_raw(self.sock)
+                frame = read_ws_frame_raw(self.sock, max_payload_bytes=self.max_frame_bytes)
             except TimeoutError as exc:
                 if self._closed:
                     raise WebSocketConnectionClosedError("WebSocket already closed") from exc
@@ -344,7 +376,7 @@ class WebSocket:
                 raise WebSocketConnectionClosedError("WebSocket connection error") from exc
             except WebSocketProtocolError as exc:
                 try:
-                    self.close(1002, "Protocol Error")
+                    self.close(exc.close_code, exc.close_reason)
                 except Exception:
                     pass
                 self._report_error(exc)
@@ -393,8 +425,8 @@ class WebSocket:
                     )
                     self._fail_protocol(exc)
                 self._fragment_payload.extend(frame.payload)
-                if len(self._fragment_payload) > MAX_WS_MESSAGE_PAYLOAD_BYTES:
-                    exc = WebSocketProtocolError(
+                if len(self._fragment_payload) > self.max_message_bytes:
+                    exc = WebSocketMessageTooBigError(
                         "Fragmented message exceeds server limit"
                     )
                     self._fail_protocol(
@@ -484,7 +516,7 @@ def recv_exact(conn, n):
     return data
 
 
-def read_ws_frame_raw(conn):
+def read_ws_frame_raw(conn, max_payload_bytes=None):
     hdr = recv_exact(conn, 2)
     b1, b2 = hdr[0], hdr[1]
     fin = (b1 >> 7) & 1
@@ -521,8 +553,10 @@ def read_ws_frame_raw(conn):
         if payload_len > 125:
             raise WebSocketProtocolError("Control frame payload too large")
 
-    if payload_len > MAX_WS_FRAME_PAYLOAD_BYTES:
-        raise WebSocketProtocolError("Frame payload exceeds server limit")
+    if max_payload_bytes is None:
+        max_payload_bytes = MAX_WS_FRAME_PAYLOAD_BYTES
+    if payload_len > max_payload_bytes:
+        raise WebSocketMessageTooBigError("Frame payload exceeds server limit")
 
     mask = None
     if masked:

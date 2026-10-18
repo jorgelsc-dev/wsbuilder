@@ -32,6 +32,13 @@ class _ReaderWriter:
         return self._conn.sendall(payload)
 
 
+def _first_set(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 class HTTPServer:
     MAX_CONNECTION_WORKERS = 64
     MAX_REQUEST_HEADER_BYTES = 64 * 1024
@@ -51,8 +58,32 @@ class HTTPServer:
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10.0
     #: Stop gracefully on SIGTERM when serving from the main thread.
     HANDLE_SIGTERM = True
+    #: WebSocket frame/message ceilings; None keeps the ``wsbuilder.ws``
+    #: defaults. A route's own ``max_*_bytes`` wins over these.
+    MAX_WS_FRAME_BYTES = None
+    MAX_WS_MESSAGE_BYTES = None
 
-    def __init__(self, host, port, app, ssl_context=None):
+    #: Constructor keyword -> (attribute it overrides, type, smallest value).
+    LIMIT_OPTIONS = {
+        "max_connection_workers": ("MAX_CONNECTION_WORKERS", int, 1),
+        "max_request_header_bytes": ("MAX_REQUEST_HEADER_BYTES", int, 1),
+        "max_request_body_bytes": ("MAX_REQUEST_BODY_BYTES", int, 0),
+        "request_read_timeout": ("REQUEST_READ_TIMEOUT_SECONDS", float, 0.001),
+        "keepalive_timeout": ("KEEPALIVE_TIMEOUT_SECONDS", float, 0.001),
+        "max_keepalive_requests": ("MAX_KEEPALIVE_REQUESTS", int, 0),
+        "max_concurrent_streams": ("MAX_CONCURRENT_STREAMS", int, 1),
+        "graceful_shutdown_timeout": ("GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", float, 0.0),
+        "max_ws_frame_bytes": ("MAX_WS_FRAME_BYTES", int, 1),
+        "max_ws_message_bytes": ("MAX_WS_MESSAGE_BYTES", int, 1),
+    }
+
+    def __init__(self, host, port, app, ssl_context=None, **limits):
+        """Bind ``app`` to ``host:port``.
+
+        ``limits`` take the keywords in ``LIMIT_OPTIONS`` and override the
+        matching class attribute for this server only; ``None`` keeps it.
+        """
+        self._apply_limits(limits)
         self.host = host
         self.port = port
         self.app = app
@@ -63,6 +94,21 @@ class HTTPServer:
         self._workers = set()
         self._workers_lock = threading.Lock()
         self.server_address = (host, port)
+
+    def _apply_limits(self, limits):
+        unknown = sorted(set(limits) - set(self.LIMIT_OPTIONS))
+        if unknown:
+            raise TypeError(f"unknown HTTPServer limit(s): {', '.join(unknown)}")
+        for name, value in limits.items():
+            if value is None:
+                continue
+            attribute, kind, minimum = self.LIMIT_OPTIONS[name]
+            if isinstance(value, bool):
+                raise TypeError(f"{name} must be a number, not a bool")
+            converted = kind(value)
+            if converted < minimum:
+                raise ValueError(f"{name} must be at least {minimum}, got {value!r}")
+            setattr(self, attribute, converted)
 
     def stop(self):
         """Ask a running ``serve_forever`` loop to finish accepting.
@@ -602,6 +648,10 @@ class HTTPServer:
                 on_timeout=ws_route.get("on_timeout"),
                 io_poll_interval=ws_route.get("io_poll_interval", 1.0),
                 ping_payload=ws_route.get("ping_payload", b""),
+                max_frame_bytes=_first_set(ws_route.get("max_frame_bytes"), self.MAX_WS_FRAME_BYTES),
+                max_message_bytes=_first_set(
+                    ws_route.get("max_message_bytes"), self.MAX_WS_MESSAGE_BYTES
+                ),
             )
             if not ws:
                 if metrics:

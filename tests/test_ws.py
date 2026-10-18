@@ -6,6 +6,7 @@ from wsbuilder.ws import (
     WebSocket,
     WebSocketConnectionClosedError,
     WebSocketFrame,
+    WebSocketMessageTooBigError,
     WebSocketProtocolError,
     WebSocketReadTimeoutError,
     _is_valid_websocket_key,
@@ -274,6 +275,52 @@ class TestWebSocketCore(unittest.TestCase):
         self.assertTrue(sock.sent)
         self.assertEqual(sock.sent[0][0], 0x88)
         self.assertEqual(int.from_bytes(sock.sent[0][2:4], "big"), 1002)
+
+    def _close_code(self, sock):
+        self.assertEqual(sock.sent[0][0], 0x88)
+        return int.from_bytes(sock.sent[0][2:4], "big")
+
+    def test_frames_over_the_message_limit_close_with_1009(self):
+        sock = DummySocket(data=_masked_client_frame(0x1, b"x" * 11))
+        ws = WebSocket(sock, ("127.0.0.1", 1234), "", {}, max_message_bytes=10)
+
+        with self.assertRaises(WebSocketMessageTooBigError):
+            ws.recv_frame()
+
+        self.assertEqual(ws.max_frame_bytes, 10)
+        self.assertEqual(self._close_code(sock), 1009)
+
+    def test_fragmented_messages_over_the_limit_close_with_1009(self):
+        raw = _masked_client_frame(0x1, b"x" * 6, fin=False) + _masked_client_frame(0x0, b"y" * 6)
+        sock = DummySocket(data=raw)
+        ws = WebSocket(sock, ("127.0.0.1", 1234), "", {}, max_frame_bytes=8, max_message_bytes=10)
+
+        with self.assertRaisesRegex(WebSocketMessageTooBigError, "Fragmented message"):
+            ws.recv_frame()
+        self.assertEqual(self._close_code(sock), 1009)
+
+    def test_messages_within_the_limits_are_accepted(self):
+        sock = DummySocket(data=_masked_client_frame(0x2, b"z" * 10))
+        ws = WebSocket(sock, ("127.0.0.1", 1234), "", {}, max_message_bytes=10)
+        self.assertEqual(ws.recv_frame().payload, b"z" * 10)
+
+    def test_payload_limits_must_be_positive(self):
+        with self.assertRaises(ValueError):
+            WebSocket(DummySocket(), ("127.0.0.1", 1234), "", {}, max_frame_bytes=0)
+        with self.assertRaises(ValueError):
+            App().ws("/ws", max_message_bytes=0)
+
+    def test_route_limits_reach_the_handshake_connection(self):
+        app = App()
+        self.addCleanup(app.close)
+
+        @app.ws("/ws", max_message_bytes=64)
+        def handler(_ws, _request):
+            return None
+
+        route = app.ws_routes["/ws"]
+        self.assertEqual(route["max_message_bytes"], 64)
+        self.assertIsNone(route["max_frame_bytes"])
 
     def test_rejects_non_minimal_lengths_and_invalid_close_frames(self):
         non_minimal = (

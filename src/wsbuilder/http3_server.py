@@ -433,6 +433,8 @@ class Http3Server:
             on_timeout=route.get("on_timeout"),
             io_poll_interval=route.get("io_poll_interval", 1.0),
             ping_payload=route.get("ping_payload", b""),
+            max_frame_bytes=route.get("max_frame_bytes"),
+            max_message_bytes=route.get("max_message_bytes"),
         )
         try:
             route["handler"](ws, request)

@@ -577,6 +577,8 @@ class App:
         on_timeout=None,
         io_poll_interval=1.0,
         ping_payload=b"",
+        max_frame_bytes=None,
+        max_message_bytes=None,
     ):
         normalized_path = str(path or "")
         if not normalized_path.startswith("/") or any(
@@ -593,6 +595,9 @@ class App:
         )
         if len(normalized_ping_payload) > 125:
             raise ValueError("WebSocket ping payload must be at most 125 bytes")
+        for name, limit in (("max_frame_bytes", max_frame_bytes), ("max_message_bytes", max_message_bytes)):
+            if limit is not None and int(limit) < 1:
+                raise ValueError(f"WebSocket {name} must be at least 1 byte")
 
         def decorator(func):
             self.ws_routes[normalized_path] = {
@@ -607,6 +612,8 @@ class App:
                 "on_timeout": on_timeout,
                 "io_poll_interval": float(io_poll_interval or 1.0),
                 "ping_payload": normalized_ping_payload,
+                "max_frame_bytes": None if max_frame_bytes is None else int(max_frame_bytes),
+                "max_message_bytes": None if max_message_bytes is None else int(max_message_bytes),
             }
             return func
 
@@ -1366,8 +1373,9 @@ class App:
 
         return resp
 
-    def run(self, host, port, ssl_context=None):
+    def run(self, host, port, ssl_context=None, **server_options):
+        """Serve the app; ``server_options`` are ``HTTPServer`` limit keywords."""
         from .server import HTTPServer
 
-        server = HTTPServer(host, port, self, ssl_context=ssl_context)
+        server = HTTPServer(host, port, self, ssl_context=ssl_context, **server_options)
         server.serve_forever()

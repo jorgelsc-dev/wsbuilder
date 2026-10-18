@@ -13,11 +13,15 @@ limites de transporte, instancia el servidor:
 from wsbuilder import App, HTTPServer
 
 app = App()
-server = HTTPServer("127.0.0.1", 8765, app)
-server.MAX_CONNECTION_WORKERS = 128
-server.MAX_REQUEST_HEADER_BYTES = 128 * 1024
-server.MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024
-server.REQUEST_READ_TIMEOUT_SECONDS = 15.0
+server = HTTPServer(
+    "127.0.0.1",
+    8765,
+    app,
+    max_connection_workers=128,
+    max_request_header_bytes=128 * 1024,
+    max_request_body_bytes=4 * 1024 * 1024,
+    request_read_timeout=15.0,
+)
 server.serve_forever()
 ```
 
