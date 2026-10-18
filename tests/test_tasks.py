@@ -5,7 +5,15 @@ import unittest
 from unittest.mock import patch
 
 import wsbuilder.tasks as tasks_module
-from wsbuilder import App, Request, TaskCancelledError, TaskManager, TASK_CANCELLED, TASK_COMPLETED, TASK_RUNNING
+from wsbuilder import (
+    TASK_CANCELLED,
+    TASK_COMPLETED,
+    TASK_RUNNING,
+    App,
+    Request,
+    TaskCancelledError,
+    TaskManager,
+)
 
 
 def _req(path, client=("127.0.0.1", 1234)):

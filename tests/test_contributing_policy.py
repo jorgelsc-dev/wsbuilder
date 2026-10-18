@@ -1,7 +1,6 @@
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTRIBUTING_PATH = REPO_ROOT / "CONTRIBUTING.md"
 

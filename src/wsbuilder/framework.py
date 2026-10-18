@@ -1,13 +1,40 @@
 """Compatibility facade for the original single-file framework module."""
 
 from .app import App, Route, Router
-from .constants import DEFAULT_CORS_ALLOW_ORIGIN, MAGIC_WS, STATUS_MESSAGES
-from .http import Request, Response, parse_http_request, parse_query_string, send_http_response
-from .metrics import AppMetrics, install_metrics
-from .logs import NDJSONLog, install_logs
 from .cache import Cache, SQLiteMemoryCache, install_cache
 from .caches import GlobalCacheRule, ViewResponseCache, install_caches
+from .constants import DEFAULT_CORS_ALLOW_ORIGIN, MAGIC_WS, STATUS_MESSAGES
+from .http import Request, Response, parse_http_request, parse_query_string, send_http_response
+from .logs import NDJSONLog, install_logs
+from .metrics import AppMetrics, install_metrics
+from .proxyi import (
+    BALANCING_BEST,
+    BALANCING_CONSISTENT_HASH,
+    BALANCING_FIRST_AVAILABLE,
+    BALANCING_IP_HASH,
+    BALANCING_LEAST_BYTES_IN,
+    BALANCING_LEAST_BYTES_OUT,
+    BALANCING_LEAST_CONNECTIONS,
+    BALANCING_LEAST_REQUESTS,
+    BALANCING_LEAST_RESPONSE_TIME,
+    BALANCING_POWER_OF_TWO_CHOICES,
+    BALANCING_RANDOM,
+    BALANCING_ROUND_ROBIN,
+    BALANCING_WEIGHTED_ROUND_ROBIN,
+    SUPPORTED_BALANCING_STRATEGIES,
+    ProxyI,
+    ProxyMetricsBucket,
+    ProxyRouteBuilder,
+    ProxyRule,
+    ProxyTarget,
+    RunningStats,
+    install_proxyi,
+    normalize_balance_mode,
+    normalize_target,
+    proxyi,
+)
 from .security import ACLRule, SecurityDecision, SecurityPolicy, install_security
+from .server import HTTPServer
 from .tasks import (
     TASK_CANCELLED,
     TASK_COMPLETED,
@@ -23,41 +50,14 @@ from .tasks import (
     TaskManager,
     TaskRejectedError,
 )
-from .server import HTTPServer
-from .proxyi import (
-    BALANCING_BEST,
-    BALANCING_CONSISTENT_HASH,
-    BALANCING_FIRST_AVAILABLE,
-    BALANCING_IP_HASH,
-    BALANCING_LEAST_BYTES_IN,
-    BALANCING_LEAST_BYTES_OUT,
-    BALANCING_LEAST_CONNECTIONS,
-    BALANCING_LEAST_REQUESTS,
-    BALANCING_LEAST_RESPONSE_TIME,
-    BALANCING_POWER_OF_TWO_CHOICES,
-    BALANCING_RANDOM,
-    BALANCING_ROUND_ROBIN,
-    BALANCING_WEIGHTED_ROUND_ROBIN,
-    ProxyI,
-    ProxyMetricsBucket,
-    ProxyRule,
-    ProxyRouteBuilder,
-    ProxyTarget,
-    RunningStats,
-    SUPPORTED_BALANCING_STRATEGIES,
-    install_proxyi,
-    normalize_balance_mode,
-    normalize_target,
-    proxyi,
-)
 from .ws import (
     B64_ALPHABET,
+    WebSocket,
     WebSocketConnectionClosedError,
     WebSocketFrame,
-    WebSocket,
+    WebSocketProtocolError,
     WebSocketReadError,
     WebSocketReadTimeoutError,
-    WebSocketProtocolError,
     base64_encode,
     handshake_websocket,
     handshake_websocket_with_options,

@@ -4,13 +4,13 @@ import threading
 import time
 
 from .http import Request, Response, parse_http_request, send_http_response
-from .http2 import CONNECTION_PREFACE as HTTP2_PREFACE
 from .http1 import (
     BufferedReader,
     connection_header_value,
     read_chunked_body,
     should_keep_alive,
 )
+from .http2 import CONNECTION_PREFACE as HTTP2_PREFACE
 from .ws import _websocket_handshake_error_response, handshake_websocket_with_options, is_ws_request
 
 
@@ -92,7 +92,7 @@ class HTTPServer:
             while not self._stop.is_set():
                 try:
                     conn, addr = s.accept()
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except OSError as e:
                     # Transient accept failures (dropped handshake, fd
@@ -281,7 +281,7 @@ class HTTPServer:
                 reader,
                 max_header_bytes=self.MAX_REQUEST_HEADER_BYTES,
             )
-        except socket.timeout:
+        except TimeoutError:
             send_http_response(conn, Response.text("Request Timeout", status=408))
             return False
         except ValueError as e:
@@ -362,7 +362,7 @@ class HTTPServer:
                     reader,
                     max_body_bytes=self.MAX_REQUEST_BODY_BYTES,
                 )
-            except socket.timeout:
+            except TimeoutError:
                 send_http_response(conn, Response.text("Request Timeout", status=408))
                 return False
             except (ConnectionError, OSError):
@@ -399,7 +399,7 @@ class HTTPServer:
                     return False
             try:
                 body = reader.read_exactly(cl)
-            except socket.timeout:
+            except TimeoutError:
                 send_http_response(conn, Response.text("Request Timeout", status=408))
                 return False
             except (ConnectionError, OSError):

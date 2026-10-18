@@ -7,10 +7,9 @@ import re
 import socket
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
-
 
 DEFAULT_SERVICE_TYPE = "_http._tcp.local."
 

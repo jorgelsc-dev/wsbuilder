@@ -1,7 +1,6 @@
 import base64
 import hashlib
 import re
-import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -324,7 +323,7 @@ class WebSocket:
         while True:
             try:
                 frame = read_ws_frame_raw(self.sock)
-            except (socket.timeout, TimeoutError) as exc:
+            except TimeoutError as exc:
                 if self._closed:
                     raise WebSocketConnectionClosedError("WebSocket already closed") from exc
                 managed_timeout = (

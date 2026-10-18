@@ -3,8 +3,7 @@ import ssl
 import threading
 import unittest
 
-from wsbuilder import App, CertificateAuthority, CertificateManager
-from wsbuilder import http3
+from wsbuilder import App, CertificateAuthority, CertificateManager, http3
 from wsbuilder.http3_server import Http3Server, alt_svc_header, certificate_chain_der
 from wsbuilder.qpack import decode_field_section, encode_field_section
 from wsbuilder.quic import frames as qf
@@ -146,7 +145,7 @@ class QuicClientHarness(unittest.TestCase):
         while True:
             try:
                 data, _ = self.sock.recvfrom(65535)
-            except socket.timeout:
+            except TimeoutError:
                 break
             replies.append(data)
             # The flight is already in flight; drain the rest impatiently so
@@ -356,7 +355,7 @@ def _server_frames(sock, send, pn_offset):
         while True:
             try:
                 data, _ = sock.recvfrom(65535)
-            except socket.timeout:
+            except TimeoutError:
                 break
             cleaned, number, pn_length = remove_header_protection(send, data, pn_offset)
             opened = send.open(

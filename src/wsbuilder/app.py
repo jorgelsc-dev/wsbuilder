@@ -431,7 +431,7 @@ class App:
 
     def _sign_thread_cookie(self, route_path, thread_id, issued_at=None):
         issued = int(time.time() if issued_at is None else issued_at)
-        payload = f"{route_path}|{thread_id}|{issued}".encode("utf-8")
+        payload = f"{route_path}|{thread_id}|{issued}".encode()
         sig = hmac.new(
             self._thread_cookie_secret,
             payload,
@@ -467,7 +467,7 @@ class App:
         ttl = max(0.0, float(ttl_seconds or 0.0))
         if issued > now + 60 or (ttl > 0 and now - issued > ttl):
             return ""
-        payload = f"{route_path}|{normalized}|{issued}".encode("utf-8")
+        payload = f"{route_path}|{normalized}|{issued}".encode()
         expected = hmac.new(
             self._thread_cookie_secret,
             payload,

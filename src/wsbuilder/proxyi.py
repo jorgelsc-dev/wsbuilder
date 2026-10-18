@@ -839,7 +839,7 @@ class ProxyRule:
         return rows[0][4]
 
     def _hash_score(self, key, target):
-        raw = f"{key}|{target.url}|{target.name}".encode("utf-8")
+        raw = f"{key}|{target.url}|{target.name}".encode()
         digest = hashlib.sha256(raw).digest()
         value = int.from_bytes(digest[:8], byteorder="big", signed=False)
         weight = max(1, int(getattr(target, "weight", 1) or 1))

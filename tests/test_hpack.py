@@ -2,7 +2,6 @@ import unittest
 
 from wsbuilder.hpack import (
     HUFFMAN_CODES,
-    STATIC_TABLE_SIZE,
     Decoder,
     DynamicTable,
     Encoder,

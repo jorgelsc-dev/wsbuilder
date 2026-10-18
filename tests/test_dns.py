@@ -284,7 +284,7 @@ class TestLocalDNSServer(unittest.TestCase):
                 if self.packets:
                     return self.packets.pop(0), ("127.0.0.1", 53000)
                 dns._running.clear()
-                raise socket.timeout()
+                raise TimeoutError()
 
             def sendto(self, data, addr):
                 sent.append((data, addr))

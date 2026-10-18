@@ -1,13 +1,12 @@
 import copy
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import textwrap
 import unittest
-
+from pathlib import Path
 
 WORKFLOW = (
     Path(__file__).resolve().parents[1]

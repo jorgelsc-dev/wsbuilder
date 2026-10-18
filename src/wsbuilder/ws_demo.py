@@ -13,17 +13,17 @@
 # - ORM SQLite con concurrencia y transacciones anidadas
 # UNICAS librerías externas: socket, threading, uuid, time, json, sqlite3
 
-import socket
-import threading
-import uuid
-import time
 import json
+import socket
 import sqlite3
+import threading
+import time
+import uuid
 
 try:
-    from .metrics import AppMetrics, DEFAULT_STREAM_POINTS
+    from .metrics import DEFAULT_STREAM_POINTS, AppMetrics
 except Exception:
-    from metrics import AppMetrics, DEFAULT_STREAM_POINTS
+    from metrics import DEFAULT_STREAM_POINTS, AppMetrics
 
 # Loopback by default: the maintained entry point and the documentation both
 # say exposing the demo to the network is an explicit choice, not a default.
@@ -759,7 +759,7 @@ document.getElementById('chat_text').addEventListener('keydown', function(ev){
 </script>
 </body>
 </html>
-""".encode('utf-8')
+""".encode()
 
 # ============================================================
 #  ORM SQLite (solo sqlite3 + threading)
@@ -1299,7 +1299,7 @@ class Model(metaclass=ModelMeta):
         if pk_name and pk_val is not None:
             cols = []
             params = []
-            for name, field in fields.items():
+            for name in fields:
                 if name == pk_name:
                     continue
                 cols.append(name + "=?")
@@ -1512,7 +1512,7 @@ class ConnectionThread(threading.Thread):
                 chunk = str(chunk).encode('utf-8')
             if not chunk:
                 continue
-            self.conn.sendall(f"{len(chunk):X}\r\n".encode('utf-8'))
+            self.conn.sendall(f"{len(chunk):X}\r\n".encode())
             self.conn.sendall(chunk)
             self.conn.sendall(b"\r\n")
         self.conn.sendall(b"0\r\n\r\n")
@@ -1633,7 +1633,7 @@ class ConnectionThread(threading.Thread):
         if path == '/api/hello':
             if method.upper() == 'GET':
                 print("[API] /api/hello GET")
-                payload = '{"message":"Hello from server"}'.encode('utf-8')
+                payload = b'{"message":"Hello from server"}'
                 send(200, 'OK', {'Content-Type':'application/json; charset=utf-8'}, payload)
                 return True
             else:

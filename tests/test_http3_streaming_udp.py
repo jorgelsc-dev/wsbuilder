@@ -9,13 +9,11 @@ import time
 import unittest
 
 from test_http3_server import QuicClientHarness, _server_frames
-
-from wsbuilder import http3
+from wsbuilder import Response, http3
 from wsbuilder.qpack import decode_field_section, encode_field_section
 from wsbuilder.quic import frames as qf
-from wsbuilder.quic.crypto import apply_header_protection, remove_header_protection
+from wsbuilder.quic.crypto import apply_header_protection
 from wsbuilder.quic.packet import build_short_header
-from wsbuilder import Response
 from wsbuilder.ws import WebSocketConnectionClosedError
 
 

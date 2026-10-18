@@ -316,29 +316,29 @@ class Database:
             )
 
         self._conn.row_factory = sqlite3.Row
-        
+
         # Default optimized pragmas
         base_pragmas = {
             "foreign_keys": 1,
             "busy_timeout": int(timeout * 1000),
         }
-        
+
         # Add SQLite3 optimizations
         if enable_wal:
             base_pragmas["journal_mode"] = "WAL"
             base_pragmas["wal_autocheckpoint"] = 1000
-        
+
         base_pragmas["cache_size"] = _pragma_cache_size_from_mb(cache_size_mb)
         base_pragmas["synchronous"] = "NORMAL"
         base_pragmas["temp_store"] = "MEMORY"
         base_pragmas["mmap_size"] = 30000000
         base_pragmas["automatic_index"] = 1
-        
+
         if pragmas:
             base_pragmas.update(pragmas)
         for key, value in base_pragmas.items():
             self.set_pragma(key, value)
-        
+
         # Enable read replicas if needed
         if enable_replicas and path != ":memory:":
             from . import db_replicas

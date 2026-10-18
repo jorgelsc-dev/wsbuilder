@@ -73,6 +73,7 @@ app.enable_docs()
 
 ```bash
 PYTHONPATH=src pytest -q
+ruff check src tests examples
 mkdocs build --strict
 python -m wsbuilder --host 0.0.0.0 --port 8765
 ```

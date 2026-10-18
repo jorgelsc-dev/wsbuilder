@@ -5,7 +5,6 @@ from urllib.parse import parse_qsl
 from .constants import STATUS_MESSAGES
 from .headers import validate_header_name, validate_header_value
 
-
 MAX_QUERY_FIELDS = 1024
 HTTP_0_9 = "HTTP/0.9"
 HTTP_1_1 = "HTTP/1.1"
@@ -281,7 +280,7 @@ def send_http_response(conn, response, *, send_body=True, keep_alive=False, vers
             use_chunked = "chunked" in lowermap.get("transfer-encoding", "").lower()
             for chunk in _iter_stream_chunks(response.stream):
                 if use_chunked:
-                    conn.sendall(f"{len(chunk):X}\r\n".encode("utf-8"))
+                    conn.sendall(f"{len(chunk):X}\r\n".encode())
                     conn.sendall(chunk)
                     conn.sendall(b"\r\n")
                 else:

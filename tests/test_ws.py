@@ -1,4 +1,3 @@
-import socket
 import time
 import unittest
 
@@ -9,10 +8,10 @@ from wsbuilder.ws import (
     WebSocketFrame,
     WebSocketProtocolError,
     WebSocketReadTimeoutError,
+    base64_encode,
     handshake_websocket_with_options,
     make_ws_frame_bytes,
     parse_close_payload,
-    base64_encode,
     read_ws_frame_raw,
     sha1,
     unmask_payload,
@@ -95,7 +94,7 @@ class TestWebSocketCore(unittest.TestCase):
     def test_recv_frame_distinguishes_timeout_and_connection_close(self):
         timeout_events = []
         timeout_ws = WebSocket(
-            DummySocket(recv_events=[socket.timeout("timed out")]),
+            DummySocket(recv_events=[TimeoutError("timed out")]),
             ("127.0.0.1", 1234),
             "",
             {},
@@ -121,7 +120,7 @@ class TestWebSocketCore(unittest.TestCase):
 
     def test_keepalive_pings_before_next_frame(self):
         pong_frame = _masked_client_frame(0xA, b"")
-        sock = DummySocket(data=pong_frame, recv_events=[socket.timeout("idle")])
+        sock = DummySocket(data=pong_frame, recv_events=[TimeoutError("idle")])
         ws = WebSocket(
             sock,
             ("127.0.0.1", 1234),
@@ -203,7 +202,7 @@ class TestWebSocketCore(unittest.TestCase):
     def test_managed_timeout_keeps_polling_until_configured_idle_limit(self):
         raw = _masked_client_frame(0x1, b"ready")
         sock = DummySocket(
-            recv_events=[socket.timeout("poll"), raw],
+            recv_events=[TimeoutError("poll"), raw],
         )
         timeout_events = []
         ws = WebSocket(
@@ -224,7 +223,7 @@ class TestWebSocketCore(unittest.TestCase):
     def test_pong_timeout_without_keepalive_does_not_swallow_read_timeout(self):
         timeout_events = []
         ws = WebSocket(
-            DummySocket(recv_events=[socket.timeout("timed out")]),
+            DummySocket(recv_events=[TimeoutError("timed out")]),
             ("127.0.0.1", 1234),
             "",
             {},
