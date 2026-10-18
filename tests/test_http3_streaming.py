@@ -5,9 +5,10 @@ import threading
 import unittest
 from types import SimpleNamespace
 
-from wsbuilder import Response, http3
+from wsbuilder import App, Response, http3
 from wsbuilder.http3_server import Http3Server
 from wsbuilder.http3_websocket import Http3WebSocketStream
+from wsbuilder.qpack import decode_field_section, encode_field_section
 from wsbuilder.quic.connection import STREAM_CHUNK_SIZE, QuicConnection
 
 
@@ -161,6 +162,48 @@ class TestOutboundQueue(unittest.TestCase):
         connection = self._bare_connection()
         connection.queue_stream_data(8, b"", fin=True)
         self.assertEqual(connection._outbound, [(8, b"", True)])
+
+
+class TestHttp3BodyLimit(unittest.TestCase):
+    def test_an_oversized_body_is_answered_413_without_dispatch(self):
+        app = App()
+        self.addCleanup(app.close)
+        calls = []
+
+        @app.api("/upload", methods=("POST",))
+        def upload(request):
+            calls.append(len(request.body))
+            return {"ok": True}
+
+        server = Http3Server("127.0.0.1", 0, app, None, max_request_body_bytes=8)
+        queued = []
+        connection = SimpleNamespace(
+            closed=False,
+            client_address=("127.0.0.1", 1234),
+            alpn="h3",
+            queue_stream_data=lambda stream_id, data, fin=False: queued.append((stream_id, data, fin)),
+        )
+        headers = [
+            (":method", "POST"),
+            (":scheme", "https"),
+            (":path", "/upload"),
+            (":authority", "example.test"),
+        ]
+        request = http3.encode_frame(http3.FRAME_HEADERS, encode_field_section(headers))
+        server._on_stream_data(connection, 0, request, False)
+        server._on_stream_data(connection, 0, http3.encode_frame(http3.FRAME_DATA, b"x" * 9), False)
+        server._on_stream_data(connection, 0, http3.encode_frame(http3.FRAME_DATA, b"y"), True)
+
+        self.assertEqual(calls, [])
+        self.assertEqual(len(queued), 1)
+        stream_id, payload, fin = queued[0]
+        self.assertEqual((stream_id, fin), (0, True))
+        frames, _tail = http3.parse_frames(payload)
+        self.assertEqual(dict(decode_field_section(frames[0][1]))[":status"], "413")
+
+    def test_the_body_limit_must_not_be_negative(self):
+        with self.assertRaises(ValueError):
+            Http3Server("127.0.0.1", 0, None, None, max_request_body_bytes=-1)
 
 
 class TestHttp3StreamCleanup(unittest.TestCase):

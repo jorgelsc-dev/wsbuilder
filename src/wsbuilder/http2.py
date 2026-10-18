@@ -14,6 +14,7 @@ it would desynchronise the decoder for every later stream.
 import struct
 
 from .hpack import Decoder, Encoder, HPACKError
+from .http import Response
 from .logs import get_log
 
 #: RFC 9113 section 3.4. A client opens with this exact octet sequence.
@@ -240,6 +241,8 @@ class Stream:
         #: Body the peer's window has no room for yet.
         self.pending_output = bytearray()
         self.pending_end_stream = False
+        #: Set once the body outgrew the server limit and a 413 went out.
+        self.body_rejected = False
 
     @property
     def closed(self):
@@ -318,8 +321,12 @@ class Http2Connection:
     exercised in tests without a socket.
     """
 
-    def __init__(self, conn, app, *, tls=None, client_address=("", 0), max_streams=100):
+    def __init__(
+        self, conn, app, *, tls=None, client_address=("", 0), max_streams=100, max_body_bytes=None
+    ):
         self.conn = conn
+        #: Largest request body buffered per stream; None leaves it unbounded.
+        self.max_body_bytes = None if max_body_bytes is None else int(max_body_bytes)
         self.app = app
         self.tls = tls or {}
         self.client_address = client_address
@@ -578,6 +585,8 @@ class Http2Connection:
         stream.open_remote(end_stream)
         if end_stream:
             self._dispatch(stream)
+        elif self._declared_length_exceeds_limit(headers):
+            self._reject_body(stream)
 
     def _on_data(self, frame):
         self._require_stream_id(frame, False)
@@ -599,6 +608,15 @@ class Http2Connection:
             raise StreamError("DATA on a stream that is not open", frame.stream_id,
                               ERROR_STREAM_CLOSED)
         stream.inbound.consume(received)
+        if stream.body_rejected:
+            # The 413 is already on its way; the rest of the body is dropped
+            # and its window is not handed back.
+            if frame.has(FLAG_END_STREAM):
+                stream.end_remote()
+            return
+        if self.max_body_bytes is not None and len(stream.body) + len(payload) > self.max_body_bytes:
+            self._reject_body(stream)
+            return
         stream.body.extend(payload)
         if received:
             self._send(Frame(FRAME_WINDOW_UPDATE, 0, stream.id, struct.pack(">I", received)))
@@ -606,6 +624,31 @@ class Http2Connection:
         if frame.has(FLAG_END_STREAM):
             stream.end_remote()
             self._dispatch(stream)
+
+    def _declared_length_exceeds_limit(self, headers):
+        if self.max_body_bytes is None:
+            return False
+        for name, value in headers:
+            if name == "content-length":
+                try:
+                    return int(value) > self.max_body_bytes
+                except ValueError:
+                    return False
+        return False
+
+    def _reject_body(self, stream):
+        """Answer 413 before the body is complete, then stop the upload.
+
+        RFC 9113 section 8.1 lets a server respond early and reset the
+        request stream with NO_ERROR so the client stops sending.
+        """
+        stream.body_rejected = True
+        stream.body = bytearray()
+        self.send_response(stream, Response.text("Payload Too Large", status=413))
+        if not stream.pending_output:
+            stream.state = CLOSED
+            stream.reset_code = ERROR_NO_ERROR
+            self.send_rst_stream(stream.id, ERROR_NO_ERROR)
 
     # -- request handling ----------------------------------------------
 

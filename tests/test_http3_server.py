@@ -8,6 +8,15 @@ from wsbuilder.http3_server import Http3Server, alt_svc_header, certificate_chai
 from wsbuilder.qpack import decode_field_section, encode_field_section
 from wsbuilder.quic import frames as qf
 from wsbuilder.quic.connection import (
+    CONNECTION_RECEIVE_WINDOW,
+    ERROR_CRYPTO_BUFFER_EXCEEDED,
+    ERROR_FLOW_CONTROL,
+    ERROR_STREAM_LIMIT,
+    LEVEL_APPLICATION,
+    LEVEL_INITIAL,
+    MAX_CRYPTO_BUFFER,
+    MAX_PEER_STREAMS,
+    STREAM_RECEIVE_WINDOW,
     QuicConnection,
     StreamBuffer,
     decode_transport_parameters,
@@ -70,6 +79,117 @@ class TestStreamReassembly(unittest.TestCase):
         buffer.add(0, b"abc")
         self.assertEqual(buffer.add(0, b"abc"), b"")
         self.assertEqual(bytes(buffer.data), b"abc")
+
+
+    def test_unretained_buffers_count_bytes_without_keeping_them(self):
+        buffer = StreamBuffer(retain=False)
+        self.assertEqual(buffer.add(0, b"abc"), b"abc")
+        self.assertEqual(buffer.add(3, b"def", fin=True), b"def")
+        self.assertEqual(bytes(buffer.data), b"")
+        self.assertEqual(buffer.received, 6)
+        self.assertTrue(buffer.complete)
+
+    def test_held_pieces_that_overlap_are_trimmed(self):
+        buffer = StreamBuffer()
+        self.assertEqual(buffer.add(4, b"efgh"), b"")
+        self.assertEqual(buffer.add(2, b"cdefg"), b"")
+        self.assertEqual(buffer.pending_bytes, 9)
+        self.assertEqual(buffer.add(0, b"ab"), b"abcdefgh")
+        self.assertEqual(bytes(buffer.data), b"abcdefgh")
+        self.assertEqual(buffer.pending_bytes, 0)
+
+
+def _flow_connection():
+    """A connection with only the state stream reception touches."""
+    connection = QuicConnection.__new__(QuicConnection)
+    connection.streams = {}
+    connection.closed = False
+    connection.on_stream_data = None
+    connection._recv_max_data = CONNECTION_RECEIVE_WINDOW
+    connection._recv_highest_total = 0
+    connection._recv_consumed = 0
+    connection.crypto_buffers = {LEVEL_INITIAL: StreamBuffer()}
+    return connection
+
+
+def _frames(outgoing, kind):
+    return [frame for _level, frames in outgoing for frame in frames if isinstance(frame, kind)]
+
+
+class TestReceiveFlowControl(unittest.TestCase):
+    def _send(self, connection, stream_id, offset, size, fin=False):
+        outgoing = []
+        connection._on_stream_frame(qf.StreamFrame(stream_id, offset, b"x" * size, fin), outgoing)
+        return outgoing
+
+    def _close_code(self, outgoing):
+        (close,) = _frames(outgoing, qf.ConnectionCloseFrame)
+        return close.error_code
+
+    def test_windows_are_topped_up_once_half_is_delivered(self):
+        connection = _flow_connection()
+        self.assertEqual(self._send(connection, 0, 0, STREAM_RECEIVE_WINDOW // 4), [])
+
+        outgoing = self._send(connection, 0, STREAM_RECEIVE_WINDOW // 4, STREAM_RECEIVE_WINDOW // 2)
+
+        (update,) = _frames(outgoing, qf.MaxStreamDataFrame)
+        self.assertEqual(update.stream_id, 0)
+        self.assertEqual(update.maximum, STREAM_RECEIVE_WINDOW * 3 // 4 + STREAM_RECEIVE_WINDOW)
+        self.assertFalse(connection.closed)
+
+    def test_a_long_upload_keeps_flowing(self):
+        connection = _flow_connection()
+        offset, chunk = 0, 1000
+        while offset < CONNECTION_RECEIVE_WINDOW * 3:
+            self._send(connection, 0, offset, chunk)
+            offset += chunk
+        self.assertFalse(connection.closed)
+        self.assertGreater(connection._recv_max_data, CONNECTION_RECEIVE_WINDOW * 3)
+
+    def test_writing_past_the_stream_window_closes_the_connection(self):
+        connection = _flow_connection()
+        outgoing = self._send(connection, 0, STREAM_RECEIVE_WINDOW - 10, 11)
+        self.assertEqual(self._close_code(outgoing), ERROR_FLOW_CONTROL)
+        self.assertTrue(connection.closed)
+
+    def test_writing_past_the_connection_window_closes_the_connection(self):
+        connection = _flow_connection()
+        # Pieces held behind a gap are never delivered, so no window reopens.
+        streams = CONNECTION_RECEIVE_WINDOW // (STREAM_RECEIVE_WINDOW - 1) + 1
+        outgoing = []
+        for index in range(streams):
+            outgoing = self._send(connection, index * 4, 1, STREAM_RECEIVE_WINDOW - 1)
+            if connection.closed:
+                break
+        self.assertTrue(connection.closed)
+        self.assertEqual(self._close_code(outgoing), ERROR_FLOW_CONTROL)
+
+    def test_opening_too_many_streams_closes_the_connection(self):
+        connection = _flow_connection()
+        outgoing = self._send(connection, MAX_PEER_STREAMS * 4, 0, 1)
+        self.assertEqual(self._close_code(outgoing), ERROR_STREAM_LIMIT)
+
+    def test_oversized_crypto_data_is_refused(self):
+        connection = _flow_connection()
+        outgoing = []
+        connection._handle_frames(
+            LEVEL_INITIAL, [qf.CryptoFrame(MAX_CRYPTO_BUFFER, b"x")], outgoing
+        )
+        self.assertEqual(self._close_code(outgoing), ERROR_CRYPTO_BUFFER_EXCEEDED)
+        self.assertTrue(connection.closed)
+
+    def test_frames_after_a_close_are_ignored(self):
+        connection = _flow_connection()
+        outgoing = []
+        connection._handle_frames(
+            LEVEL_APPLICATION,
+            [
+                qf.StreamFrame(MAX_PEER_STREAMS * 4, 0, b"x"),
+                qf.StreamFrame(0, 0, b"later"),
+            ],
+            outgoing,
+        )
+        self.assertNotIn(0, connection.streams)
 
 
 class TestTransportParameters(unittest.TestCase):

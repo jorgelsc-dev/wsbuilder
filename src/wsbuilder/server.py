@@ -314,6 +314,7 @@ class HTTPServer:
             tls=tls_meta,
             client_address=addr,
             max_streams=self.MAX_CONCURRENT_STREAMS,
+            max_body_bytes=self.MAX_REQUEST_BODY_BYTES,
         )
         # The reader already owns any bytes read while sniffing, and writes
         # still go straight to the socket.

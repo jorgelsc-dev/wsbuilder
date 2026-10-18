@@ -43,6 +43,8 @@ SETTINGS_QPACK_BLOCKED_STREAMS = 0x07
 #: RFC 9220: lets a client send ``CONNECT`` with a ``:protocol`` pseudo-header,
 #: which is how WebSocket runs over HTTP/3.
 SETTINGS_ENABLE_CONNECT_PROTOCOL = 0x08
+#: Largest header block we accept, advertised in SETTINGS.
+MAX_FIELD_SECTION_SIZE = 65536
 
 H3_NO_ERROR = 0x0100
 H3_GENERAL_PROTOCOL_ERROR = 0x0101
@@ -171,10 +173,17 @@ def validate_request_headers(headers):
 
 
 class RequestStream:
-    """One request/response exchange on a bidirectional QUIC stream."""
+    """One request/response exchange on a bidirectional QUIC stream.
 
-    def __init__(self, stream_id):
+    With ``max_body_bytes`` set, a body (or a half-received frame) that
+    outgrows it is dropped and ``body_rejected`` is set so the server can
+    answer 413; the rest of the stream is then discarded.
+    """
+
+    def __init__(self, stream_id, max_body_bytes=None):
         self.id = int(stream_id)
+        self.max_body_bytes = None if max_body_bytes is None else int(max_body_bytes)
+        self.body_rejected = False
         self.buffer = bytearray()
         self.headers = None
         self.body = bytearray()
@@ -186,16 +195,36 @@ class RequestStream:
 
     def feed(self, data, fin=False):
         """Add stream bytes; returns True once the request is complete."""
+        if self.body_rejected:
+            self.finished = self.finished or bool(fin)
+            return False
         self.buffer.extend(data)
         frames, tail = parse_frames(self.buffer)
         self.buffer = bytearray(tail)
         for frame_type, payload in frames:
             self._on_frame(frame_type, payload)
+            if self.body_rejected:
+                return False
+        if self._buffer_limit() is not None and len(self.buffer) > self._buffer_limit():
+            # A frame that has not finished arriving can still outgrow memory.
+            self._reject_body()
+            return False
         if fin:
             self.finished = True
             if self.buffer:
                 raise H3Error("stream ended mid-frame", H3_FRAME_ERROR)
         return self.finished and self.headers is not None
+
+    def _buffer_limit(self):
+        if self.max_body_bytes is None:
+            return None
+        # Room for one whole field section or body, plus a frame header.
+        return max(self.max_body_bytes, MAX_FIELD_SECTION_SIZE) + 16
+
+    def _reject_body(self):
+        self.body_rejected = True
+        self.body = bytearray()
+        self.buffer = bytearray()
 
     def _on_frame(self, frame_type, payload):
         if frame_type == FRAME_HEADERS:
@@ -212,6 +241,13 @@ class RequestStream:
             if self.headers is None:
                 # Section 4.1: a request opens with HEADERS, always.
                 raise H3Error("DATA before HEADERS", H3_FRAME_UNEXPECTED)
+            if (
+                self.max_body_bytes is not None
+                and self.websocket is None
+                and len(self.body) + len(payload) > self.max_body_bytes
+            ):
+                self._reject_body()
+                return
             self.body.extend(payload)
             return
         if frame_type in (FRAME_SETTINGS, FRAME_GOAWAY, FRAME_MAX_PUSH_ID, FRAME_CANCEL_PUSH):
@@ -306,7 +342,7 @@ def build_control_stream(settings=None):
     values = {
         SETTINGS_QPACK_MAX_TABLE_CAPACITY: 0,
         SETTINGS_QPACK_BLOCKED_STREAMS: 0,
-        SETTINGS_MAX_FIELD_SECTION_SIZE: 65536,
+        SETTINGS_MAX_FIELD_SECTION_SIZE: MAX_FIELD_SECTION_SIZE,
         SETTINGS_ENABLE_CONNECT_PROTOCOL: 1,
     }
     if settings:
