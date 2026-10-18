@@ -1,6 +1,8 @@
 import argparse
 import json
+import math
 import os
+import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -244,12 +246,19 @@ def build_app(*, upstream_port=DEFAULT_UPSTREAM_PORT, enable_dns=False, dns_host
         else:
             tags = []
 
-        note = Note.create(
-            app.db,
-            title=title,
-            body=str(payload.get("body", "")),
-            tags=tags,
-        )
+        try:
+            note = Note.create(
+                app.db,
+                title=title,
+                body=str(payload.get("body", "")),
+                tags=tags,
+            )
+        except sqlite3.IntegrityError:
+            # The title column is UNIQUE: a repeated title is a conflict, not a crash.
+            return Response.json(
+                {"status": "error", "message": "a note with this title already exists"},
+                status=409,
+            )
         app.logs.event("note_created", note_id=note.id, title=note.title)
         if app.caches:
             app.caches.invalidate_path("/pages/overview")
@@ -267,7 +276,12 @@ def build_app(*, upstream_port=DEFAULT_UPSTREAM_PORT, enable_dns=False, dns_host
 
     @app.api("/api/ml/predict")
     def predict(request):
-        x_value = float(request.query.get("x", "5"))
+        try:
+            x_value = float(request.query.get("x", "5"))
+        except ValueError:
+            x_value = math.nan
+        if not math.isfinite(x_value):
+            return Response.json({"status": "error", "message": "x must be a number"}, status=400)
         prediction, sigma, lower, upper = app.predictor.predict([x_value])
         return {
             "x": x_value,

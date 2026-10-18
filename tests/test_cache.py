@@ -1,12 +1,32 @@
-import time
 import unittest
+from unittest.mock import patch
 
 from wsbuilder import App
 from wsbuilder.cache import SQLiteMemoryCache, install_cache
 
 
+class _Clock:
+    """Stands in for the ``time`` module of the cache code: TTLs expire on demand."""
+
+    def __init__(self, start=1_000_000.0):
+        self.now = float(start)
+
+    def time(self):
+        return self.now
+
+    def monotonic(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += float(seconds)
+
+
 class TestSQLiteMemoryCache(unittest.TestCase):
     def setUp(self):
+        self.clock = _Clock()
+        clock_patch = patch("wsbuilder.cache.time", self.clock)
+        clock_patch.start()
+        self.addCleanup(clock_patch.stop)
         self.cache = SQLiteMemoryCache(cleanup_interval_seconds=0)
 
     def tearDown(self):
@@ -17,7 +37,7 @@ class TestSQLiteMemoryCache(unittest.TestCase):
         self.assertEqual(self.cache.get("user:1"), {"name": "Alice"})
         self.assertGreater(self.cache.ttl("user:1"), 0)
 
-        time.sleep(0.08)
+        self.clock.advance(0.08)
         self.assertIsNone(self.cache.get("user:1"))
         self.assertEqual(self.cache.ttl("user:1"), -2)
 
@@ -50,7 +70,7 @@ class TestSQLiteMemoryCache(unittest.TestCase):
     def test_add_and_replace_treat_expired_entries_as_missing(self):
         self.cache.set("add-key", "old", ttl=0.02)
         self.cache.set("replace-key", "old", ttl=0.02)
-        time.sleep(0.04)
+        self.clock.advance(0.04)
 
         self.assertTrue(self.cache.add("add-key", "new"))
         self.assertEqual(self.cache.get("add-key"), "new")
@@ -108,9 +128,9 @@ class TestSQLiteMemoryCache(unittest.TestCase):
         cache = SQLiteMemoryCache(max_entries=2, cleanup_interval_seconds=0)
         try:
             cache.set("a", 1)
-            time.sleep(0.01)
+            self.clock.advance(0.01)
             cache.set("b", 2)
-            time.sleep(0.01)
+            self.clock.advance(0.01)
             cache.set("c", 3)
             self.assertEqual(cache.count(), 2)
             self.assertIsNone(cache.get("a"))

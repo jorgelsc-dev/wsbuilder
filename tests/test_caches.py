@@ -1,7 +1,7 @@
 import json
 import threading
-import time
 import unittest
+from unittest.mock import patch
 
 from wsbuilder import App, Request, Response
 from wsbuilder.cache import SQLiteMemoryCache
@@ -10,6 +10,22 @@ from wsbuilder.caches import (
     DEFAULT_VIEW_CACHE_MAX_ENTRIES,
     ViewResponseCache,
 )
+
+
+class _Clock:
+    """Stands in for the ``time`` module of the cache code: TTLs expire on demand."""
+
+    def __init__(self, start=1_000_000.0):
+        self.now = float(start)
+
+    def time(self):
+        return self.now
+
+    def monotonic(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += float(seconds)
 
 
 def _req(path, method="GET", headers=None):
@@ -40,6 +56,11 @@ class TestViewResponseCaches(unittest.TestCase):
         self.app.close()
 
     def test_view_cache_ttl_from_route_config(self):
+        clock = _Clock()
+        with patch("wsbuilder.cache.time", clock), patch("wsbuilder.caches.time", clock):
+            self._check_route_ttl(clock)
+
+    def _check_route_ttl(self, clock):
         caches = self.app.enable_caches()
         self.assertIs(caches, self.app.caches)
         state = {"n": 0}
@@ -56,13 +77,13 @@ class TestViewResponseCaches(unittest.TestCase):
         self.assertEqual(first.body, second.body)
         self.assertEqual(second.headers.get("X-WSBuilder-Cache"), "HIT")
 
-        time.sleep(0.1)
+        clock.advance(0.1)
         third = self.app.dispatch(_req("/ttl"))
         self.assertNotEqual(third.body, first.body)
 
     def test_global_wildcard_rule(self):
         caches = self.app.enable_caches()
-        caches.set_global_wildcard(0.2)
+        caches.set_global_wildcard(60)
         state = {"n": 0}
 
         @self.app.view("/wild")
@@ -77,7 +98,7 @@ class TestViewResponseCaches(unittest.TestCase):
 
     def test_global_mimetype_rule(self):
         caches = self.app.enable_caches()
-        caches.set_global_mimetype("text/plain", 0.2)
+        caches.set_global_mimetype("text/plain", 60)
         plain_state = {"n": 0}
         html_state = {"n": 0}
 
@@ -103,7 +124,7 @@ class TestViewResponseCaches(unittest.TestCase):
 
     def test_route_can_opt_out_from_global_cache(self):
         caches = self.app.enable_caches()
-        caches.set_global_wildcard(0.2)
+        caches.set_global_wildcard(60)
         state = {"n": 0}
 
         @self.app.view("/no-cache", cache=False)
@@ -118,7 +139,7 @@ class TestViewResponseCaches(unittest.TestCase):
 
     def test_metrics_include_http_cache_snapshot(self):
         caches = self.app.enable_caches()
-        caches.set_global_wildcard(0.2)
+        caches.set_global_wildcard(60)
         self.app.enable_metrics(app_name="cache-metrics")
 
         @self.app.view("/cache-me")
