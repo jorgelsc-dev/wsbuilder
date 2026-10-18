@@ -205,6 +205,27 @@ class TestRequestHeaderValidation(unittest.TestCase):
             )
 
 
+class TestRequestFieldHardening(unittest.TestCase):
+    BASE = [(":method", "GET"), (":scheme", "https"), (":path", "/")]
+
+    def test_invalid_values_and_names_are_refused(self):
+        bad_fields = [
+            ("x-a", "bad\r\nInjected: 1"),
+            ("x-a", "nul\x00"),
+            ("x-a", " leading"),
+            ("x-a", "trailing "),
+            ("bad name", "x"),
+            ("x-a:", "x"),
+        ]
+        for field in bad_fields:
+            with self.subTest(field=field):
+                with self.assertRaises(StreamError) as caught:
+                    validate_request_headers(self.BASE + [field], 1)
+                self.assertEqual(caught.exception.code, ERROR_PROTOCOL_ERROR)
+        with self.assertRaises(StreamError):
+            validate_request_headers([(":method", "GET"), (":scheme", "h"), (":path", "/\r\n")], 1)
+
+
 class ConnectionHarness(unittest.TestCase):
     def setUp(self):
         self.app = App()
@@ -263,6 +284,28 @@ class ConnectionHarness(unittest.TestCase):
 
 
 class TestConnectionFlow(ConnectionHarness):
+    def test_repeated_request_fields_are_combined(self):
+        @self.app.api("/fields", methods=("GET",))
+        def fields(request):
+            return {"cookie": request.headers.get("cookie"), "accept": request.headers.get("accept")}
+
+        request = self.request("/fields") + [
+            ("cookie", "a=1"),
+            ("cookie", "b=2"),
+            ("accept", "text/html"),
+            ("accept", "*/*"),
+        ]
+        answer = self.responses(self.run_connection(self.headers_frame(1, request)))[1]
+        self.assertIn(b'"cookie":"a=1; b=2"', answer["body"])
+        self.assertIn(b'"accept":"text/html, */*"', answer["body"])
+
+    def test_a_header_value_with_crlf_resets_the_stream(self):
+        request = self.request("/hello") + [("x-bad", "v\r\nInjected: 1")]
+        frames = self.run_connection(self.headers_frame(1, request))
+        resets = [f for f in frames if f.type == FRAME_RST_STREAM and f.stream_id == 1]
+        self.assertEqual([struct.unpack(">I", f.payload)[0] for f in resets], [ERROR_PROTOCOL_ERROR])
+        self.assertNotIn(1, {f.stream_id for f in frames if f.type == FRAME_HEADERS})
+
     def test_list_header_values_are_sent_as_repeated_fields(self):
         @self.app.route("/cookies", methods=("GET",))
         def cookies(_request):

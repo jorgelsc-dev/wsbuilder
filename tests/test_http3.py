@@ -231,6 +231,37 @@ class TestHeaderValidation(unittest.TestCase):
             validate_request_headers([("accept", "*/*"), (":method", "GET")])
 
 
+class TestRequestFieldHardening(unittest.TestCase):
+    def test_invalid_values_and_names_are_refused(self):
+        bad_fields = [
+            ("x-a", "bad\r\nInjected: 1"),
+            ("x-a", "nul\x00"),
+            ("x-a", " leading"),
+            ("x-a", "trailing\t"),
+            ("bad name", "x"),
+            ("x-a\n", "x"),
+        ]
+        for field in bad_fields:
+            with self.subTest(field=field):
+                with self.assertRaises(H3Error):
+                    validate_request_headers(request_fields() + [field])
+        with self.assertRaises(H3Error):
+            validate_request_headers([(":method", "GET\r\n")] + request_fields()[1:])
+
+    def test_repeated_fields_are_combined(self):
+        stream = RequestStream(0)
+        fields = request_fields() + [
+            ("cookie", "a=1"),
+            ("cookie", "b=2"),
+            ("accept", "text/html"),
+            ("accept", "*/*"),
+        ]
+        stream.feed(encode_frame(FRAME_HEADERS, encode_field_section(fields)), fin=True)
+        request = build_request(stream, ("127.0.0.1", 1))
+        self.assertEqual(request.headers["cookie"], "a=1; b=2")
+        self.assertEqual(request.headers["accept"], "text/html, */*")
+
+
 class TestRepeatedResponseFields(unittest.TestCase):
     def test_list_values_become_separate_fields(self):
         fields = build_response_head(200, {"Set-Cookie": ["a=1", "b=2"], "X-One": "1"})

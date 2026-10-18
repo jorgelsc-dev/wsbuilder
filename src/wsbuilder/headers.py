@@ -3,6 +3,46 @@ import re
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
+_LOWER_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
+
+
+def field_name_problem(name):
+    """Why ``name`` is not a valid HTTP/2 or HTTP/3 field name, or ``None``."""
+    if not _LOWER_TOKEN_RE.fullmatch(name or ""):
+        return f"invalid header name {name!r}"
+    return None
+
+
+def field_value_problem(value):
+    """Why ``value`` is not a valid HTTP/2 or HTTP/3 field value, or ``None``.
+
+    RFC 9113 section 8.2.1 and RFC 9114 section 4.2: no CR, LF or NUL, and no
+    leading or trailing space or tab.
+    """
+    text = str(value)
+    if any(char in text for char in ("\r", "\n", "\x00")):
+        return "header value contains CR, LF or NUL"
+    if text[:1] in (" ", "\t") or text[-1:] in (" ", "\t"):
+        return "header value has leading or trailing whitespace"
+    return None
+
+
+def combine_field_values(fields):
+    """Fold repeated fields into one value per name, as HTTP/1 parsing does.
+
+    ``cookie`` crumbs are joined with ``"; "`` (RFC 9113 section 8.2.3); any
+    other repeated field with ``", "``.
+    """
+    headers = {}
+    for name, value in fields:
+        if name in headers:
+            separator = "; " if name == "cookie" else ", "
+            headers[name] = f"{headers[name]}{separator}{value}"
+        else:
+            headers[name] = value
+    return headers
+
+
 def normalize_header_name(name):
     return str(name or "").strip().lower()
 

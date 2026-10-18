@@ -14,7 +14,12 @@ it would desynchronise the decoder for every later stream.
 import struct
 import threading
 
-from .headers import iter_header_fields
+from .headers import (
+    combine_field_values,
+    field_name_problem,
+    field_value_problem,
+    iter_header_fields,
+)
 from .hpack import Decoder, Encoder, HeaderListTooLarge, HPACKError
 from .http import Response
 from .logs import get_log
@@ -281,6 +286,9 @@ def validate_request_headers(headers, stream_id):
     pseudo = {}
     regular = []
     for name, value in headers:
+        value_problem = field_value_problem(value)
+        if value_problem:
+            raise StreamError(f"{value_problem} in {name!r}", stream_id)
         if name.startswith(":"):
             if seen_regular:
                 raise StreamError("pseudo-header after a regular field", stream_id)
@@ -295,6 +303,9 @@ def validate_request_headers(headers, stream_id):
         if lowered != name:
             # Field names travel lowercase; anything else is malformed.
             raise StreamError(f"header name {name!r} is not lowercase", stream_id)
+        name_problem = field_name_problem(name)
+        if name_problem:
+            raise StreamError(name_problem, stream_id)
         if lowered in FORBIDDEN_HEADERS:
             raise StreamError(f"connection-specific header {name!r}", stream_id)
         if lowered == "te" and value.lower() != "trailers":
@@ -314,6 +325,15 @@ def validate_request_headers(headers, stream_id):
         if pseudo[":path"] == "":
             raise StreamError(":path must not be empty", stream_id)
     return pseudo, regular
+
+
+def _validated_trailers(fields, stream_id):
+    """Trailer fields checked like header fields; pseudo-headers are not allowed."""
+    for name, value in fields:
+        problem = field_name_problem(name) or field_value_problem(value)
+        if problem:
+            raise StreamError(f"trailer: {problem}", stream_id)
+    return combine_field_values(fields)
 
 
 class Http2Connection:
@@ -775,7 +795,7 @@ class Http2Connection:
         pseudo, regular = validate_request_headers(stream.headers, stream.id)
         target = pseudo.get(":path", "*")
         path, _, query = target.partition("?")
-        headers = {name: value for name, value in regular}
+        headers = combine_field_values(regular)
         if ":authority" in pseudo:
             headers.setdefault("host", pseudo[":authority"])
 
@@ -788,7 +808,7 @@ class Http2Connection:
             client=self.client_address,
             tls=self.tls,
             version="HTTP/2",
-            trailers={name: value for name, value in stream.trailers},
+            trailers=_validated_trailers(stream.trailers, stream.id),
         )
         try:
             response = self.app.dispatch(request)
