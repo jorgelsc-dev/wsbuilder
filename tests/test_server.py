@@ -1,3 +1,5 @@
+import os
+import signal
 import socket
 import threading
 import unittest
@@ -374,6 +376,96 @@ class TestHTTPServerLifecycle(unittest.TestCase):
         server.stop()
         thread.join(timeout=5.0)
         self.assertFalse(thread.is_alive())
+
+    def _blocking_app(self, release):
+        app = self._ping_app()
+        app.started = threading.Event()
+        app.events = []
+
+        @app.api("/slow", methods=("GET",))
+        def slow(_request):
+            app.started.set()
+            release.wait(5.0)
+            app.events.append("handler done")
+            return {"slow": True}
+
+        original_close = app.close
+
+        def close():
+            app.events.append("app closed")
+            original_close()
+
+        app.close = close
+        return app
+
+    def test_stop_lets_in_flight_requests_finish_before_closing_the_app(self):
+        release = threading.Event()
+        app = self._blocking_app(release)
+        server = HTTPServer("127.0.0.1", 0, app)
+        thread = self._serve(server)
+
+        responses = []
+        client = threading.Thread(
+            target=lambda: responses.append(self._get(server.server_address, "/slow"))
+        )
+        client.start()
+        self.assertTrue(app.started.wait(5.0))
+        self.assertEqual(server.active_connections(), 1)
+
+        server.stop()
+        thread.join(0.3)
+        self.assertTrue(thread.is_alive(), "shutdown did not wait for the in-flight request")
+        release.set()
+        client.join(5.0)
+        thread.join(5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertIn(b"200 OK", responses[0])
+        self.assertIn(b"Connection: close", responses[0])
+        self.assertEqual(app.events, ["handler done", "app closed"])
+        self.assertEqual(server.active_connections(), 0)
+
+    def test_draining_gives_up_after_the_shutdown_timeout(self):
+        release = threading.Event()
+        app = self._blocking_app(release)
+        server = HTTPServer("127.0.0.1", 0, app)
+        server.GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 0.2
+        thread = self._serve(server)
+
+        client = threading.Thread(target=self._get, args=(server.server_address, "/slow"))
+        client.start()
+        # Cleanups run last-in first-out: release the handler, then join.
+        self.addCleanup(client.join, 5.0)
+        self.addCleanup(release.set)
+        self.assertTrue(app.started.wait(5.0))
+
+        server.stop()
+        thread.join(3.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(app.events, ["app closed"])
+
+    @unittest.skipUnless(hasattr(signal, "SIGTERM") and os.name == "posix", "POSIX signals only")
+    def test_sigterm_stops_a_server_running_in_the_main_thread(self):
+        server = HTTPServer("127.0.0.1", 0, self._ping_app())
+        before = signal.getsignal(signal.SIGTERM)
+
+        def terminate():
+            if server.wait_until_serving(timeout=5.0):
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        killer = threading.Thread(target=terminate)
+        killer.start()
+        server.serve_forever()
+        killer.join(5.0)
+
+        self.assertTrue(server._stop.is_set())
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
+
+    def test_serving_from_a_worker_thread_leaves_sigterm_alone(self):
+        before = signal.getsignal(signal.SIGTERM)
+        server = HTTPServer("127.0.0.1", 0, self._ping_app())
+        self._serve(server)
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
 
     def test_transient_accept_error_does_not_stop_the_server(self):
         server = _FlakyServer("127.0.0.1", 0, self._ping_app())
