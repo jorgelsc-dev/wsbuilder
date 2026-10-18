@@ -44,6 +44,12 @@ class AutoSequence(Model):
     id = IntegerField(primary_key=True, auto_increment=True)
 
 
+class LogLine(Model):
+    __tablename__ = "log_lines"
+
+    text = TextField(null=False)
+
+
 class TestORM(unittest.TestCase):
     def setUp(self):
         self.db = Database(":memory:")
@@ -261,6 +267,71 @@ class TestORM(unittest.TestCase):
         with self.assertRaises(ValueError):
             User.objects(self.db).values("missing")
 
+
+    def _seed_users(self, count=5):
+        for index in range(count):
+            User.create(self.db, username=f"user{index}", age=index)
+
+    def _ages(self):
+        return [u.age for u in User.objects(self.db).order_by("id").all()]
+
+    def test_sliced_delete_only_removes_selected_rows(self):
+        self._seed_users()
+        deleted = User.objects(self.db).order_by("-age").limit(2).delete()
+        self.assertEqual(deleted, 2)
+        self.assertEqual(self._ages(), [0, 1, 2])
+
+        deleted = User.objects(self.db).filter(age__gte=1).order_by("age").offset(1).delete()
+        self.assertEqual(deleted, 1)
+        self.assertEqual(self._ages(), [0, 1])
+
+    def test_sliced_update_respects_filter_order_limit_and_offset(self):
+        self._seed_users()
+        updated = (
+            User.objects(self.db).filter(age__gte=1).order_by("age").limit(2).offset(1).update(
+                active=False
+            )
+        )
+        self.assertEqual(updated, 2)
+        inactive = User.objects(self.db).filter(active=False).order_by("age").all()
+        self.assertEqual([u.age for u in inactive], [2, 3])
+
+    def test_unsliced_update_and_delete_keep_filter_semantics(self):
+        self._seed_users()
+        self.assertEqual(User.objects(self.db).order_by("age").update(active=False), 5)
+        self.assertEqual(User.objects(self.db).filter(age__lt=2).delete(), 2)
+        self.assertEqual(self._ages(), [2, 3, 4])
+        self.assertEqual(User.objects(self.db).limit(0).delete(), 0)
+        self.assertEqual(self._ages(), [2, 3, 4])
+
+    def test_sliced_delete_uses_rowid_without_primary_key(self):
+        LogLine.create_table(self.db)
+        for text in ("a", "b", "c"):
+            LogLine.create(self.db, text=text)
+        self.assertEqual(LogLine.objects(self.db).order_by("text").limit(1).delete(), 1)
+        remaining = [row.text for row in LogLine.objects(self.db).order_by("text").all()]
+        self.assertEqual(remaining, ["b", "c"])
+        self.assertEqual(LogLine.objects(self.db).limit(1).update(text="z"), 1)
+        texts = sorted(row.text for row in LogLine.objects(self.db).all())
+        self.assertEqual(texts, ["c", "z"])
+
+    def test_set_pragma_accepts_numbers_bools_and_keywords(self):
+        self.db.set_pragma("cache_size", -2048)
+        self.assertEqual(self.db.get_pragma("cache_size"), -2048)
+        self.db.set_pragma("foreign_keys", True)
+        self.assertEqual(self.db.get_pragma("foreign_keys"), 1)
+        self.db.set_pragma("synchronous", "NORMAL")
+        self.db.set_pragma("busy_timeout", "1500")
+        self.assertEqual(self.db.get_pragma("busy_timeout"), 1500)
+
+    def test_set_pragma_rejects_unsafe_values(self):
+        for value in ("1; DROP TABLE users", "'x'", "OFF --", None, float("nan"), [1]):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.db.set_pragma("cache_size", value)
+        with self.assertRaises(ValueError):
+            self.db.set_pragma("cache_size; x", 1)
+        with self.assertRaises(ValueError):
+            Database(":memory:", pragmas={"user_version": "1; DROP TABLE x"})
 
 if __name__ == "__main__":
     unittest.main()

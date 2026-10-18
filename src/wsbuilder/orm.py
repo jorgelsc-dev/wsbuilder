@@ -8,6 +8,7 @@ import sqlite3
 import threading
 from datetime import date, datetime
 
+from ._pragma import pragma_assignment
 from .logs import get_log
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -369,8 +370,8 @@ class Database:
             get_log().info("orm", " ".join(str(part) for part in parts))
 
     def set_pragma(self, name: str, value):
-        validate_identifier(name)
-        sql = f"PRAGMA {name}={value}"
+        """Set ``PRAGMA name=value``; ``value`` must be a number, bool, or keyword."""
+        sql = pragma_assignment(name, value)
         with self._lock:
             self._log(sql)
             self._conn.execute(sql)
@@ -838,6 +839,21 @@ class QuerySet:
             sql += " LIMIT 1"
         return self._read_fetchone(sql, params) is not None
 
+    def _write_target(self):
+        """WHERE clause and params selecting the rows update()/delete() touch.
+
+        A sliced queryset (``limit``/``offset``, with its ``order_by``) is
+        resolved through a primary key subquery so only the selected rows change.
+        """
+        if not self._is_sliced():
+            if not self.where_clauses:
+                return "", []
+            return " WHERE " + " AND ".join(self.where_clauses), list(self.params)
+        pk_name = self.model._meta.get("pk_name")
+        key = quote_identifier(pk_name) if pk_name else "rowid"
+        sql, params = self._build_select(columns=[key])
+        return f" WHERE {key} IN ({sql})", params
+
     def update(self, **kwargs) -> int:
         self._assert_writable()
         if not kwargs:
@@ -851,21 +867,17 @@ class QuerySet:
             field = self.model._meta["fields"][key]
             set_parts.append(f"{quote_identifier(key)} = ?")
             params.append(field.to_db(value))
-        sql = f"UPDATE {table} SET " + ", ".join(set_parts)
-        if self.where_clauses:
-            sql += " WHERE " + " AND ".join(self.where_clauses)
-            params.extend(self.params)
+        where_sql, where_params = self._write_target()
+        sql = f"UPDATE {table} SET " + ", ".join(set_parts) + where_sql
+        params.extend(where_params)
         cur = self.db.execute(sql, params)
         return cur.rowcount
 
     def delete(self) -> int:
         self._assert_writable()
         table = quote_identifier(self.model._meta["table"])
-        sql = f"DELETE FROM {table}"
-        params = list(self.params)
-        if self.where_clauses:
-            sql += " WHERE " + " AND ".join(self.where_clauses)
-        cur = self.db.execute(sql, params)
+        where_sql, params = self._write_target()
+        cur = self.db.execute(f"DELETE FROM {table}" + where_sql, params)
         return cur.rowcount
 
     def create(self, **kwargs):
