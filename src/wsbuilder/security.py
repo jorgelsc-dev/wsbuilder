@@ -186,6 +186,9 @@ class ACLRule:
 
 
 class SecurityPolicy:
+    #: How often a request pays for expiring every client's blocks and events.
+    SWEEP_INTERVAL_SECONDS = 1.0
+
     def __init__(
         self,
         *,
@@ -261,6 +264,7 @@ class SecurityPolicy:
         self._request_events = {}
         self._violation_events = {}
         self._suspicious_events = {}
+        self._next_sweep_at = 0.0
 
         self._requests_total = 0
         self._allowed_total = 0
@@ -288,6 +292,28 @@ class SecurityPolicy:
                 rows.popleft()
             if not rows:
                 store.pop(key, None)
+
+    def _sweep_locked(self, now, force=False):
+        """Expire blocks and stale events for every client, at most once per interval.
+
+        A full pass is O(tracked clients); doing it on every request would
+        serialise all requests behind it. Per-client data the current request
+        reads is trimmed on access instead.
+        """
+        if not force and now < self._next_sweep_at:
+            return
+        self._next_sweep_at = now + self.SWEEP_INTERVAL_SECONDS
+        self._expire_blocks_locked(now)
+        self._prune_events_locked(self._request_events, now, self.rate_limit_window_seconds)
+        self._prune_events_locked(self._violation_events, now, self.violation_window_seconds)
+        self._prune_events_locked(self._suspicious_events, now, self.suspicious_window_seconds)
+
+    def _active_block_locked(self, ip_text, now):
+        row = self._temporary_blocks.get(ip_text)
+        if row is not None and float(row.get("until", 0.0)) <= now:
+            self._temporary_blocks.pop(ip_text, None)
+            return None
+        return row
 
     def _evict_tracked_clients_locked(self, store):
         while len(store) >= self.max_tracked_clients:
@@ -520,17 +546,14 @@ class SecurityPolicy:
         now = time.time()
         ip_text = self.resolve_client_ip(request)
         with self._lock:
-            self._expire_blocks_locked(now)
-            self._prune_events_locked(self._request_events, now, self.rate_limit_window_seconds)
-            self._prune_events_locked(self._violation_events, now, self.violation_window_seconds)
-            self._prune_events_locked(self._suspicious_events, now, self.suspicious_window_seconds)
+            self._sweep_locked(now)
             self._requests_total += 1
 
             whitelisted = bool(ip_text and _ip_in_networks(ip_text, self._whitelist_networks))
             blacklisted = bool(ip_text and _ip_in_networks(ip_text, self._blacklist_networks))
 
             if ip_text:
-                active_block = self._temporary_blocks.get(ip_text)
+                active_block = self._active_block_locked(ip_text, now)
                 if active_block and not (
                     whitelisted and self.whitelist_bypass_behavior
                 ):
@@ -622,7 +645,7 @@ class SecurityPolicy:
             return
         now = time.time()
         with self._lock:
-            self._expire_blocks_locked(now)
+            self._sweep_locked(now)
             whitelisted = _ip_in_networks(ip_text, self._whitelist_networks)
             if whitelisted and self.whitelist_bypass_behavior:
                 return
@@ -632,10 +655,7 @@ class SecurityPolicy:
     def snapshot(self):
         now = time.time()
         with self._lock:
-            self._expire_blocks_locked(now)
-            self._prune_events_locked(self._request_events, now, self.rate_limit_window_seconds)
-            self._prune_events_locked(self._violation_events, now, self.violation_window_seconds)
-            self._prune_events_locked(self._suspicious_events, now, self.suspicious_window_seconds)
+            self._sweep_locked(now, force=True)
             active_blocks = {
                 ip: {
                     "reason": str(row.get("reason", "")),
