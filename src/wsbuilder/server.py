@@ -31,6 +31,10 @@ class _ReaderWriter:
     def sendall(self, payload):
         return self._conn.sendall(payload)
 
+    def __getattr__(self, name):
+        # Timeouts, close and peer details still belong to the socket.
+        return getattr(self._conn, name)
+
 
 def _first_set(*values):
     for value in values:
@@ -635,8 +639,10 @@ class HTTPServer:
                 if security:
                     security.observe_response(request, handshake_error.status)
                 return False
+            # Frames that arrived with the upgrade request are already in the
+            # reader's buffer, so the WebSocket must read through it.
             ws = handshake_websocket_with_options(
-                conn,
+                _ReaderWriter(reader, conn),
                 addr,
                 headers,
                 supported_subprotocols=ws_route.get("subprotocols", ()),

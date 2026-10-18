@@ -339,6 +339,33 @@ class TestHTTPServer(unittest.TestCase):
         self.assertEqual(seen["route"], (32, 32))
 
 
+    def test_websocket_frames_sent_with_the_upgrade_reach_the_handler(self):
+        app = App()
+        seen = []
+
+        @app.ws("/ws")
+        def handler(ws, _request):
+            seen.append(ws.recv_frame().payload)
+
+        mask = b"\x01\x02\x03\x04"
+        masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(b"hi"))
+        frame = b"\x81\x82" + mask + masked
+        server = HTTPServer("127.0.0.1", 0, app)
+        conn = DummyConn(
+            [
+                b"GET /ws HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Upgrade: websocket\r\n"
+                b"Connection: Upgrade\r\n"
+                b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                b"Sec-WebSocket-Version: 13\r\n\r\n" + frame
+            ]
+        )
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"101", b"".join(conn.sent))
+        self.assertEqual(seen, [b"hi"])
+
 if __name__ == "__main__":
     unittest.main()
 
