@@ -2,6 +2,7 @@ import io
 import os
 import signal
 import socket
+import ssl
 import threading
 import unittest
 from unittest.mock import patch
@@ -510,6 +511,42 @@ class TestHTTPServerLifecycle(unittest.TestCase):
         server.stop()
         thread.join(timeout=5.0)
         self.assertFalse(thread.is_alive())
+
+
+    def test_silent_client_is_dropped_after_the_read_timeout(self):
+        server = HTTPServer("127.0.0.1", 0, self._ping_app(), request_read_timeout=0.2)
+        self._serve(server)
+
+        for opening in (b"", b"P"):
+            with self.subTest(opening=opening):
+                with socket.create_connection(server.server_address, timeout=5.0) as sock:
+                    if opening:
+                        sock.sendall(opening)
+                    received = b""
+                    while True:
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            break
+                        received += chunk
+                self.assertNotIn(b"200 OK", received)
+
+    def test_tls_handshake_runs_under_the_read_timeout(self):
+        seen = []
+
+        class RecordingContext:
+            def wrap_socket(self, conn, server_side):
+                seen.append(conn.gettimeout())
+                raise ssl.SSLError("stop after recording")
+
+        server = HTTPServer(
+            "127.0.0.1", 0, self._ping_app(), ssl_context=RecordingContext(), request_read_timeout=0.2
+        )
+        left, right = socket.socketpair()
+        self.addCleanup(right.close)
+        left.setblocking(True)
+        server.handle_conn(left, ("127.0.0.1", 0))
+
+        self.assertEqual(seen, [0.2])
 
 
 class TestHTTPServerLimits(unittest.TestCase):

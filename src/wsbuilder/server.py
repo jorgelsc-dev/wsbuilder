@@ -276,6 +276,12 @@ class HTTPServer:
             except OSError:
                 pass
             return
+        # Accepted sockets block forever by default; bound the handshake and
+        # the HTTP/2 preface sniff the same way as the first request read.
+        try:
+            conn.settimeout(self.REQUEST_READ_TIMEOUT_SECONDS)
+        except OSError:
+            pass
         tls_meta = {
             "enabled": context is not None,
             "peer_cert": None,
