@@ -204,6 +204,22 @@ class TestProxyI(unittest.TestCase):
         self.assertIsNone(rule.choose_target(request))
         self.assertEqual(proxy.dispatch(request).status, 502)
 
+    def test_a_rule_with_only_disabled_targets_falls_back_to_the_default_rule(self):
+        proxy = ProxyI(name="edge")
+        proxy.default({"url": f"http://127.0.0.1:{self.backend_port}", "name": "fallback"})
+        rule = (
+            proxy.route(name="api", path_prefix="/api")
+            .upstream("http://127.0.0.1:9001", enabled=False)
+            .build()
+        )
+        request = self._request(path="/api/users")
+
+        self.assertEqual(rule.choose_target(request, proxy=proxy).name, "fallback")
+        self.assertIsNone(rule.choose_target(request))
+        response = proxy.dispatch(request)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["X-ProxyI-Target"], "fallback")
+
     def test_snapshot_does_not_advance_round_robin(self):
         proxy = ProxyI(name="edge")
         rule = (
