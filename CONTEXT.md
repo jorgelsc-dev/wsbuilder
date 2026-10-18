@@ -199,9 +199,9 @@ cada petición (`BufferedReader.set_deadline`), no un timeout por `recv`; un
 cliente lento recibe `408`. Con seguridad activa, `App.security_response()`
 evalúa ACL/lista negra/rate limit con las cabeceras antes de `100 Continue` y
 de leer el cuerpo; la petición queda marcada (`security_evaluated`) y
-`dispatch()` no la cuenta otra vez. Tras una respuesta temprana con cuerpo sin
-leer, `_linger_close` drena hasta `LINGER_TIMEOUT_SECONDS` (2 s) para no
-provocar un RST.
+`dispatch()` no la cuenta otra vez. Tras un `408`, un `413` por tamaño del cuerpo
+o un rechazo de seguridad con cuerpo sin leer, `_linger_close` cierra el envio
+y drena hasta `LINGER_TIMEOUT_SECONDS` (2 s) para no provocar un RST.
 
 Otros atributos: `ENABLE_HTTP2 = True` (ALPN y preface en claro),
 `HANDLE_SIGTERM = True`, `ACCEPT_TIMEOUT_SECONDS = 0.5`,

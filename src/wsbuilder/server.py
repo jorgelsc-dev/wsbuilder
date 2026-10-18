@@ -462,6 +462,7 @@ class HTTPServer:
             )
         except TimeoutError:
             send_http_response(conn, Response.text("Request Timeout", status=408))
+            self._linger_close(conn, reader)
             return False
         except ValueError as e:
             message = str(e).lower()
@@ -575,6 +576,7 @@ class HTTPServer:
                 )
             except TimeoutError:
                 send_http_response(conn, Response.text("Request Timeout", status=408))
+                self._linger_close(conn, reader)
                 return False
             except (ConnectionError, OSError):
                 send_http_response(
@@ -625,6 +627,7 @@ class HTTPServer:
                 body = reader.read_exactly(cl)
             except TimeoutError:
                 send_http_response(conn, Response.text("Request Timeout", status=408))
+                self._linger_close(conn, reader)
                 return False
             except (ConnectionError, OSError):
                 send_http_response(
