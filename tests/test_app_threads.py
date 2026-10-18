@@ -55,6 +55,34 @@ class TestViewThreadRouting(unittest.TestCase):
         self.assertIn("WSBuilder-Thread", response.headers)
         self.assertIn("Set-Cookie", response.headers)
 
+    def test_threaded_view_keeps_the_handlers_own_cookie(self):
+        from wsbuilder import Response
+        from wsbuilder.http import send_http_response
+
+        app = self._new_app()
+
+        @app.view("/login", min_threads=1, max_threads=1, requests_per_thread=0)
+        def login(request):
+            name = request.query.get("name", "Set-Cookie")
+            return Response.text("ok", headers={name: "session=abc; HttpOnly"})
+
+        for name in ("Set-Cookie", "set-cookie"):
+            with self.subTest(name=name):
+                request = self._request("/login")
+                request.query = {"name": name}
+                response = app.dispatch(request)
+                cookies = [v for k, v in response.headers.items() if k.lower() == "set-cookie"]
+                self.assertEqual(cookies, ["session=abc; HttpOnly"])
+
+                sent = bytearray()
+
+                class Sink:
+                    def sendall(self, data):
+                        sent.extend(data)
+
+                send_http_response(Sink(), response)
+                self.assertIn(b"200 OK", bytes(sent))
+
     def test_requests_per_thread_zero_allows_queue_growth(self):
         app = self._new_app()
         release = threading.Event()
