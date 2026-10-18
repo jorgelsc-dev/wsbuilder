@@ -12,6 +12,7 @@ it would desynchronise the decoder for every later stream.
 """
 
 import struct
+import threading
 
 from .hpack import Decoder, Encoder, HPACKError
 from .http import Response
@@ -319,7 +320,16 @@ class Http2Connection:
 
     Takes anything with ``recv`` and ``sendall``, so the frame logic is
     exercised in tests without a socket.
+
+    Streamed response bodies are produced on their own thread so the frame
+    loop keeps reading (WINDOW_UPDATE, other streams) meanwhile; a lock
+    serialises frame handling and sending between the two.
     """
+
+    #: Body bytes a streaming producer may queue ahead of the peer's windows.
+    MAX_PENDING_STREAM_BYTES = 64 * 1024
+    #: How long a closing connection waits for producers to finish their bodies.
+    PRODUCER_GRACE_SECONDS = 5.0
 
     def __init__(
         self, conn, app, *, tls=None, client_address=("", 0), max_streams=100, max_body_bytes=None
@@ -350,6 +360,13 @@ class Http2Connection:
         self._buffer = bytearray()
         self._pending_headers = None
         self._closed = False
+        self._lock = threading.RLock()
+        self._output_ready = threading.Condition(self._lock)
+        self._producers = []
+        #: False once the frame loop stops: no more window credit can arrive.
+        self._reading = True
+        #: Set when producers must stop at once (connection error or timeout).
+        self._abandoned = False
 
     # -- transport -----------------------------------------------------
 
@@ -408,19 +425,54 @@ class Http2Connection:
         """Run the connection until the peer goes away or a fault ends it."""
         try:
             self.read_preface()
-            self.send_settings()
+            with self._lock:
+                self.send_settings()
             while not self._closed:
-                frame = self.next_frame()
-                self.handle_frame(frame)
+                try:
+                    frame = self.next_frame()
+                except TimeoutError:
+                    # A client reading a long streamed body may send nothing;
+                    # _read keeps any partial frame, so waiting again is safe.
+                    if self._streaming():
+                        continue
+                    raise
+                with self._lock:
+                    self.handle_frame(frame)
+                    if self._producers:
+                        self._output_ready.notify_all()
         except ConnectionError_ as exc:
-            self.send_goaway(exc.code, str(exc).encode("utf-8", "replace")[:128])
+            self._abandoned = True
+            with self._lock:
+                self.send_goaway(exc.code, str(exc).encode("utf-8", "replace")[:128])
         except (ConnectionError, OSError):
             pass
         except HPACKError as exc:
+            self._abandoned = True
             # A broken header block leaves the shared table unusable.
-            self.send_goaway(ERROR_COMPRESSION_ERROR, str(exc).encode("utf-8", "replace")[:128])
+            with self._lock:
+                self.send_goaway(
+                    ERROR_COMPRESSION_ERROR, str(exc).encode("utf-8", "replace")[:128]
+                )
         else:
-            self.send_goaway(ERROR_NO_ERROR)
+            with self._lock:
+                self.send_goaway(ERROR_NO_ERROR)
+        finally:
+            self._finish_producers()
+
+    def _streaming(self):
+        self._producers = [thread for thread in self._producers if thread.is_alive()]
+        return bool(self._producers)
+
+    def _finish_producers(self):
+        """Let streamed bodies finish, then stop any that cannot."""
+        with self._lock:
+            self._reading = False
+            self._output_ready.notify_all()
+        for thread in list(self._producers):
+            thread.join(self.PRODUCER_GRACE_SECONDS)
+        self._abandoned = True
+        with self._lock:
+            self._output_ready.notify_all()
 
     # -- frame handling ------------------------------------------------
 
@@ -688,8 +740,22 @@ class Http2Connection:
                 continue  # Section 8.2.2: these have no meaning in HTTP/2.
             fields.append((lowered, str(value)))
 
-        body = b"" if not send_body else self._response_body(response)
-        if send_body and not response.is_stream:
+        if send_body and response.is_stream:
+            # Sent as it is produced: joining it first would hold an endless
+            # stream forever and a large one entirely in memory.
+            self._send_header_block(stream.id, self.encoder.encode(fields), False)
+            producer = threading.Thread(
+                target=self._produce,
+                args=(stream, response),
+                name=f"http2-stream-{stream.id}",
+                daemon=True,
+            )
+            self._producers.append(producer)
+            producer.start()
+            return
+
+        body = bytes(response.body) if send_body else b""
+        if send_body:
             fields.append(("content-length", str(len(body))))
 
         block = self.encoder.encode(fields)
@@ -699,13 +765,49 @@ class Http2Connection:
         else:
             stream.end_local()
 
-    @staticmethod
-    def _response_body(response):
-        if not response.is_stream:
-            return bytes(response.body)
+    def _stream_abandoned(self, stream):
+        return self._abandoned or stream.closed
+
+    def _produce(self, stream, response):
+        """Send a streamed body chunk by chunk, within the peer's windows."""
         from .http import _iter_stream_chunks
 
-        return b"".join(_iter_stream_chunks(response.stream))
+        try:
+            for chunk in _iter_stream_chunks(response.stream):
+                with self._lock:
+                    if self._stream_abandoned(stream):
+                        return
+                    stream.pending_output.extend(chunk)
+                    self._flush_stream(stream)
+                    while len(stream.pending_output) >= self.MAX_PENDING_STREAM_BYTES:
+                        if self._stream_abandoned(stream) or not self._reading:
+                            return  # No window credit can arrive any more.
+                        self._output_ready.wait(0.5)
+            with self._lock:
+                if self._stream_abandoned(stream):
+                    return
+                if stream.pending_output:
+                    stream.pending_end_stream = True
+                    self._flush_stream(stream)
+                else:
+                    self._send(Frame(FRAME_DATA, FLAG_END_STREAM, stream.id, b""))
+                    stream.end_local()
+        except OSError:
+            pass  # The peer is gone; nothing more can be sent.
+        except Exception as exc:  # noqa: BLE001 - reported on the stream
+            get_log(self.app).exception("http2", f"stream {stream.id} body failed: {exc}", exc)
+            with self._lock:
+                if not stream.closed:
+                    stream.state = CLOSED
+                    stream.reset_code = ERROR_INTERNAL_ERROR
+                    self.send_rst_stream(stream.id, ERROR_INTERNAL_ERROR)
+        finally:
+            close = getattr(response.stream, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:  # noqa: BLE001 - cleanup only
+                    get_log(self.app).warning("http2", f"stream {stream.id} cleanup failed: {exc}")
 
     def _send_header_block(self, stream_id, block, end_stream):
         limit = self.peer_settings[SETTINGS_MAX_FRAME_SIZE]
