@@ -369,6 +369,17 @@ class TestConnectionFlow(ConnectionHarness):
         )
         self.assertIn(b'"n":"9"', self.responses(frames)[1]["body"])
 
+    def test_an_obs_text_header_value_is_served(self):
+        block = self.encoder.encode(self.request("/hello?n=7"))
+        # Literal without indexing, new name: x-a: "caf\xe9" (not UTF-8).
+        block += b"\x00\x03x-a\x04caf\xe9"
+        frames = self.run_connection(
+            Frame(FRAME_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 1, block).serialize()
+        )
+        self.assertFalse(any(f.type == FRAME_GOAWAY and struct.unpack(">II", f.payload[:8])[1]
+                             for f in frames))
+        self.assertIn(b'"n":"7"', self.responses(frames)[1]["body"])
+
     def test_a_frame_between_headers_and_continuation_is_fatal(self):
         block = self.encoder.encode(self.request("/hello"))
         frames = self.run_connection(

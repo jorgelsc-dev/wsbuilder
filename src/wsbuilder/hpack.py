@@ -292,16 +292,20 @@ def decode_string(data, offset):
     raw = bytes(data[offset:end])
     if huffman:
         raw = huffman_decode(raw)
-    return raw.decode("utf-8", errors="strict"), end
+    # Field values may carry obs-text (RFC 9110 section 5.5); ISO-8859-1 maps
+    # every octet, as the HTTP/1 parser does.
+    return raw.decode("iso-8859-1"), end
 
 
 class DynamicTable:
     """The half of the header table that both peers mutate in step."""
 
-    def __init__(self, max_size=DEFAULT_DYNAMIC_TABLE_SIZE):
+    def __init__(self, max_size=DEFAULT_DYNAMIC_TABLE_SIZE, encoding="utf-8"):
         self._entries = []
         self._size = 0
         self._max_size = int(max_size)
+        #: How the entries' strings map to octets, which is what size counts.
+        self.encoding = encoding
 
     def __len__(self):
         return len(self._entries)
@@ -319,16 +323,16 @@ class DynamicTable:
         self._evict()
 
     @staticmethod
-    def entry_size(name, value):
-        return len(name.encode("utf-8")) + len(value.encode("utf-8")) + ENTRY_OVERHEAD
+    def entry_size(name, value, encoding="utf-8"):
+        return len(name.encode(encoding)) + len(value.encode(encoding)) + ENTRY_OVERHEAD
 
     def _evict(self):
         while self._size > self._max_size and self._entries:
             name, value = self._entries.pop()
-            self._size -= self.entry_size(name, value)
+            self._size -= self.entry_size(name, value, self.encoding)
 
     def add(self, name, value):
-        cost = self.entry_size(name, value)
+        cost = self.entry_size(name, value, self.encoding)
         if cost > self._max_size:
             # Section 4.4: an oversized insert empties the table instead.
             self._entries.clear()
@@ -373,7 +377,7 @@ class Decoder:
     """Decodes header blocks, keeping the dynamic table in step with the peer."""
 
     def __init__(self, max_size=DEFAULT_DYNAMIC_TABLE_SIZE):
-        self.table = DynamicTable(max_size)
+        self.table = DynamicTable(max_size, encoding="iso-8859-1")
         #: Ceiling the peer may raise the table to, from SETTINGS.
         self.max_allowed_size = int(max_size)
 

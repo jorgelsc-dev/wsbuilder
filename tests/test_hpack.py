@@ -207,6 +207,26 @@ class TestRepresentations(unittest.TestCase):
             Decoder().decode(h("ff00"))
 
 
+class TestObsText(unittest.TestCase):
+    """Octets 0x80-0xFF in field values decode losslessly, as in HTTP/1."""
+
+    def literal(self, name, value):
+        # Literal header field with incremental indexing, new name, no Huffman.
+        return b"\x40" + encode_integer(len(name), 7) + name + encode_integer(len(value), 7) + value
+
+    def test_a_latin1_value_is_decoded(self):
+        decoder = Decoder()
+        headers = decoder.decode(self.literal(b"x-a", b"caf\xe9"))
+        self.assertEqual(headers, [("x-a", "caf\xe9")])
+        self.assertEqual(headers[0][1].encode("iso-8859-1"), b"caf\xe9")
+
+    def test_the_table_counts_the_octets_the_peer_sent(self):
+        decoder = Decoder()
+        decoder.decode(self.literal(b"x-a", b"caf\xe9"))
+        # RFC 7541 section 4.1: 3 + 4 octets plus 32, as the encoder counts.
+        self.assertEqual(decoder.table.size, 39)
+
+
 class TestDynamicTable(unittest.TestCase):
     def test_entry_cost_includes_the_overhead(self):
         self.assertEqual(DynamicTable.entry_size("a", "b"), 34)
