@@ -55,6 +55,29 @@ class TestORM(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
+    def test_substring_lookups_match_the_value_literally(self):
+        for name in ("50% off", "500 off", "a_b", "axb", "Hello", "back\\slash"):
+            User.create(self.db, username=name)
+
+        def names(**lookup):
+            rows = User.objects(self.db).filter(**lookup).order_by("username").all()
+            return [u.username for u in rows]
+
+        self.assertEqual(names(username__contains="50%"), ["50% off"])
+        self.assertEqual(names(username__contains="_"), ["a_b"])
+        self.assertEqual(names(username__contains="hello"), [])
+        self.assertEqual(names(username__icontains="hello"), ["Hello"])
+        self.assertEqual(names(username__icontains="%"), ["50% off"])
+        self.assertEqual(names(username__icontains="\\"), ["back\\slash"])
+        self.assertEqual(names(username__startswith="a_"), ["a_b"])
+        self.assertEqual(names(username__startswith="h"), [])
+        self.assertEqual(names(username__istartswith="h"), ["Hello"])
+        self.assertEqual(names(username__endswith="_b"), ["a_b"])
+        self.assertEqual(names(username__endswith="LO"), [])
+        self.assertEqual(names(username__iendswith="LO"), ["Hello"])
+        self.assertEqual(names(username__iendswith="_b"), ["a_b"])
+        self.assertEqual(names(username__endswith="xx a_b"), [])
+
     def test_crud_and_filters(self):
         a = User.create(self.db, username="alice", age=30, active=True)
         b = User.create(self.db, username="bob", age=18, active=True)
