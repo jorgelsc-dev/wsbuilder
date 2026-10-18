@@ -9,22 +9,11 @@ import threading
 import time
 from collections.abc import Mapping
 
+from ._coerce import safe_float as _safe_float
+from ._coerce import safe_int as _safe_int
+
 DEFAULT_NAMESPACE = "default"
 DEFAULT_CLEANUP_INTERVAL_SECONDS = 30.0
-
-
-def _safe_float(value, default):
-    try:
-        return float(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
-
-
-def _safe_int(value, default):
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
 
 
 class _ValueCodec:
