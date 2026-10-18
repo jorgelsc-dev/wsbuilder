@@ -55,6 +55,22 @@ class TestORM(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
+    def test_count_and_exists_respect_limit_and_offset(self):
+        for i in range(5):
+            User.create(self.db, username=f"user{i}", age=i)
+
+        users = User.objects(self.db)
+        self.assertEqual(users.count(), 5)
+        self.assertEqual(users.limit(2).count(), 2)
+        self.assertEqual(users.offset(3).count(), 2)
+        self.assertEqual(users.paginate(3, 2).count(), 1)
+        self.assertEqual(users.filter(age__gte=1).limit(10).count(), 4)
+        self.assertTrue(users.exists())
+        self.assertTrue(users.paginate(3, 2).exists())
+        self.assertFalse(users.offset(5).exists())
+        self.assertFalse(users.limit(0).exists())
+        self.assertFalse(users.filter(age__gt=10).exists())
+
     def test_crud_and_filters(self):
         a = User.create(self.db, username="alice", age=30, active=True)
         b = User.create(self.db, username="bob", age=18, active=True)
