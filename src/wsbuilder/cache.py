@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import nullcontext
 
 from ._coerce import safe_float as _safe_float
 from ._coerce import safe_int as _safe_int
@@ -1085,9 +1086,19 @@ class SQLiteMemoryCache:
         return {"cache": self.stats()}
 
 
+def _register_cache_resource(app, resource):
+    with getattr(app, "_cache_resource_lock", nullcontext()):
+        resources = getattr(app, "_cache_resources", None)
+        if resources is None:
+            resources = {}
+            app._cache_resources = resources
+        resources[id(resource)] = resource
+
+
 def install_cache(app, cache=None, attr_name="cache"):
     resolved = cache or SQLiteMemoryCache()
     setattr(app, str(attr_name or "cache"), resolved)
+    _register_cache_resource(app, resolved)
     return resolved
 
 

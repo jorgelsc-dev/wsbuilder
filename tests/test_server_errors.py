@@ -161,6 +161,46 @@ class TestMalformedRequests(QuietConsole):
 
 
 class TestDispatchFailures(QuietConsole):
+    def test_failed_chunked_stream_does_not_send_the_next_pipelined_response(self):
+        app = self._app()
+        closed = []
+
+        def chunks():
+            try:
+                yield b"first"
+                raise ValueError("producer failed")
+            finally:
+                closed.append(True)
+
+        @app.view("/broken")
+        def broken(_request):
+            return Response.stream(chunks(), headers={"Transfer-Encoding": "chunked"})
+
+        conn = self._serve(app, [
+            b"GET /broken HTTP/1.1\r\nHost: x\r\n\r\n"
+            b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n"
+        ])
+        self.assertEqual(conn.wire.count(b"HTTP/1.1 200"), 1)
+        self.assertIn(b"5\r\nfirst\r\n", conn.wire)
+        self.assertEqual(app.calls, [])
+        self.assertEqual(closed, [True])
+        self.assertTrue(conn.closed)
+        self.assertEqual(app.metrics.active_http_requests, 0)
+        self.assertEqual(app.metrics.total_http_responses, 0)
+
+    def test_failed_buffered_write_does_not_dispatch_the_next_request(self):
+        app = self._app()
+        conn = ScriptedConn([
+            b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n"
+            b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n"
+        ], fail_send=lambda data: data.startswith(b'{"ok"'))
+        HTTPServer("127.0.0.1", 0, app).handle_conn(conn, ("127.0.0.1", 1))
+        self.assertEqual(len(app.calls), 1)
+        self.assertTrue(conn.closed)
+        self.assertIn("http_response", app.metrics.last_error)
+        self.assertEqual(app.metrics.active_http_requests, 0)
+        self.assertEqual(app.metrics.total_http_responses, 0)
+
     def test_a_failing_dispatch_returns_500_and_is_counted(self):
         app = self._app()
 

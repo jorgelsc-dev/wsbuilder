@@ -105,6 +105,10 @@ threading.Thread(target=h3.serve_forever, daemon=True).start()
 Un cliente no descubre HTTP/3 solo: llega por la cabecera `Alt-Svc` que anuncia
 una respuesta HTTP/1 o HTTP/2.
 
+Una peticion HTTP/3 con `Content-Length` debe usar digitos ASCII y coincidir con
+los DATA recibidos al finalizar. Una longitud invalida termina ese stream con
+`H3_MESSAGE_ERROR`, sin ejecutar el handler ni interrumpir las otras peticiones.
+
 ```python
 @app.api("/algo")
 def algo(request):

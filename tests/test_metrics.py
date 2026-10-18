@@ -6,6 +6,19 @@ from wsbuilder.metrics import OVERFLOW_LABEL, AppMetrics, install_metrics
 
 
 class TestMetrics(unittest.TestCase):
+    def test_aborted_request_does_not_count_as_a_delivered_response(self):
+        metrics = AppMetrics()
+        metrics.http_request_started("GET", "/interrupted")
+        metrics.http_request_started("GET", "/other")
+        metrics.http_request_aborted()
+        snap = metrics.snapshot()
+        self.assertEqual(snap["connections"]["http_inflight"], 1)
+        self.assertEqual(snap["http"]["responses_total"], 0)
+        self.assertEqual(snap["traffic"]["bytes_out_total"], 0)
+        metrics.http_response_sent("GET", "/other", 200, body_size=2)
+        self.assertEqual(metrics.snapshot()["connections"]["http_inflight"], 0)
+        self.assertEqual(metrics.total_http_responses, 1)
+
     def test_snapshot_and_stream(self):
         m = AppMetrics(app_name="test-app")
         m.tcp_connection_open()

@@ -17,6 +17,7 @@ from .headers import (
     field_value_problem,
     iter_header_fields,
 )
+from .http import _close_response_stream, _status_allows_body
 from .qpack import QPACKError, decode_field_section, encode_field_section
 from .quic.varint import decode_varint, encode_varint
 
@@ -305,6 +306,12 @@ def build_request(stream, client_address, tls=None):
         raise H3Error(str(exc), H3_MESSAGE_ERROR) from exc
     if ":authority" in pseudo:
         headers.setdefault("host", pseudo[":authority"])
+    declared = headers.get("content-length")
+    if declared is not None:
+        if not declared.isascii() or not declared.isdigit():
+            raise H3Error("invalid content-length", H3_MESSAGE_ERROR)
+        if stream.finished and (declared.lstrip("0") or "0") != str(len(stream.body)):
+            raise H3Error("content-length does not match the DATA received", H3_MESSAGE_ERROR)
     request = Request(
         method=pseudo.get(":method", "GET"),
         path=path,
@@ -346,22 +353,31 @@ def encode_headers_frame(fields):
 
 def build_response_frames(response, *, send_body=True):
     """Serialize a Response as the HEADERS and DATA frames of a stream."""
-    fields = build_response_head(response.status, response.headers)
+    try:
+        fields = build_response_head(response.status, response.headers)
+        allows_body = _status_allows_body(response.status)
+        body = b""
+        if send_body and allows_body:
+            if response.is_stream:
+                from .http import _iter_stream_chunks
 
-    body = b""
-    if send_body:
-        if response.is_stream:
-            from .http import _iter_stream_chunks
+                body = b"".join(_iter_stream_chunks(response.stream))
+            else:
+                body = bytes(response.body)
+            fields = [(name, value) for name, value in fields if name != "content-length"]
+            fields.append(("content-length", str(len(body))))
+        elif 100 <= response.status < 200 or response.status == 204:
+            fields = [(name, value) for name, value in fields if name != "content-length"]
+        elif allows_body and not response.is_stream:
+            if not any(name == "content-length" for name, _value in fields):
+                fields.append(("content-length", str(len(response.body))))
 
-            body = b"".join(_iter_stream_chunks(response.stream))
-        else:
-            body = bytes(response.body)
-        fields.append(("content-length", str(len(body))))
-
-    out = encode_headers_frame(fields)
-    if body:
-        out += encode_frame(FRAME_DATA, body)
-    return out
+        out = encode_headers_frame(fields)
+        if body:
+            out += encode_frame(FRAME_DATA, body)
+        return out
+    finally:
+        _close_response_stream(response)
 
 
 def build_control_stream(settings=None):

@@ -149,6 +149,35 @@ class TestSQLiteMemoryCache(unittest.TestCase):
         finally:
             cache.close()
 
+    def test_app_closes_installed_caches_once_including_custom_names(self):
+        app = App()
+        cache = install_cache(app)
+        other = install_cache(app, attr_name="sessions")
+        install_cache(app, cache, attr_name="cache_alias")
+        with patch.object(cache, "close", wraps=cache.close) as close:
+            app.close()
+            app.close()
+            close.assert_called_once_with()
+        self.assertTrue(cache._closed)
+        self.assertTrue(other._closed)
+
+    def test_app_closes_a_shared_http_cache_store_once(self):
+        app = App()
+        caches = app.enable_caches()
+        store = install_cache(app, caches.store)
+        with patch.object(store, "close", wraps=store.close) as close:
+            app.close()
+            app.close()
+            close.assert_called_once_with()
+
+    def test_app_closes_http_caches_installed_with_custom_names(self):
+        from wsbuilder.caches import install_caches
+
+        app = App()
+        caches = install_caches(app, attr_name="page_cache")
+        app.close()
+        self.assertTrue(caches.store._closed)
+
 
 if __name__ == "__main__":
     unittest.main()

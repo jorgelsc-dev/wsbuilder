@@ -348,6 +348,8 @@ def _read_upstream_body(upstream, *, max_bytes, deadline):
         if size > max_bytes:
             raise _UpstreamResponseTooLarge(f"upstream body over {max_bytes} bytes")
         chunks.append(chunk)
+    if declared is not None and size != declared:
+        raise http.client.IncompleteRead(b"", max(0, declared - size))
     return b"".join(chunks)
 
 
@@ -1456,6 +1458,8 @@ class ProxyI:
                     return Response.text("Bad Gateway: upstream response too large", status=502)
                 except _UpstreamResponseTimeout:
                     return Response.text("Gateway Timeout", status=504)
+                except http.client.IncompleteRead:
+                    return Response.text("Bad Gateway: incomplete upstream response", status=502)
             if not any(
                 name.lower() == "content-length"
                 for name in response_headers

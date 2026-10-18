@@ -227,20 +227,28 @@ def parse_http_request(conn, max_header_bytes=65536):
 
 
 def send_http_response(conn, response, *, send_body=True, keep_alive=False, version=None):
+    """Send a response, returning False if writing its message fails."""
     try:
-        _send_http_response(
+        return _send_http_response(
             conn, response, send_body=send_body, keep_alive=keep_alive, version=version
         )
     finally:
-        if getattr(response, "is_stream", False):
-            # Release what the stream holds (an upstream connection, a file)
-            # even when the body was skipped or the client went away.
-            close = getattr(response.stream, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except Exception as exc:
-                    get_log().warning("http", f"stream close error: {exc}")
+        _close_response_stream(response)
+
+
+def _close_response_stream(response):
+    if getattr(response, "is_stream", False):
+        # Skipping a body still transfers ownership of its source to us.
+        close = getattr(response.stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:
+                get_log().warning("http", f"stream close error: {exc}")
+
+
+def _status_allows_body(status):
+    return not (100 <= int(status) < 200 or int(status) in {204, 304})
 
 
 def _send_http_response(conn, response, *, send_body=True, keep_alive=False, version=None):
@@ -251,7 +259,7 @@ def _send_http_response(conn, response, *, send_body=True, keep_alive=False, ver
         # No status line and no headers exist in HTTP/0.9: the connection
         # closing is what marks the end of the body.
         if not send_body:
-            return
+            return True
         try:
             if getattr(response, "is_stream", False):
                 for chunk in _iter_stream_chunks(response.stream):
@@ -260,7 +268,8 @@ def _send_http_response(conn, response, *, send_body=True, keep_alive=False, ver
                 conn.sendall(response.body)
         except Exception as e:
             get_log().warning("http", f"send error {status_code}: {e}")
-        return
+            return False
+        return True
     reason = validate_header_value(
         response.reason or STATUS_MESSAGES.get(status_code, "Unknown")
     )
@@ -275,11 +284,13 @@ def _send_http_response(conn, response, *, send_body=True, keep_alive=False, ver
         headers[header_name] = validate_header_field_value(value)
 
     lowermap = _lower_header_map(headers)
-    status_allows_body = not (100 <= status_code < 200 or status_code in {204, 304})
+    status_allows_body = _status_allows_body(status_code)
     should_send_body = bool(send_body and status_allows_body)
     if not status_allows_body:
         for name in list(headers):
-            if name.lower() in {"content-length", "transfer-encoding"}:
+            if name.lower() == "transfer-encoding" or (
+                name.lower() == "content-length" and status_code != 304
+            ):
                 headers.pop(name)
         lowermap = _lower_header_map(headers)
     elif getattr(response, "is_stream", False):
@@ -309,7 +320,7 @@ def _send_http_response(conn, response, *, send_body=True, keep_alive=False, ver
     try:
         conn.sendall(resp.encode("utf-8"))
         if not should_send_body:
-            return
+            return True
         if getattr(response, "is_stream", False):
             use_chunked = "chunked" in lowermap.get("transfer-encoding", "").lower()
             for chunk in _iter_stream_chunks(response.stream):
@@ -321,6 +332,8 @@ def _send_http_response(conn, response, *, send_body=True, keep_alive=False, ver
             conn.sendall(response.body)
     except Exception as e:
         get_log().warning("http", f"send error {status_code}: {e}")
+        return False
+    return True
 
 
 def _lower_header_map(headers):

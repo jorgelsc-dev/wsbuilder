@@ -832,13 +832,19 @@ class HTTPServer:
             response.headers.setdefault("Connection", explicit)
 
         try:
-            send_http_response(
+            sent = send_http_response(
                 conn,
                 response,
                 send_body=send_body,
                 keep_alive=keep_alive,
                 version=request.version,
             )
+            if sent is False:
+                # An incomplete response cannot frame another request's reply.
+                if metrics:
+                    metrics.error("http_response", "response write failed")
+                    metrics.http_request_aborted()
+                return False
         except ValueError as e:
             if metrics:
                 metrics.error("http_response", e)
