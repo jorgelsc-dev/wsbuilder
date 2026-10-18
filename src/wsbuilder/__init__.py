@@ -130,6 +130,11 @@ def __getattr__(name):
         try:
             from . import pki
         except ImportError as exc:
+            # Installed but unusable (too old, broken binding): stop
+            # advertising the names so later star imports and dir() work.
+            global _TLS_EXTRA_AVAILABLE
+            _TLS_EXTRA_AVAILABLE = False
+            __all__[:] = [item for item in __all__ if item not in _PKI_EXPORTS]
             raise AttributeError(
                 f"wsbuilder.{name} needs the 'cryptography' package. "
                 "Install it with: pip install wsbuilder[tls]",

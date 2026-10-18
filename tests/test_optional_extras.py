@@ -65,6 +65,33 @@ class TestCoreWithoutTLSExtra(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "ok")
 
+    def test_an_unimportable_installed_extra_stops_being_advertised(self):
+        result = _run(
+            """
+            import importlib.util
+
+            real_find_spec = importlib.util.find_spec
+
+            def find_spec(name, *args, **kwargs):
+                if name == "cryptography":
+                    return object()  # Looks installed, but cannot be imported.
+                return real_find_spec(name, *args, **kwargs)
+
+            importlib.util.find_spec = find_spec
+            import wsbuilder
+
+            importlib.util.find_spec = real_find_spec
+            assert "TLSMaterial" in wsbuilder.__all__
+            assert getattr(wsbuilder, "TLSMaterial", None) is None
+            assert "TLSMaterial" not in wsbuilder.__all__
+            assert "TLSMaterial" not in dir(wsbuilder)
+            exec("from wsbuilder import *", {})
+            print("ok")
+            """
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
     def test_tls_names_are_exported_when_the_extra_is_installed(self):
         import wsbuilder
 
