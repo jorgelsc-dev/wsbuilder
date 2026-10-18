@@ -4,6 +4,7 @@ import signal
 import socket
 import ssl
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -547,6 +548,28 @@ class TestHTTPServerLifecycle(unittest.TestCase):
         server.handle_conn(left, ("127.0.0.1", 0))
 
         self.assertEqual(seen, [0.2])
+
+    def test_idle_keepalive_connection_closes_after_the_keepalive_timeout(self):
+        server = HTTPServer(
+            "127.0.0.1", 0, self._ping_app(), request_read_timeout=5.0, keepalive_timeout=0.2
+        )
+        self._serve(server)
+
+        with socket.create_connection(server.server_address, timeout=3.0) as sock:
+            sock.sendall(b"GET /ping HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            started = time.monotonic()
+            received = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(received.count(b"HTTP/1.1 "), 1)
+        self.assertIn(b"200 OK", received)
+        self.assertNotIn(b"408", received)
+        self.assertLess(elapsed, 2.0)
 
 
 class TestHTTPServerLimits(unittest.TestCase):
