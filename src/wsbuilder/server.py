@@ -1,3 +1,4 @@
+import signal
 import socket
 import ssl
 import threading
@@ -45,6 +46,10 @@ class HTTPServer:
     ENABLE_HTTP2 = True
     #: Concurrent HTTP/2 streams advertised in SETTINGS.
     MAX_CONCURRENT_STREAMS = 100
+    #: How long shutdown waits for in-flight connections before giving up.
+    GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+    #: Stop gracefully on SIGTERM when serving from the main thread.
+    HANDLE_SIGTERM = True
 
     def __init__(self, host, port, app, ssl_context=None):
         self.host = host
@@ -54,11 +59,48 @@ class HTTPServer:
         self.ssl_context = ssl_context
         self._stop = threading.Event()
         self._serving = threading.Event()
+        self._workers = set()
+        self._workers_lock = threading.Lock()
         self.server_address = (host, port)
 
     def stop(self):
-        """Ask a running ``serve_forever`` loop to finish accepting."""
+        """Ask a running ``serve_forever`` loop to finish accepting.
+
+        Connections already being served finish their current request and
+        are then closed; ``serve_forever`` waits for them, up to
+        ``GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS``, before closing the app.
+        """
         self._stop.set()
+
+    def active_connections(self):
+        """Number of connections currently held by a worker thread."""
+        with self._workers_lock:
+            return len(self._workers)
+
+    def _install_sigterm_handler(self):
+        """Route SIGTERM to ``stop``; return the previous handler to restore."""
+        if not self.HANDLE_SIGTERM or threading.current_thread() is not threading.main_thread():
+            return None
+
+        def _on_sigterm(_signum, _frame):
+            print("[shutdown] SIGTERM received. stopping server...")
+            self.stop()
+
+        try:
+            return signal.signal(signal.SIGTERM, _on_sigterm)
+        except (ValueError, OSError):
+            return None
+
+    def _drain_workers(self):
+        """Wait for in-flight connections; return how many were still open."""
+        deadline = time.monotonic() + max(0.0, float(self.GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS))
+        with self._workers_lock:
+            pending = list(self._workers)
+        if pending:
+            print(f"[shutdown] waiting for {len(pending)} open connection(s)...")
+        for worker in pending:
+            worker.join(max(0.0, deadline - time.monotonic()))
+        return self.active_connections()
 
     def wait_until_serving(self, timeout=None):
         """Block until the listening socket is bound, for callers/tests."""
@@ -87,6 +129,7 @@ class HTTPServer:
         print(f"Server listening on {scheme}://{host}:{port}/")
         worker_limiter = threading.BoundedSemaphore(self.MAX_CONNECTION_WORKERS)
         interrupted = False
+        previous_sigterm = self._install_sigterm_handler()
         self._serving.set()
         try:
             while not self._stop.is_set():
@@ -114,13 +157,21 @@ class HTTPServer:
                     name=f"framework-http-{addr[0]}:{addr[1]}",
                     daemon=True,
                 )
+                with self._workers_lock:
+                    self._workers.add(t)
                 t.start()
         except KeyboardInterrupt:
             interrupted = True
             print("\n[shutdown] interrupted by user (Ctrl+C). stopping server...")
         finally:
+            self._stop.set()
             self._serving.clear()
             s.close()
+            if previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)
+            remaining = self._drain_workers()
+            if remaining:
+                print(f"[shutdown] {remaining} connection(s) still open after timeout")
             try:
                 if hasattr(self.app, "close"):
                     self.app.close()
@@ -138,10 +189,13 @@ class HTTPServer:
         finally:
             if metrics:
                 metrics.tcp_connection_close()
+            with self._workers_lock:
+                self._workers.discard(threading.current_thread())
             limiter.release()
 
     def _reuse_allowed(self):
-        return self.MAX_KEEPALIVE_REQUESTS != 1
+        # A draining server answers in-flight requests with Connection: close.
+        return self.MAX_KEEPALIVE_REQUESTS != 1 and not self._stop.is_set()
 
     def _resolve_ssl_context(self):
         """Resolve the TLS context for one connection.
@@ -224,6 +278,8 @@ class HTTPServer:
                 if not keep_alive:
                     return
                 if 0 < self.MAX_KEEPALIVE_REQUESTS <= served:
+                    return
+                if self._stop.is_set():
                     return
 
     def _negotiated_http2(self, conn, reader):

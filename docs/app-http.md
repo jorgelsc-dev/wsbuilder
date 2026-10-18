@@ -251,6 +251,8 @@ Limites por defecto:
 | `MAX_REQUEST_BODY_BYTES` | `2 MiB` |
 | `REQUEST_READ_TIMEOUT_SECONDS` | `10.0` segundos |
 | `ACCEPT_TIMEOUT_SECONDS` | `0.5` segundos |
+| `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` | `10.0` segundos de espera al apagar |
+| `HANDLE_SIGTERM` | `True`: `SIGTERM` detiene el servidor de forma ordenada |
 
 Para cambiarlos, instancia `HTTPServer` manualmente y ajusta atributos antes de
 llamar `serve_forever()`.
@@ -262,6 +264,20 @@ server = HTTPServer("127.0.0.1", 8765, app)
 server.MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024
 server.serve_forever()
 ```
+
+### Apagado ordenado
+
+`server.stop()`, `Ctrl+C` y `SIGTERM` (el que envian Docker, systemd o
+Kubernetes) siguen el mismo camino:
+
+1. se deja de aceptar conexiones nuevas;
+2. las peticiones en curso terminan y se responden con `Connection: close`;
+3. el servidor espera a esas conexiones hasta `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS`;
+4. por ultimo se llama a `app.close()`.
+
+`SIGTERM` solo se captura cuando `serve_forever()` corre en el hilo principal;
+el manejador anterior se restaura al terminar. `server.active_connections()`
+devuelve cuantas conexiones siguen abiertas.
 
 ### Ciclo de vida
 
