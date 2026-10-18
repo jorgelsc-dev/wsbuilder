@@ -4,6 +4,7 @@ import socket
 import threading
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from wsbuilder import App, Response, http3
 from wsbuilder.http3_server import Http3Server
@@ -207,6 +208,64 @@ class TestHttp3BodyLimit(unittest.TestCase):
 
 
 class TestHttp3StreamCleanup(unittest.TestCase):
+    def test_closing_a_connection_during_dispatch_closes_the_unused_producer(self):
+        class Producer:
+            iterations = 0
+            close_calls = 0
+
+            def __iter__(self):
+                self.iterations += 1
+                return iter([b"chunk"])
+
+        class ClosingProducer(Producer):
+            def __init__(self, fail_close=False):
+                self.error = OSError("cleanup failed") if fail_close else None
+
+            def close(self):
+                self.close_calls += 1
+                if self.error is not None:
+                    raise self.error
+
+        for producer in (ClosingProducer(), ClosingProducer(fail_close=True), Producer()):
+            with self.subTest(producer=type(producer).__name__, error=getattr(producer, "error", None)):
+                entered = threading.Event()
+                release = threading.Event()
+                queued = []
+
+                def dispatch(request):
+                    entered.set()
+                    if not release.wait(2.0):
+                        raise TimeoutError("dispatch was never released")
+                    return Response.stream(producer)
+
+                app = SimpleNamespace(dispatch=dispatch)
+                server = Http3Server("127.0.0.1", 0, app, None)
+                self.addCleanup(server._dispatch_pool.shutdown, wait=True)
+                connection = SimpleNamespace(
+                    closed=False,
+                    queue_stream_data=lambda *args, **kwargs: queued.append((args, kwargs)),
+                )
+                request = SimpleNamespace(method="GET")
+                with patch("wsbuilder.http3_server.get_log") as get_log:
+                    future = server._dispatch_pool.submit(server._dispatch, connection, 12, request)
+                    try:
+                        self.assertTrue(entered.wait(2.0), "dispatch never started")
+                        server._drop(connection)
+                    finally:
+                        release.set()
+                    future.result(timeout=2.0)
+
+                    self.assertEqual(producer.iterations, 0)
+                    self.assertEqual(queued, [])
+                    self.assertEqual(producer.close_calls, int(isinstance(producer, ClosingProducer)))
+                    if getattr(producer, "error", None) is not None:
+                        get_log.assert_called_once_with(app)
+                        get_log.return_value.exception.assert_called_once_with(
+                            "http3", "streaming cleanup on stream 12 failed: cleanup failed", producer.error,
+                        )
+                    else:
+                        get_log.assert_not_called()
+
     def test_dropping_a_connection_wakes_all_websocket_readers(self):
         server = Http3Server("127.0.0.1", 0, None, None)
         connection = SimpleNamespace(

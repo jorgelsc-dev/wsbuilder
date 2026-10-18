@@ -367,6 +367,13 @@ class Http3Server:
             get_log(self.app).exception("http3", f"dispatch failed on stream {stream_id}: {e}", e)
             response = Response.text("Internal Server Error", status=500)
         if connection.closed:
+            if getattr(response, "is_stream", False):
+                try:
+                    close = getattr(response.stream, "close", None)
+                    if callable(close):
+                        close()
+                except Exception as e:
+                    get_log(self.app).exception("http3", f"streaming cleanup on stream {stream_id} failed: {e}", e)
             return
         try:
             self._send_response(connection, stream_id, response, send_body=request.method != "HEAD")
