@@ -312,11 +312,14 @@ class HTTPServer:
             while True:
                 if served:
                     # Idle time between requests is cheaper to give up than a
-                    # first read, so a reused connection waits less.
+                    # first read, so a reused connection waits less. Only the
+                    # wait for the next request's first bytes uses it; an idle
+                    # connection is closed without a 408.
                     try:
                         conn.settimeout(self.KEEPALIVE_TIMEOUT_SECONDS)
-                    except OSError:
-                        pass
+                        reader.wait_for_data()
+                    except (ConnectionError, OSError):
+                        return
                 try:
                     keep_alive = self._serve_one_request(reader, conn, addr, tls_meta)
                 except (ConnectionError, OSError):

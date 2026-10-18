@@ -93,6 +93,11 @@ class BufferedReader:
                 return False
         return bytes(self._buffer[: len(prefix)]) == prefix
 
+    def wait_for_data(self):
+        """Block until at least one byte is buffered, reading only if empty."""
+        if not self._buffer:
+            self._fill()
+
     def unread(self, data):
         """Push bytes back so the next read sees them first."""
         if data:
