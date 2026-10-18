@@ -8,6 +8,7 @@ from html import escape as html_escape
 
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN
 from .cookies import build_set_cookie, get_cookie
+from .headers import add_header
 from .http import Response
 from .logs import get_log
 from .tasks import TaskManager
@@ -1232,6 +1233,39 @@ class App:
             if pool:
                 pool.close()
 
+    def security_response(self, request):
+        """Evaluate the security policy once for ``request``.
+
+        Returns the denial ``Response``, or ``None`` when the request may go
+        on. The request is marked as evaluated, so a later ``dispatch()`` does
+        not count it again; the server calls this with the headers alone,
+        before it answers ``100 Continue`` or reads the body.
+        """
+        security = getattr(self, "security", None)
+        try:
+            request.security_evaluated = True
+        except Exception:
+            pass
+        if not security:
+            return None
+        decision = security.evaluate(request)
+        if decision.allowed:
+            return None
+        cors_allow_origin = self.cors_allow_origin
+        route_for_format = self.router.resolve(request.path, request.method)
+        headers = decision.response_headers()
+        if cors_allow_origin:
+            headers.setdefault("Access-Control-Allow-Origin", cors_allow_origin)
+            if cors_allow_origin != "*":
+                headers.setdefault("Vary", "Origin")
+        if route_for_format and route_for_format.kind == "api":
+            return Response.json(
+                {"status": "error", "message": decision.message, "reason": decision.reason},
+                status=decision.status,
+                headers=headers,
+            )
+        return Response.text(decision.message, status=decision.status, headers=headers)
+
     def dispatch(self, request):
         try:
             request.app = self
@@ -1239,23 +1273,10 @@ class App:
             pass
         cors_allow_origin = self.cors_allow_origin
 
-        security = getattr(self, "security", None)
-        if security:
-            decision = security.evaluate(request)
-            if not decision.allowed:
-                route_for_format = self.router.resolve(request.path, request.method)
-                headers = decision.response_headers()
-                if cors_allow_origin:
-                    headers.setdefault("Access-Control-Allow-Origin", cors_allow_origin)
-                    if cors_allow_origin != "*":
-                        headers.setdefault("Vary", "Origin")
-                if route_for_format and route_for_format.kind == "api":
-                    return Response.json(
-                        {"status": "error", "message": decision.message, "reason": decision.reason},
-                        status=decision.status,
-                        headers=headers,
-                    )
-                return Response.text(decision.message, status=decision.status, headers=headers)
+        if not getattr(request, "security_evaluated", False):
+            denied = self.security_response(request)
+            if denied is not None:
+                return denied
 
         if request.method == "OPTIONS" and not self.router.resolve(
             request.path,
@@ -1350,13 +1371,11 @@ class App:
             if thread_info.port > 0:
                 resp.headers.setdefault(THREAD_RESPONSE_PORT_HEADER, str(thread_info.port))
             resp.headers.setdefault(THREAD_RESPONSE_MODE_HEADER, "worker")
-        # Headers hold one value per name, so a cookie the handler set wins
-        # over the affinity cookie instead of being replaced by it.
-        if thread_info is not None and not any(
-            str(name).lower() == "set-cookie" for name in resp.headers
-        ):
+        # The affinity cookie is added next to any Set-Cookie the handler
+        # set: list values are sent as separate Set-Cookie fields.
+        if thread_info is not None:
             signed_cookie = self._sign_thread_cookie(route.path, thread_info.thread_id)
-            resp.headers["Set-Cookie"] = build_set_cookie(
+            affinity_cookie = build_set_cookie(
                 self.thread_cookie_name,
                 signed_cookie,
                 path=route.path or "/",
@@ -1369,6 +1388,7 @@ class App:
                 secure=bool((request.tls or {}).get("enabled")),
                 same_site="Lax",
             )
+            add_header(resp.headers, "Set-Cookie", affinity_cookie)
 
         if route.kind == "api":
             if cors_allow_origin:

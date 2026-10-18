@@ -1,4 +1,6 @@
+import io
 import socket
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -347,6 +349,246 @@ class TestLocalDNSServer(unittest.TestCase):
         self.assertIsNone(forward(query))
         self.assertIsNone(forward(wrong_txid))
         self.assertIsNone(forward(wrong_question))
+
+
+def _with_counts(query, *, qdcount=None, arcount=None):
+    data = bytearray(query)
+    if qdcount is not None:
+        data[4:6] = int(qdcount).to_bytes(2, byteorder="big")
+    if arcount is not None:
+        data[10:12] = int(arcount).to_bytes(2, byteorder="big")
+    return bytes(data)
+
+
+def _txt_values(letters):
+    return [letter * 250 for letter in letters]
+
+
+def _opt_record(payload_size):
+    return b"\x00" + (41).to_bytes(2, "big") + int(payload_size).to_bytes(2, "big") + b"\x00" * 6
+
+
+class _LoopSocket:
+    """Fake UDP socket feeding datagrams to ``serve_forever``."""
+
+    def __init__(self, dns, packets, *, recv_errors=(), send_errors=0, wait_for=None):
+        self.dns = dns
+        self.packets = list(packets)
+        self.recv_errors = list(recv_errors)
+        self.send_errors = send_errors
+        self.wait_for = wait_for
+        self.sent = []
+        self.sent_event = threading.Event()
+
+    def fileno(self):
+        return 3
+
+    def close(self):
+        return None
+
+    def recvfrom(self, _size):
+        if self.recv_errors:
+            raise self.recv_errors.pop(0)
+        if self.packets:
+            return self.packets.pop(0), ("127.0.0.1", 53000)
+        if self.wait_for is not None:
+            self.wait_for.wait(timeout=5)
+        self.dns._running.clear()
+        raise TimeoutError()
+
+    def sendto(self, data, addr):
+        if self.send_errors:
+            self.send_errors -= 1
+            raise OSError(90, "Message too long")
+        self.sent.append((data, addr))
+        self.sent_event.set()
+
+
+class TestDNSHardening(unittest.TestCase):
+    def test_multiple_or_zero_questions_return_formerr(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0)
+        query = _build_query("localhost", qtype=1, txid=0x1201)
+        question = query[12:]
+        many = _with_counts(query[:12] + question * 600, qdcount=600)
+        empty = _with_counts(query[:12], qdcount=0)
+
+        for packet in (many, empty):
+            response = dns._handle_packet(packet)
+            parsed = _parse_response(response)
+            self.assertEqual(parsed["rcode"], 1)
+            self.assertEqual(parsed["ancount"], 0)
+            self.assertEqual(len(response), 12)
+            self.assertEqual(parsed["txid"], 0x1201)
+
+    def test_formerr_is_not_sent_for_responses(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0)
+        query = _as_response(_with_counts(_build_query("localhost", 1, 0x1202), qdcount=2))
+        self.assertIsNone(dns._handle_packet(query))
+
+    def test_large_udp_response_is_truncated_with_tc_bit(self):
+        dns = LocalDNSServer(
+            host="127.0.0.1", port=0, records={"big.local": {"TXT": _txt_values("abcde")}}
+        )
+        response = dns._handle_packet(_build_query("big.local", qtype=16, txid=0x1203))
+        parsed = _parse_response(response)
+        self.assertLessEqual(len(response), 512)
+        self.assertTrue(parsed["flags"] & 0x0200)
+        self.assertEqual(parsed["ancount"], 0)
+        self.assertEqual(int.from_bytes(response[4:6], "big"), 1)
+
+    def test_small_response_has_no_tc_bit(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0)
+        parsed = _parse_response(dns._handle_packet(_build_query("localhost", 1, 0x1204)))
+        self.assertFalse(parsed["flags"] & 0x0200)
+        self.assertEqual(parsed["ancount"], 1)
+
+    def test_edns_payload_size_allows_larger_responses_up_to_limit(self):
+        dns = LocalDNSServer(
+            host="127.0.0.1", port=0, records={"big.local": {"TXT": _txt_values("abcd")}}
+        )
+        query = _with_counts(_build_query("big.local", 16, 0x1205), arcount=1) + _opt_record(4096)
+        response = dns._handle_packet(query)
+        parsed = _parse_response(response)
+        self.assertFalse(parsed["flags"] & 0x0200)
+        self.assertEqual(parsed["ancount"], 4)
+        self.assertLessEqual(len(response), 1232)
+
+        dns.max_udp_payload = 512
+        response = dns._handle_packet(query)
+        self.assertTrue(_parse_response(response)["flags"] & 0x0200)
+        self.assertLessEqual(len(response), 512)
+
+    def test_upstream_response_is_truncated_to_client_limit(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0, fallback_to_upstream=True)
+        query = _build_query("remote.example", qtype=16, txid=0x1206)
+        big = _as_response(query) + b"\x00" * 900
+        with patch.object(dns, "_forward_to_upstream", return_value=big):
+            response = dns._handle_packet(query)
+        self.assertLessEqual(len(response), 512)
+        self.assertTrue(_parse_response(response)["flags"] & 0x0200)
+
+    def test_serve_loop_survives_recv_and_send_errors(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0)
+        first = _build_query("localhost", 1, 0x1207)
+        second = _build_query("localhost", 1, 0x1208)
+        fake = _LoopSocket(
+            dns,
+            [first, second],
+            recv_errors=[OSError(111, "Connection refused")],
+            send_errors=1,
+        )
+        dns._sock = fake
+        stream = io.StringIO()
+        with patch("wsbuilder.logs.console.stream", stream):
+            dns.serve_forever()
+
+        self.assertEqual([int.from_bytes(data[:2], "big") for data, _ in fake.sent], [0x1208])
+        output = stream.getvalue()
+        self.assertIn("dns.recv_error", output)
+        self.assertIn("dns.send_error", output)
+
+    def test_upstream_forwarding_does_not_block_local_answers(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0, fallback_to_upstream=True)
+        release = threading.Event()
+        remote = _build_query("remote.example", 1, 0x1209)
+        local = _build_query("localhost", 1, 0x120A)
+
+        def slow_forward(data):
+            release.wait(timeout=5)
+            return _as_response(data)
+
+        fake = _LoopSocket(dns, [remote, local], wait_for=release)
+        dns._sock = fake
+        original_send = fake.sendto
+
+        def sendto(data, addr):
+            original_send(data, addr)
+            if int.from_bytes(data[:2], "big") == 0x120A:
+                release.set()
+
+        fake.sendto = sendto
+        with patch.object(dns, "_forward_to_upstream", side_effect=slow_forward):
+            dns.serve_forever()
+            for _ in range(50):
+                if len(fake.sent) == 2:
+                    break
+                fake.sent_event.clear()
+                fake.sent_event.wait(timeout=0.1)
+        dns.close()
+
+        txids = [int.from_bytes(data[:2], "big") for data, _ in fake.sent]
+        self.assertEqual(txids, [0x120A, 0x1209])
+
+    def test_saturated_upstream_pool_answers_servfail(self):
+        dns = LocalDNSServer(
+            host="127.0.0.1", port=0, fallback_to_upstream=True, max_pending_upstream=1
+        )
+        release = threading.Event()
+        first = _build_query("one.example", 1, 0x120B)
+        second = _build_query("two.example", 1, 0x120C)
+
+        def slow_forward(data):
+            release.wait(timeout=5)
+            return None
+
+        fake = _LoopSocket(dns, [first, second], wait_for=release)
+        dns._sock = fake
+        original_send = fake.sendto
+
+        def sendto(data, addr):
+            original_send(data, addr)
+            if int.from_bytes(data[:2], "big") == 0x120C:
+                release.set()
+
+        fake.sendto = sendto
+        with patch.object(dns, "_forward_to_upstream", side_effect=slow_forward):
+            dns.serve_forever()
+            for _ in range(50):
+                if len(fake.sent) == 2:
+                    break
+                fake.sent_event.clear()
+                fake.sent_event.wait(timeout=0.1)
+        dns.close()
+
+        parsed = [_parse_response(data) for data, _ in fake.sent]
+        self.assertEqual([row["txid"] for row in parsed], [0x120C, 0x120B])
+        self.assertTrue(all(row["rcode"] == 2 for row in parsed))
+
+    def test_close_shuts_down_upstream_pool(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0, fallback_to_upstream=True)
+        executor = dns._get_executor()
+        dns.close()
+        self.assertIsNone(dns._executor)
+        with self.assertRaises(RuntimeError):
+            executor.submit(lambda: None)
+
+    def test_forward_after_close_does_not_create_executor(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0, fallback_to_upstream=True)
+        dns.close()
+        query = _build_query("remote.example", 1, 0x120E)
+        _response, forward = dns._prepare_response(query)
+        dns._forward_in_background(query, ("127.0.0.1", 53000), forward)
+        self.assertIsNone(dns._executor)
+        self.assertEqual(dns._pending_upstream, 0)
+
+    def test_real_socket_keeps_answering_after_oversized_query(self):
+        dns = LocalDNSServer(
+            host="127.0.0.1", port=0, records={"a.test": {"TXT": _txt_values("abcde")}}
+        )
+        dns.start()
+        self.addCleanup(dns.close)
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(client.close)
+        client.settimeout(2)
+        query = _build_query("a.test", 16, 0x120D)
+        attack = _with_counts(query + (b"\xc0\x0c\x00\x10\x00\x01" * 599), qdcount=600)
+        client.sendto(attack, ("127.0.0.1", dns.port))
+        response, _ = client.recvfrom(65535)
+        self.assertEqual(_parse_response(response)["rcode"], 1)
+        client.sendto(query, ("127.0.0.1", dns.port))
+        response, _ = client.recvfrom(65535)
+        self.assertLessEqual(len(response), 512)
+        self.assertTrue(_parse_response(response)["flags"] & 0x0200)
 
 
 if __name__ == "__main__":

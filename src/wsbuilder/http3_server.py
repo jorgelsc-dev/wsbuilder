@@ -71,6 +71,10 @@ class Http3Server:
     #: Threads that run request handlers, so a slow one never holds up the
     #: socket thread that every connection's packets go through.
     MAX_DISPATCH_WORKERS = 32
+    #: Bytes a streamed response may have queued before its producer waits.
+    MAX_PENDING_STREAM_BYTES = 256 * 1024
+    #: How long a producer waits for room before the stream is given up.
+    STREAM_STALL_TIMEOUT_SECONDS = 30.0
 
     def __init__(self, host, port, app, tls, *, max_connections=DEFAULT_MAX_CONNECTIONS,
                  require_address_validation=False,
@@ -395,12 +399,29 @@ class Http3Server:
             fin=False,
         )
 
+        wait_for_room = getattr(connection, "wait_for_send_room", None)
+
         def pump():
+            completed = False
             try:
                 for chunk in _iter_stream_chunks(response.stream):
                     if connection.closed:
                         break
+                    # Backpressure: a producer faster than the peer (flow
+                    # control, congestion window) waits here instead of
+                    # queueing without bound.
+                    if callable(wait_for_room) and not wait_for_room(
+                        stream_id,
+                        self.MAX_PENDING_STREAM_BYTES,
+                        timeout=self.STREAM_STALL_TIMEOUT_SECONDS,
+                    ):
+                        get_log(self.app).warning(
+                            "http3", f"streaming response on stream {stream_id} stalled; stopping"
+                        )
+                        break
                     connection.queue_stream_data(stream_id, http3.encode_frame(http3.FRAME_DATA, chunk))
+                else:
+                    completed = True
             except Exception as e:
                 get_log(self.app).exception("http3", f"streaming response on stream {stream_id} failed: {e}", e)
             finally:
@@ -413,7 +434,12 @@ class Http3Server:
                 except Exception as e:
                     get_log(self.app).exception("http3", f"streaming cleanup on stream {stream_id} failed: {e}", e)
                 finally:
-                    connection.queue_stream_data(stream_id, b"", fin=True)
+                    reset = getattr(connection, "reset_stream", None)
+                    if completed or not callable(reset):
+                        connection.queue_stream_data(stream_id, b"", fin=True)
+                    else:
+                        # A FIN would present the truncated body as complete.
+                        reset(stream_id, http3.H3_INTERNAL_ERROR)
 
         threading.Thread(target=pump, name=f"http3-stream-{stream_id}", daemon=True).start()
 

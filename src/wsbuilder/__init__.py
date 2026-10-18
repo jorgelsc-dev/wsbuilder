@@ -1,5 +1,7 @@
 """wsbuilder: mini framework HTTP + WebSocket."""
 
+import importlib.util
+
 from .cache import Cache, SQLiteMemoryCache, install_cache
 from .caches import GlobalCacheRule, ViewResponseCache, install_caches
 from .cookies import build_set_cookie, get_cookie, parse_cookie_header
@@ -59,7 +61,7 @@ from .framework import (
     parse_query_string,
     proxyi,
 )
-from .headers import get_header, has_header, normalize_header_name, set_header
+from .headers import add_header, get_header, has_header, normalize_header_name, set_header
 from .ia import (
     DataSet,
     DataSummary,
@@ -107,15 +109,36 @@ _PKI_EXPORTS = frozenset(
 )
 
 
+def _tls_extra_available():
+    """Whether the optional ``tls`` extra (cryptography) can be imported."""
+    try:
+        return importlib.util.find_spec("cryptography") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+_TLS_EXTRA_AVAILABLE = _tls_extra_available()
+
+
 def __getattr__(name):
-    """Resolve TLS helpers lazily so cryptography stays an optional install."""
+    """Resolve TLS helpers lazily so cryptography stays an optional install.
+
+    Without the extra, the names raise ``AttributeError`` (with the install
+    hint), so ``hasattr()``, ``getattr(..., default)`` and ``inspect`` work.
+    """
     if name in _PKI_EXPORTS:
         try:
             from . import pki
-        except ImportError as exc:  # pragma: no cover - depends on the install
-            raise ImportError(
+        except ImportError as exc:
+            # Installed but unusable (too old, broken binding): stop
+            # advertising the names so later star imports and dir() work.
+            global _TLS_EXTRA_AVAILABLE
+            _TLS_EXTRA_AVAILABLE = False
+            __all__[:] = [item for item in __all__ if item not in _PKI_EXPORTS]
+            raise AttributeError(
                 f"wsbuilder.{name} needs the 'cryptography' package. "
-                "Install it with: pip install wsbuilder[tls]"
+                "Install it with: pip install wsbuilder[tls]",
+                name=name,
             ) from exc
         value = getattr(pki, name)
         globals()[name] = value
@@ -124,7 +147,10 @@ def __getattr__(name):
 
 
 def __dir__():
-    return sorted(set(globals()) | _PKI_EXPORTS)
+    names = set(globals())
+    if _TLS_EXTRA_AVAILABLE:
+        names |= _PKI_EXPORTS
+    return sorted(names)
 
 __version__ = "1.2.12.dev0"
 
@@ -181,6 +207,7 @@ __all__ = [
     "get_header",
     "has_header",
     "set_header",
+    "add_header",
     "parse_cookie_header",
     "get_cookie",
     "build_set_cookie",
@@ -231,9 +258,8 @@ __all__ = [
     "evaluate_errors",
     "submit_training_task",
     "Predictor",
-    "CertificateAuthority",
-    "CertificateManager",
-    "MaterializedFiles",
-    "TLSMaterial",
-    "install_tls",
 ]
+if _TLS_EXTRA_AVAILABLE:
+    # Only advertised when importable, so ``from wsbuilder import *`` works
+    # on a core-only install.
+    __all__ += sorted(_PKI_EXPORTS)

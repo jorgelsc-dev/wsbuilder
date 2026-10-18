@@ -3,7 +3,14 @@ import re
 from urllib.parse import parse_qsl
 
 from .constants import STATUS_MESSAGES
-from .headers import validate_header_name, validate_header_value
+from .headers import (
+    header_value_text,
+    iter_header_fields,
+    validate_header_field_value,
+    validate_header_name,
+    validate_header_value,
+)
+from .http1 import encode_chunk, encode_last_chunk
 from .logs import get_log
 
 MAX_QUERY_FIELDS = 1024
@@ -79,10 +86,12 @@ class Response:
             self.body = bytes(body)
         else:
             self.body = str(body).encode("utf-8")
+        #: One entry per name; a list/tuple value is sent as repeated fields
+        #: (several ``Set-Cookie`` lines, for example).
         self.headers = {}
         for name, value in (headers or {}).items():
             header_name = validate_header_name(name)
-            self.headers[header_name] = validate_header_value(value)
+            self.headers[header_name] = validate_header_field_value(value)
 
     @classmethod
     def json(cls, data, status=200, headers=None):
@@ -218,6 +227,23 @@ def parse_http_request(conn, max_header_bytes=65536):
 
 
 def send_http_response(conn, response, *, send_body=True, keep_alive=False, version=None):
+    try:
+        _send_http_response(
+            conn, response, send_body=send_body, keep_alive=keep_alive, version=version
+        )
+    finally:
+        if getattr(response, "is_stream", False):
+            # Release what the stream holds (an upstream connection, a file)
+            # even when the body was skipped or the client went away.
+            close = getattr(response.stream, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    get_log().warning("http", f"stream close error: {exc}")
+
+
+def _send_http_response(conn, response, *, send_body=True, keep_alive=False, version=None):
     status_code = int(response.status)
     if not 100 <= status_code <= 599:
         raise ValueError("HTTP response status must be between 100 and 599")
@@ -246,16 +272,16 @@ def send_http_response(conn, response, *, send_body=True, keep_alive=False, vers
         if normalized in seen_headers:
             raise ValueError(f"Duplicate response header: {header_name}")
         seen_headers.add(normalized)
-        headers[header_name] = validate_header_value(value)
+        headers[header_name] = validate_header_field_value(value)
 
-    lowermap = {k.lower(): v for k, v in headers.items()}
+    lowermap = _lower_header_map(headers)
     status_allows_body = not (100 <= status_code < 200 or status_code in {204, 304})
     should_send_body = bool(send_body and status_allows_body)
     if not status_allows_body:
         for name in list(headers):
             if name.lower() in {"content-length", "transfer-encoding"}:
                 headers.pop(name)
-        lowermap = {k.lower(): v for k, v in headers.items()}
+        lowermap = _lower_header_map(headers)
     elif getattr(response, "is_stream", False):
         if version == HTTP_1_0:
             # RFC 9112 section 6.1: an HTTP/1.0 client does not understand
@@ -267,20 +293,18 @@ def send_http_response(conn, response, *, send_body=True, keep_alive=False, vers
                 keep_alive = False
         elif "transfer-encoding" not in lowermap and "content-length" not in lowermap:
             headers["Transfer-Encoding"] = "chunked"
-        lowermap = {k.lower(): v for k, v in headers.items()}
+        lowermap = _lower_header_map(headers)
     elif "content-length" not in lowermap:
         headers["Content-Length"] = str(len(response.body))
-        lowermap = {k.lower(): v for k, v in headers.items()}
+        lowermap = _lower_header_map(headers)
     if "connection" not in lowermap and not keep_alive:
         # HTTP/1.1 keeps connections alive by default, so an explicit
         # keep-alive token is only noise; announcing close when the server
         # means to reuse the socket would make the client drop it.
         headers["Connection"] = "close"
-        lowermap = {k.lower(): v for k, v in headers.items()}
+        lowermap = _lower_header_map(headers)
     status_line = f"HTTP/1.1 {status_code} {reason}\r\n"
-    hdrs = ""
-    for k, v in headers.items():
-        hdrs += f"{k}: {v}\r\n"
+    hdrs = "".join(f"{k}: {v}\r\n" for k, v in iter_header_fields(headers))
     resp = status_line + hdrs + "\r\n"
     try:
         conn.sendall(resp.encode("utf-8"))
@@ -289,18 +313,18 @@ def send_http_response(conn, response, *, send_body=True, keep_alive=False, vers
         if getattr(response, "is_stream", False):
             use_chunked = "chunked" in lowermap.get("transfer-encoding", "").lower()
             for chunk in _iter_stream_chunks(response.stream):
-                if use_chunked:
-                    conn.sendall(f"{len(chunk):X}\r\n".encode())
-                    conn.sendall(chunk)
-                    conn.sendall(b"\r\n")
-                else:
-                    conn.sendall(chunk)
+                # One write per chunk: size line, data and CRLF together.
+                conn.sendall(encode_chunk(chunk) if use_chunked else chunk)
             if use_chunked:
-                conn.sendall(b"0\r\n\r\n")
+                conn.sendall(encode_last_chunk())
         else:
             conn.sendall(response.body)
     except Exception as e:
         get_log().warning("http", f"send error {status_code}: {e}")
+
+
+def _lower_header_map(headers):
+    return {name.lower(): header_value_text(value) for name, value in headers.items()}
 
 
 def _iter_stream_chunks(source):

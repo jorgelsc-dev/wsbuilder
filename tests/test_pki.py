@@ -3,6 +3,7 @@ import os
 import socket
 import sqlite3
 import ssl
+import tempfile
 import threading
 import unittest
 
@@ -120,12 +121,12 @@ class TestMaterialization(unittest.TestCase):
         files.close()
 
     def test_ssl_context_loads_and_leaves_nothing_behind(self):
-        before = set(os.listdir("/tmp")) if os.path.isdir("/tmp") else set()
+        temp_root = tempfile.gettempdir()
+        before = {n for n in os.listdir(temp_root) if n.startswith("wsbuilder-tls-")}
         context = self.leaf.ssl_context()
         self.assertIsInstance(context, ssl.SSLContext)
-        if before:
-            leftovers = {n for n in os.listdir("/tmp") if n.startswith("wsbuilder-tls-")}
-            self.assertEqual(leftovers, set())
+        after = {n for n in os.listdir(temp_root) if n.startswith("wsbuilder-tls-")}
+        self.assertEqual(after - before, set())
 
 
 class TestCertificateManager(unittest.TestCase):

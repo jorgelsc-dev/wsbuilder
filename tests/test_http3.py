@@ -10,6 +10,7 @@ from wsbuilder.http3 import (
     build_control_stream,
     build_request,
     build_response_frames,
+    build_response_head,
     decode_settings,
     encode_frame,
     is_reserved_frame_type,
@@ -228,6 +229,65 @@ class TestHeaderValidation(unittest.TestCase):
     def test_a_pseudo_header_after_a_regular_one_is_refused(self):
         with self.assertRaisesRegex(H3Error, "pseudo-header after"):
             validate_request_headers([("accept", "*/*"), (":method", "GET")])
+
+
+class TestRequestFieldHardening(unittest.TestCase):
+    def test_invalid_values_and_names_are_refused(self):
+        bad_fields = [
+            ("x-a", "bad\r\nInjected: 1"),
+            ("x-a", "nul\x00"),
+            ("x-a", " leading"),
+            ("x-a", "trailing\t"),
+            ("bad name", "x"),
+            ("x-a\n", "x"),
+        ]
+        for field in bad_fields:
+            with self.subTest(field=field):
+                with self.assertRaises(H3Error):
+                    validate_request_headers(request_fields() + [field])
+        with self.assertRaises(H3Error):
+            validate_request_headers([(":method", "GET\r\n")] + request_fields()[1:])
+
+    def test_repeated_fields_are_combined(self):
+        stream = RequestStream(0)
+        fields = request_fields() + [
+            ("cookie", "a=1"),
+            ("cookie", "b=2"),
+            ("accept", "text/html"),
+            ("accept", "*/*"),
+        ]
+        stream.feed(encode_frame(FRAME_HEADERS, encode_field_section(fields)), fin=True)
+        request = build_request(stream, ("127.0.0.1", 1))
+        self.assertEqual(request.headers["cookie"], "a=1; b=2")
+        self.assertEqual(request.headers["accept"], "text/html, */*")
+
+    def _build(self, extra):
+        stream = RequestStream(0)
+        fields = request_fields() + extra
+        stream.feed(encode_frame(FRAME_HEADERS, encode_field_section(fields)), fin=True)
+        return build_request(stream, ("127.0.0.1", 1))
+
+    def test_conflicting_host_or_content_length_is_refused(self):
+        for extra in (
+            [("host", "a.example"), ("host", "b.example")],
+            [("content-length", "5"), ("content-length", "7")],
+        ):
+            with self.subTest(extra=extra):
+                with self.assertRaises(H3Error):
+                    self._build(extra)
+        request = self._build([("content-length", "0"), ("content-length", "0")])
+        self.assertEqual(request.headers["content-length"], "0")
+
+
+class TestRepeatedResponseFields(unittest.TestCase):
+    def test_list_values_become_separate_fields(self):
+        fields = build_response_head(200, {"Set-Cookie": ["a=1", "b=2"], "X-One": "1"})
+        self.assertEqual(fields.count(("set-cookie", "a=1")), 1)
+        self.assertEqual(fields.count(("set-cookie", "b=2")), 1)
+        response = Response.text("ok", headers={"Set-Cookie": ["a=1", "b=2"]})
+        frames, _tail = parse_frames(build_response_frames(response))
+        decoded = decode_field_section(frames[0][1])
+        self.assertEqual([v for n, v in decoded if n == "set-cookie"], ["a=1", "b=2"])
 
 
 class TestEndToEnd(unittest.TestCase):

@@ -58,6 +58,9 @@ jobs:
           .venv-smoke/bin/python -m pip install --upgrade pip
           .venv-smoke/bin/python -m pip install dist/*.whl
           .venv-smoke/bin/python -c "import wsbuilder; print('wsbuilder', wsbuilder.__version__)"
+          # The core install has no tls extra: the optional TLS names must stay
+          # out of __all__ and behave as missing attributes.
+          .venv-smoke/bin/python -c "from wsbuilder import *; import inspect, wsbuilder; assert 'TLSMaterial' not in wsbuilder.__all__; assert not hasattr(wsbuilder, 'TLSMaterial'); assert getattr(wsbuilder, 'install_tls', None) is None; inspect.getmembers(wsbuilder); print('core-only exports ok')"
           .venv-smoke/bin/wsbuilder --help
 
       - name: Upload package artifacts

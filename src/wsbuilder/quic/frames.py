@@ -177,6 +177,63 @@ class MaxStreamDataFrame:
         )
 
 
+class ResetStreamFrame:
+    """Abandons the sending part of a stream (RFC 9000 section 19.4)."""
+
+    __slots__ = ("stream_id", "error_code", "final_size")
+
+    def __init__(self, stream_id, error_code, final_size):
+        self.stream_id = int(stream_id)
+        self.error_code = int(error_code)
+        self.final_size = int(final_size)
+
+    def serialize(self):
+        return (
+            encode_varint(FRAME_RESET_STREAM)
+            + encode_varint(self.stream_id)
+            + encode_varint(self.error_code)
+            + encode_varint(self.final_size)
+        )
+
+    def __repr__(self):
+        return f"<RESET_STREAM {self.stream_id} code=0x{self.error_code:x}>"
+
+
+class DataBlockedFrame:
+    """The connection has data to send but the peer's MAX_DATA stops it."""
+
+    __slots__ = ("maximum",)
+
+    def __init__(self, maximum):
+        self.maximum = int(maximum)
+
+    def serialize(self):
+        return encode_varint(FRAME_DATA_BLOCKED) + encode_varint(self.maximum)
+
+    def __repr__(self):
+        return f"<DATA_BLOCKED {self.maximum}>"
+
+
+class StreamDataBlockedFrame:
+    """A stream has data to send but the peer's MAX_STREAM_DATA stops it."""
+
+    __slots__ = ("stream_id", "maximum")
+
+    def __init__(self, stream_id, maximum):
+        self.stream_id = int(stream_id)
+        self.maximum = int(maximum)
+
+    def serialize(self):
+        return (
+            encode_varint(FRAME_STREAM_DATA_BLOCKED)
+            + encode_varint(self.stream_id)
+            + encode_varint(self.maximum)
+        )
+
+    def __repr__(self):
+        return f"<STREAM_DATA_BLOCKED {self.stream_id} {self.maximum}>"
+
+
 class MaxStreamsFrame:
     __slots__ = ("maximum", "bidirectional")
 
@@ -307,16 +364,17 @@ def parse_frames(payload):
         if frame_type in (FRAME_RESET_STREAM, FRAME_STOP_SENDING):
             offset = _skip_stream_control(data, offset, frame_type)
             continue
-        if frame_type in (
-            FRAME_DATA_BLOCKED,
-            FRAME_STREAMS_BLOCKED_BIDI,
-            FRAME_STREAMS_BLOCKED_UNI,
-        ):
+        if frame_type == FRAME_DATA_BLOCKED:
+            maximum, offset = decode_varint(data, offset)
+            frames.append(DataBlockedFrame(maximum))
+            continue
+        if frame_type in (FRAME_STREAMS_BLOCKED_BIDI, FRAME_STREAMS_BLOCKED_UNI):
             _value, offset = decode_varint(data, offset)
             continue
         if frame_type == FRAME_STREAM_DATA_BLOCKED:
-            _stream, offset = decode_varint(data, offset)
-            _limit, offset = decode_varint(data, offset)
+            stream_id, offset = decode_varint(data, offset)
+            maximum, offset = decode_varint(data, offset)
+            frames.append(StreamDataBlockedFrame(stream_id, maximum))
             continue
         raise QuicFrameError(f"unknown frame type 0x{frame_type:x}")
     return frames
@@ -413,6 +471,7 @@ __all__ = [
     "AckFrame",
     "ConnectionCloseFrame",
     "CryptoFrame",
+    "DataBlockedFrame",
     "FRAME_ACK",
     "FRAME_CONNECTION_CLOSE",
     "FRAME_CRYPTO",
@@ -428,8 +487,10 @@ __all__ = [
     "PROTOCOL_VIOLATION",
     "PathFrame",
     "QuicFrameError",
+    "ResetStreamFrame",
     "STREAM_FIN",
     "SimpleFrame",
+    "StreamDataBlockedFrame",
     "StreamFrame",
     "TRANSPORT_PARAMETER_ERROR",
     "pad_to",

@@ -11,6 +11,12 @@ make HTTP/2 intricate are either handled by QUIC or, in QPACK's case, moved
 onto separate ordered streams.
 """
 
+from .headers import (
+    combine_field_values,
+    field_name_problem,
+    field_value_problem,
+    iter_header_fields,
+)
 from .qpack import QPACKError, decode_field_section, encode_field_section
 from .quic.varint import decode_varint, encode_varint
 
@@ -131,6 +137,9 @@ def validate_request_headers(headers):
     regular = []
     seen_regular = False
     for name, value in headers:
+        value_problem = field_value_problem(value)
+        if value_problem:
+            raise H3Error(f"{value_problem} in {name!r}", H3_MESSAGE_ERROR)
         if name.startswith(":"):
             if seen_regular:
                 raise H3Error("pseudo-header after a regular field", H3_MESSAGE_ERROR)
@@ -144,6 +153,9 @@ def validate_request_headers(headers):
         lowered = name.lower()
         if lowered != name:
             raise H3Error(f"header name {name!r} is not lowercase", H3_MESSAGE_ERROR)
+        name_problem = field_name_problem(name)
+        if name_problem:
+            raise H3Error(name_problem, H3_MESSAGE_ERROR)
         if lowered in FORBIDDEN_HEADERS:
             raise H3Error(f"connection-specific header {name!r}", H3_MESSAGE_ERROR)
         regular.append((lowered, value))
@@ -268,6 +280,18 @@ class RequestStream:
         }
 
 
+def _validated_trailers(fields):
+    """Trailer fields checked like header fields; pseudo-headers are not allowed."""
+    for name, value in fields:
+        problem = field_name_problem(name) or field_value_problem(value)
+        if problem:
+            raise H3Error(f"trailer: {problem}", H3_MESSAGE_ERROR)
+    try:
+        return combine_field_values(fields)
+    except ValueError as exc:
+        raise H3Error(f"trailer: {exc}", H3_MESSAGE_ERROR) from exc
+
+
 def build_request(stream, client_address, tls=None):
     """Turn a completed request stream into a wsbuilder Request."""
     from .http import Request
@@ -275,7 +299,10 @@ def build_request(stream, client_address, tls=None):
     pseudo, regular = validate_request_headers(stream.headers)
     target = pseudo.get(":path", "*")
     path, _, query = target.partition("?")
-    headers = dict(regular)
+    try:
+        headers = combine_field_values(regular)
+    except ValueError as exc:
+        raise H3Error(str(exc), H3_MESSAGE_ERROR) from exc
     if ":authority" in pseudo:
         headers.setdefault("host", pseudo[":authority"])
     request = Request(
@@ -287,7 +314,7 @@ def build_request(stream, client_address, tls=None):
         client=client_address,
         tls=tls or {},
         version="HTTP/3",
-        trailers=dict(stream.trailers or []),
+        trailers=_validated_trailers(stream.trailers or []),
     )
     # The RFC 9220 :protocol value, when this is an extended CONNECT.
     request.h3_protocol = pseudo.get(":protocol")
@@ -305,11 +332,11 @@ def is_extended_connect(stream):
 def build_response_head(status, headers=None):
     """The HEADERS frame that opens a response, with no body after it."""
     fields = [(":status", str(int(status)))]
-    for name, value in (headers or {}).items():
+    for name, value in iter_header_fields(headers):
         lowered = str(name).lower()
         if lowered in FORBIDDEN_HEADERS:
             continue
-        fields.append((lowered, str(value)))
+        fields.append((lowered, value))
     return fields
 
 

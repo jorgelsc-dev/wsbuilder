@@ -386,6 +386,58 @@ class HTTPServer:
             if metrics:
                 metrics.error("http2", e)
 
+    #: Upper bound on the time spent draining an unread body before closing.
+    LINGER_TIMEOUT_SECONDS = 2.0
+
+    def _linger_close(self, conn, reader):
+        """Drain what the client still sends before the socket is closed.
+
+        Closing with unread request bytes makes the kernel answer with RST,
+        which can destroy a response the client has not read yet. The write
+        side is shut first, then incoming bytes are discarded until EOF, the
+        linger timeout, or about one maximum body has been read.
+        """
+        reader.set_deadline(None)
+        shutdown = getattr(conn, "shutdown", None)
+        if not callable(shutdown):
+            return  # Not a socket (a test double, for instance): nothing to drain.
+        try:
+            shutdown(socket.SHUT_WR)
+        except (OSError, ValueError):
+            pass
+        deadline = time.monotonic() + self.LINGER_TIMEOUT_SECONDS
+        budget = self.MAX_REQUEST_BODY_BYTES + self.MAX_REQUEST_HEADER_BYTES
+        drained = 0
+        while drained <= budget:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            try:
+                conn.settimeout(remaining)
+                chunk = conn.recv(65536)
+            except (OSError, ValueError):
+                return
+            if not chunk:
+                return
+            drained += len(chunk)
+
+    def _send_early_response(self, request, response, started, metrics, security, conn):
+        """Answer before the body is read; the connection is not reused."""
+        send_body = request.method != "HEAD"
+        response.headers.setdefault("Connection", "close")
+        send_http_response(conn, response, send_body=send_body, version=request.version)
+        if metrics:
+            metrics.http_request_started(request.method, request.path, body_size=0)
+            metrics.http_response_sent(
+                request.method,
+                request.path,
+                response.status,
+                body_size=len(response.body) if send_body and not response.is_stream else 0,
+                duration_ms=(time.time() - started) * 1000.0,
+            )
+        if security:
+            security.observe_response(request, response.status)
+
     def _serve_one_request(self, reader, conn, addr, tls_meta):
         """Serve one message. Returns True when the connection may be reused."""
         metrics = getattr(self.app, "metrics", None)
@@ -394,6 +446,15 @@ class HTTPServer:
             conn.settimeout(self.REQUEST_READ_TIMEOUT_SECONDS)
         except OSError:
             pass
+        # REQUEST_READ_TIMEOUT_SECONDS bounds the whole header block and body,
+        # not each recv, so a client trickling bytes cannot hold the worker.
+        reader.set_deadline(time.monotonic() + self.REQUEST_READ_TIMEOUT_SECONDS)
+        try:
+            return self._serve_one_request_with_deadline(reader, conn, addr, tls_meta, metrics, security)
+        finally:
+            reader.set_deadline(None)
+
+    def _serve_one_request_with_deadline(self, reader, conn, addr, tls_meta, metrics, security):
         try:
             req = parse_http_request(
                 reader,
@@ -468,6 +529,38 @@ class HTTPServer:
             )
             return False
 
+        raw_path = req["path"]
+        path, _, query = raw_path.partition("?")
+        started = time.time()
+        try:
+            request = Request(
+                method=req["method"],
+                path=path,
+                query_string=query,
+                headers=headers,
+                body=b"",
+                client=addr,
+                tls=tls_meta,
+                version=req["version"],
+            )
+        except (TypeError, ValueError) as e:
+            send_http_response(
+                conn,
+                Response.text(f"Invalid request target: {e}", status=400),
+            )
+            return False
+
+        # Security is decided on the headers alone, before 100 Continue and
+        # before the body is read; dispatch() then skips the evaluation.
+        security_check = getattr(self.app, "security_response", None)
+        if callable(security_check):
+            denied = security_check(request)
+            if denied is not None:
+                self._send_early_response(request, denied, started, metrics, security, conn)
+                if chunked_request or (content_length not in (None, "") and content_length.strip("0")):
+                    self._linger_close(conn, reader)
+                return False
+
         trailers = {}
         if chunked_request:
             if expectation == "100-continue":
@@ -492,6 +585,8 @@ class HTTPServer:
             except ValueError as e:
                 status = 413 if "Too Large" in str(e) else 400
                 send_http_response(conn, Response.text(str(e), status=status))
+                if status == 413:
+                    self._linger_close(conn, reader)
                 return False
         elif content_length is not None:
             if not content_length or any(
@@ -508,6 +603,7 @@ class HTTPServer:
                     conn,
                     Response.text("Payload Too Large", status=413),
                 )
+                self._linger_close(conn, reader)
                 return False
             cl = int(significant or "0")
             if cl < 0:
@@ -518,6 +614,7 @@ class HTTPServer:
                     conn,
                     Response.text("Payload Too Large", status=413),
                 )
+                self._linger_close(conn, reader)
                 return False
             if expectation == "100-continue" and cl > 0:
                 try:
@@ -536,28 +633,15 @@ class HTTPServer:
                 )
                 return False
 
-        raw_path = req["path"]
-        path, _, query = raw_path.partition("?")
-        started = time.time()
-
+        request.body = body
+        request.trailers = dict(trailers or {})
+        # The request is complete: later reads (a WebSocket) are not bounded
+        # by the request deadline but by the per-read timeout again.
+        reader.set_deadline(None)
         try:
-            request = Request(
-                method=req["method"],
-                path=path,
-                query_string=query,
-                headers=headers,
-                body=body,
-                client=addr,
-                tls=tls_meta,
-                version=req["version"],
-                trailers=trailers,
-            )
-        except (TypeError, ValueError) as e:
-            send_http_response(
-                conn,
-                Response.text(f"Invalid request target: {e}", status=400),
-            )
-            return False
+            conn.settimeout(self.REQUEST_READ_TIMEOUT_SECONDS)
+        except OSError:
+            pass
         if metrics:
             metrics.http_request_started(
                 request.method,
@@ -596,7 +680,8 @@ class HTTPServer:
                 security.observe_response(request, response.status)
             return False
 
-        if ws_request and security:
+        if ws_request and security and not getattr(request, "security_evaluated", False):
+            # Apps without security_response() still get the upgrade checked.
             decision = security.evaluate(request)
             if not decision.allowed:
                 response = decision.to_response()

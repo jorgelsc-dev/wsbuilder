@@ -144,7 +144,9 @@ class TestOutboundQueue(unittest.TestCase):
         connection = QuicConnection.__new__(QuicConnection)
         connection._outbound_lock = threading.Lock()
         connection._outbound = []
+        connection._queued_bytes = {}
         connection._send_offsets = {}
+        connection._reset_streams = set()
         return connection
 
     def test_long_payloads_are_split_into_packet_sized_pieces(self):
@@ -163,6 +165,99 @@ class TestOutboundQueue(unittest.TestCase):
         connection = self._bare_connection()
         connection.queue_stream_data(8, b"", fin=True)
         self.assertEqual(connection._outbound, [(8, b"", True)])
+
+
+class TestStreamingBackpressure(unittest.TestCase):
+    def test_the_pump_waits_for_room_and_stops_when_it_never_comes(self):
+        app = App()
+        self.addCleanup(app.close)
+        server = Http3Server("127.0.0.1", 0, app, None)
+        server.STREAM_STALL_TIMEOUT_SECONDS = 0.01
+        queued = []
+        finished = threading.Event()
+        closed = threading.Event()
+        room = iter([True, True, False])
+        waits = []
+
+        def queue_stream_data(stream_id, data, fin=False):
+            queued.append((stream_id, data, fin))
+            if fin:
+                finished.set()
+
+        def wait_for_send_room(stream_id, max_queued, timeout=None):
+            waits.append((stream_id, max_queued, timeout))
+            return next(room)
+
+        def endless():
+            try:
+                while True:
+                    yield b"chunk"
+            finally:
+                closed.set()
+
+        resets = []
+
+        def reset_stream(stream_id, code):
+            resets.append((stream_id, code))
+            finished.set()
+
+        connection = SimpleNamespace(
+            closed=False,
+            queue_stream_data=queue_stream_data,
+            wait_for_send_room=wait_for_send_room,
+            reset_stream=reset_stream,
+        )
+        server._send_response(connection, 0, Response.stream(endless()), send_body=True)
+
+        self.assertTrue(finished.wait(timeout=5))
+        self.assertTrue(closed.wait(timeout=5))
+        data_frames = [entry for entry in queued[1:] if entry[1]]
+        self.assertEqual(len(data_frames), 2)
+        # A stalled body is reset, not ended with a FIN that would look complete.
+        self.assertEqual(resets, [(0, http3.H3_INTERNAL_ERROR)])
+        self.assertFalse(any(fin for _sid, _data, fin in queued))
+        self.assertEqual(waits[0], (0, server.MAX_PENDING_STREAM_BYTES, 0.01))
+
+
+class TestStreamingCompletion(unittest.TestCase):
+    def test_a_finished_body_ends_with_fin_and_a_failing_one_is_reset(self):
+        app = App()
+        self.addCleanup(app.close)
+        server = Http3Server("127.0.0.1", 0, app, None)
+
+        def run(chunks):
+            queued, resets, done = [], [], threading.Event()
+
+            def queue_stream_data(stream_id, data, fin=False):
+                queued.append((stream_id, data, fin))
+                if fin:
+                    done.set()
+
+            def reset_stream(stream_id, code):
+                resets.append((stream_id, code))
+                done.set()
+
+            connection = SimpleNamespace(
+                closed=False,
+                queue_stream_data=queue_stream_data,
+                wait_for_send_room=lambda *_args, **_kwargs: True,
+                reset_stream=reset_stream,
+            )
+            server._send_response(connection, 4, Response.stream(chunks), send_body=True)
+            self.assertTrue(done.wait(timeout=5))
+            return queued, resets
+
+        queued, resets = run(iter([b"a", b"b"]))
+        self.assertEqual(queued[-1], (4, b"", True))
+        self.assertEqual(resets, [])
+
+        def failing():
+            yield b"a"
+            raise RuntimeError("producer broke")
+
+        queued, resets = run(failing())
+        self.assertEqual(resets, [(4, http3.H3_INTERNAL_ERROR)])
+        self.assertFalse(any(fin for _sid, _data, fin in queued))
 
 
 class TestHttp3BodyLimit(unittest.TestCase):

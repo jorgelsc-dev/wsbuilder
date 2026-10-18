@@ -6,6 +6,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 
+from ._pragma import pragma_assignment
 from .logs import get_log
 
 
@@ -254,8 +255,9 @@ class OptimizedDatabase:
 
         with self._lock:
             for key, value in base_pragmas.items():
-                self._log(f"PRAGMA {key}={value}")
-                self._conn.execute(f"PRAGMA {key}={value}")
+                sql = pragma_assignment(key, value)
+                self._log(sql)
+                self._conn.execute(sql)
 
             # WAL checkpoint settings
             if config.journal_mode.upper() == "WAL":
@@ -281,11 +283,8 @@ class OptimizedDatabase:
         return self._get_tx_depth() > 0
 
     def set_pragma(self, name: str, value):
-        """Set a PRAGMA value."""
-        from .orm import validate_identifier
-
-        validate_identifier(name)
-        sql = f"PRAGMA {name}={value}"
+        """Set a PRAGMA value (a number, bool, or keyword)."""
+        sql = pragma_assignment(name, value)
         with self._lock:
             self._log(sql)
             self._conn.execute(sql)

@@ -411,6 +411,203 @@ class TestHTTPServer(unittest.TestCase):
         self.assertIn(b"101", b"".join(conn.sent))
         self.assertEqual(seen, [b"hi"])
 
+class TestRequestDeadlineAndEarlySecurity(unittest.TestCase):
+    def _serve(self, server):
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.assertTrue(server.wait_until_serving(timeout=5.0))
+        self.addCleanup(thread.join, 5.0)
+        self.addCleanup(server.stop)
+
+    def _app(self):
+        app = App()
+        self.reads = []
+
+        @app.api("/upload", methods=("POST",))
+        def upload(request):
+            self.reads.append(len(request.body))
+            return {"length": len(request.body)}
+
+        @app.api("/ping", methods=("GET",))
+        def ping(_request):
+            return {"pong": True}
+
+        return app
+
+    def test_trickled_headers_hit_the_total_deadline(self):
+        server = HTTPServer("127.0.0.1", 0, self._app(), request_read_timeout=0.4)
+        self._serve(server)
+        stop = threading.Event()
+        with socket.create_connection(server.server_address, timeout=5.0) as sock:
+            started = time.monotonic()
+
+            def trickle():
+                for byte in b"GET /ping HTTP/1.1\r\nHost: localhost\r\nX-Slow: " + b"a" * 200:
+                    if stop.wait(0.05):
+                        return
+                    try:
+                        sock.sendall(bytes([byte]))
+                    except OSError:
+                        return
+
+            sender = threading.Thread(target=trickle, daemon=True)
+            sender.start()
+            received = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+            elapsed = time.monotonic() - started
+            stop.set()
+            sender.join(timeout=2)
+
+        self.assertIn(b"408", received)
+        # Each byte arrives well inside the per-read timeout, so only a total
+        # deadline can end the request this early.
+        self.assertLess(elapsed, 2.0)
+
+    def test_trickled_body_hits_the_total_deadline(self):
+        server = HTTPServer("127.0.0.1", 0, self._app(), request_read_timeout=0.4)
+        self._serve(server)
+        stop = threading.Event()
+        with socket.create_connection(server.server_address, timeout=5.0) as sock:
+            sock.sendall(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1000\r\n\r\n"
+            )
+            started = time.monotonic()
+
+            def trickle():
+                while not stop.wait(0.05):
+                    try:
+                        sock.sendall(b"x")
+                    except OSError:
+                        return
+
+            sender = threading.Thread(target=trickle, daemon=True)
+            sender.start()
+            received = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+            elapsed = time.monotonic() - started
+            stop.set()
+            sender.join(timeout=2)
+
+        self.assertIn(b"408", received)
+        self.assertLess(elapsed, 2.0)
+        self.assertEqual(self.reads, [])
+
+    def test_denied_expect_continue_is_answered_without_reading_the_body(self):
+        app = self._app()
+        policy = app.enable_security()
+        policy.add_blacklist("127.0.0.1")
+        server = HTTPServer("127.0.0.1", 0, app)
+        self._serve(server)
+        with socket.create_connection(server.server_address, timeout=5.0) as sock:
+            sock.sendall(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n"
+                b"Expect: 100-continue\r\n\r\n"
+            )
+            received = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+
+        self.assertTrue(received.startswith(b"HTTP/1.1 403 "))
+        self.assertNotIn(b"100 Continue", received)
+        self.assertEqual(self.reads, [])
+
+    def test_denied_request_with_a_large_unread_body_still_gets_its_status(self):
+        app = self._app()
+        app.enable_security().add_blacklist("127.0.0.1")
+        server = HTTPServer("127.0.0.1", 0, app)
+        self._serve(server)
+        body = b"x" * (2 * 1024 * 1024)
+        for _ in range(10):
+            with socket.create_connection(server.server_address, timeout=5.0) as sock:
+                head = (
+                    b"POST /upload HTTP/1.1\r\nHost: localhost\r\n"
+                    b"Content-Length: %d\r\n\r\n" % len(body)
+                )
+
+                def send_all(sock=sock, head=head):
+                    try:
+                        sock.sendall(head + body)
+                    except OSError:
+                        pass
+
+                sender = threading.Thread(target=send_all, daemon=True)
+                sender.start()
+                received = b""
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    received += chunk
+                sender.join(timeout=5)
+            self.assertTrue(received.startswith(b"HTTP/1.1 403 "), received[:40])
+        self.assertEqual(self.reads, [])
+
+    def test_allowed_expect_continue_still_reads_the_body(self):
+        app = self._app()
+        app.enable_security()
+        server = HTTPServer("127.0.0.1", 0, app)
+        self._serve(server)
+        with socket.create_connection(server.server_address, timeout=5.0) as sock:
+            sock.sendall(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n"
+                b"Expect: 100-continue\r\nConnection: close\r\n\r\n"
+            )
+            interim = sock.recv(4096)
+            self.assertTrue(interim.startswith(b"HTTP/1.1 100 Continue"))
+            sock.sendall(b"hello")
+            received = interim
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+        self.assertIn(b'"length":5', received)
+
+    def test_security_is_evaluated_once_per_request(self):
+        app = self._app()
+        policy = app.enable_security()
+        server = HTTPServer("127.0.0.1", 0, app)
+        self._serve(server)
+        for _ in range(3):
+            with socket.create_connection(server.server_address, timeout=5.0) as sock:
+                sock.sendall(b"GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                while sock.recv(4096):
+                    pass
+        self.assertEqual(policy.snapshot()["counters"]["requests_total"], 3)
+
+    def test_reader_deadline_bounds_reads(self):
+        from wsbuilder.http1 import BufferedReader
+
+        conn = DummyConn([b"abc", b"def"])
+        reader = BufferedReader(conn)
+        reader.set_deadline(time.monotonic() + 5.0)
+        self.assertEqual(reader.read_exactly(3), b"abc")
+        self.assertIsNotNone(conn.timeout)
+        self.assertLessEqual(conn.timeout, 5.0)
+        reader.set_deadline(time.monotonic() - 1.0)
+        with self.assertRaises(TimeoutError):
+            reader.read_exactly(3)
+        reader.set_deadline(None)
+        self.assertEqual(reader.read_exactly(3), b"def")
+
+    def test_chunked_response_writes_each_chunk_once(self):
+        from wsbuilder.http import send_http_response
+
+        conn = DummyConn([])
+        send_http_response(conn, Response.stream([b"ab", b"cde"]))
+        self.assertEqual(conn.sent[1:], [b"2\r\nab\r\n", b"3\r\ncde\r\n", b"0\r\n\r\n"])
+
 if __name__ == "__main__":
     unittest.main()
 

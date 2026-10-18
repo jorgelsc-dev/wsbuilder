@@ -155,7 +155,12 @@ ProxyI elimina headers hop-by-hop, incluidos los nombrados por `Connection`, y
 reconstruye `X-Forwarded-*` desde el peer, host y TLS reales. No reutiliza
 valores `Forwarded` aportados por un cliente directo. El limite
 `max_request_body_bytes` tambien se aplica al usar `dispatch()` directamente y
-responde `413` cuando el cuerpo lo supera.
+responde `413` cuando el cuerpo lo supera. Los paths con segmentos `.`/`..`
+(tambien codificados) reciben `400`; los cuerpos de respuesta con buffer se
+limitan con `max_response_bytes` (`502`) y `response_timeout_seconds` (`504`), y
+las respuestas sin longitud o SSE se retransmiten en streaming. La cabecera
+`X-ProxyI-Upstream` solo se envia con `expose_upstream_header=True`. Detalles en
+[Proxy](proxy.md).
 
 Para despachar trafico real, una ruta HTTP de tu aplicacion debe invocar
 `app.proxyi.dispatch(request)`.

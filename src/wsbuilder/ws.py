@@ -217,6 +217,44 @@ def handshake_websocket(conn, addr, headers):
     return handshake_websocket_with_options(conn, addr, headers)
 
 
+class _FrameReader:
+    """Reads one frame's bytes so a timeout can hand them back.
+
+    A read timeout may strike in the middle of a frame. The bytes read so far
+    are kept and replayed on the next attempt, so the framing stays in sync
+    instead of the next read starting inside a payload.
+    """
+
+    def __init__(self, owner):
+        self._owner = owner
+        self._pending = bytearray()
+        self._consumed = bytearray()
+        self.received_new = False
+
+    @property
+    def mid_frame(self):
+        return bool(self._pending)
+
+    def begin(self):
+        self._consumed = bytearray()
+        self.received_new = False
+
+    def rollback(self):
+        self._pending[:0] = self._consumed
+        self._consumed = bytearray()
+
+    def recv(self, size):
+        if self._pending:
+            data = bytes(self._pending[:size])
+            del self._pending[:size]
+        else:
+            data = self._owner.sock.recv(size)
+            if data:
+                self.received_new = True
+        self._consumed.extend(data)
+        return data
+
+
 class WebSocket:
     def __init__(
         self,
@@ -275,6 +313,7 @@ class WebSocket:
         self._last_ping_at = 0.0
         self._fragment_opcode = None
         self._fragment_payload = bytearray()
+        self._frame_reader = _FrameReader(self)
 
         if len(self.ping_payload) > 125:
             raise ValueError("WebSocket ping payload must be at most 125 bytes")
@@ -354,9 +393,16 @@ class WebSocket:
 
     def recv_frame(self):
         while True:
+            reader = self._frame_reader
+            reader.begin()
             try:
-                frame = read_ws_frame_raw(self.sock, max_payload_bytes=self.max_frame_bytes)
+                frame = read_ws_frame_raw(reader, max_payload_bytes=self.max_frame_bytes)
             except TimeoutError as exc:
+                # Keep the partial frame for the next attempt.
+                reader.rollback()
+                if reader.received_new:
+                    # Bytes are still arriving: the peer is not idle.
+                    self._mark_rx()
                 if self._closed:
                     raise WebSocketConnectionClosedError("WebSocket already closed") from exc
                 managed_timeout = (

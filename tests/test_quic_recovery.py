@@ -1,5 +1,15 @@
+import threading
 import unittest
 
+from wsbuilder.quic import frames as qf
+from wsbuilder.quic.connection import (
+    LEVEL_APPLICATION,
+    STREAM_CHUNK_SIZE,
+    TP_INITIAL_MAX_DATA,
+    TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL,
+    TP_INITIAL_MAX_STREAM_DATA_UNI,
+    QuicConnection,
+)
 from wsbuilder.quic.recovery import (
     GRANULARITY,
     INITIAL_WINDOW,
@@ -285,6 +295,213 @@ class TestCongestionControl(unittest.TestCase):
         control.on_packets_acked([SentPacket(1, 1200.0, size=1200)], 1300.0)
         self.assertLess(control.congestion_window - before, 1200)
 
+
+def _sending_connection(parameters=None):
+    """A connection with only the state the send path touches.
+
+    ``_flush`` is replaced by a recorder, so the test sees the frames that
+    would have gone out and nothing needs keys or a socket.
+    """
+    connection = QuicConnection.__new__(QuicConnection)
+    connection.closed = False
+    connection.keys = {LEVEL_APPLICATION: {"send": object()}}
+    connection._outbound_lock = threading.Lock()
+    connection._outbound_room = threading.Condition(connection._outbound_lock)
+    connection._outbound = []
+    connection._queued_bytes = {}
+    connection._send_offsets = {}
+    connection._peer_stream_max = {}
+    connection._sent_data_total = 0
+    connection._blocked_reported = {}
+    connection._reset_streams = set()
+    connection.recovery = LossRecovery(levels=(LEVEL_APPLICATION,), time_source=Clock())
+    connection.peer_transport_parameters = {
+        key: qf.encode_varint(value) for key, value in (parameters or {}).items()
+    }
+    connection._peer_max_data = connection._peer_parameter(TP_INITIAL_MAX_DATA)
+    connection.sent_frames = []
+
+    def record(outgoing):
+        datagrams = []
+        for _level, frame_list in outgoing:
+            connection.sent_frames.extend(frame_list)
+            size = sum(len(frame.serialize()) for frame in frame_list) + 40
+            connection.recovery.congestion.on_packet_sent(size)
+            datagrams.append(b"d" * size)
+        return datagrams
+
+    connection._flush = record
+    return connection
+
+
+def _stream_bytes(connection, stream_id):
+    return sum(
+        len(frame.data)
+        for frame in connection.sent_frames
+        if isinstance(frame, qf.StreamFrame) and frame.stream_id == stream_id
+    )
+
+
+class TestSendFlowControl(unittest.TestCase):
+    def test_stream_limit_from_transport_parameters_is_respected(self):
+        connection = _sending_connection(
+            {TP_INITIAL_MAX_DATA: 1 << 20, TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: 1500}
+        )
+        connection.queue_stream_data(0, b"x" * 4000, fin=True)
+        connection.drain_outbound()
+
+        self.assertEqual(_stream_bytes(connection, 0), 1500)
+        (blocked,) = [f for f in connection.sent_frames if isinstance(f, qf.StreamDataBlockedFrame)]
+        self.assertEqual((blocked.stream_id, blocked.maximum), (0, 1500))
+        self.assertEqual(connection.queued_stream_bytes(0), 2500)
+        self.assertFalse(any(getattr(f, "fin", False) for f in connection.sent_frames))
+
+        # MAX_STREAM_DATA from the peer releases the rest, FIN included.
+        connection._handle_frames(LEVEL_APPLICATION, [qf.MaxStreamDataFrame(0, 10_000)], [])
+        connection.drain_outbound()
+        self.assertEqual(_stream_bytes(connection, 0), 4000)
+        self.assertTrue(connection.sent_frames[-1].fin)
+        self.assertEqual(connection.queued_stream_bytes(0), 0)
+
+    def test_connection_limit_and_max_data(self):
+        connection = _sending_connection(
+            {
+                TP_INITIAL_MAX_DATA: 1200,
+                TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: 1 << 20,
+                TP_INITIAL_MAX_STREAM_DATA_UNI: 1 << 20,
+            }
+        )
+        connection.queue_stream_data(0, b"a" * 1000)
+        connection.queue_stream_data(4, b"b" * 1000)
+        connection.drain_outbound()
+
+        self.assertEqual(_stream_bytes(connection, 0) + _stream_bytes(connection, 4), 1200)
+        blocked = [f for f in connection.sent_frames if isinstance(f, qf.DataBlockedFrame)]
+        self.assertEqual([f.maximum for f in blocked], [1200])
+        # Reported once per limit, not on every drain.
+        connection.drain_outbound()
+        blocked = [f for f in connection.sent_frames if isinstance(f, qf.DataBlockedFrame)]
+        self.assertEqual(len(blocked), 1)
+
+        connection._handle_frames(LEVEL_APPLICATION, [qf.MaxDataFrame(5000)], [])
+        connection.drain_outbound()
+        self.assertEqual(_stream_bytes(connection, 0), 1000)
+        self.assertEqual(_stream_bytes(connection, 4), 1000)
+
+    def test_a_smaller_max_data_never_lowers_the_limit(self):
+        connection = _sending_connection({TP_INITIAL_MAX_DATA: 3000})
+        connection._handle_frames(LEVEL_APPLICATION, [qf.MaxDataFrame(100)], [])
+        self.assertEqual(connection._peer_max_data, 3000)
+
+    def test_a_blocked_stream_does_not_hold_up_another(self):
+        connection = _sending_connection(
+            {
+                TP_INITIAL_MAX_DATA: 1 << 20,
+                TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: 10,
+                TP_INITIAL_MAX_STREAM_DATA_UNI: 1 << 20,
+            }
+        )
+        connection.queue_stream_data(0, b"a" * 100)
+        connection.queue_stream_data(3, b"c" * 100)
+        connection.drain_outbound()
+        self.assertEqual(_stream_bytes(connection, 0), 10)
+        self.assertEqual(_stream_bytes(connection, 3), 100)
+
+    def test_missing_parameters_mean_zero_but_no_parameters_mean_unlimited(self):
+        limited = _sending_connection({TP_INITIAL_MAX_DATA: 1 << 20})
+        limited.queue_stream_data(0, b"x" * 50)
+        limited.drain_outbound()
+        self.assertEqual(_stream_bytes(limited, 0), 0)
+
+        legacy = _sending_connection()
+        legacy.queue_stream_data(0, b"x" * 50)
+        legacy.drain_outbound()
+        self.assertEqual(_stream_bytes(legacy, 0), 50)
+
+
+class TestSendCongestionControl(unittest.TestCase):
+    def test_the_congestion_window_holds_back_new_data(self):
+        connection = _sending_connection()
+        connection.queue_stream_data(0, b"x" * (INITIAL_WINDOW * 3))
+        connection.drain_outbound()
+        congestion = connection.recovery.congestion
+
+        sent = _stream_bytes(connection, 0)
+        self.assertGreater(sent, 0)
+        self.assertLess(sent, INITIAL_WINDOW)
+        self.assertLessEqual(congestion.bytes_in_flight, congestion.congestion_window)
+        self.assertEqual(connection.queued_stream_bytes(0), INITIAL_WINDOW * 3 - sent)
+
+        # Nothing more leaves until acknowledgements free the window.
+        connection.drain_outbound()
+        self.assertEqual(_stream_bytes(connection, 0), sent)
+        congestion.bytes_in_flight = 0
+        connection.drain_outbound()
+        self.assertGreater(_stream_bytes(connection, 0), sent)
+
+    def test_stream_order_is_kept_across_blocked_drains(self):
+        connection = _sending_connection()
+        payload = bytes(range(256)) * 200
+        connection.queue_stream_data(0, payload, fin=True)
+        for _ in range(20):
+            connection.drain_outbound()
+            connection.recovery.congestion.bytes_in_flight = 0
+        frames = [f for f in connection.sent_frames if isinstance(f, qf.StreamFrame)]
+        offsets = [f.offset for f in frames]
+        self.assertEqual(offsets, sorted(offsets))
+        self.assertEqual(b"".join(f.data for f in frames), payload)
+        self.assertTrue(frames[-1].fin)
+        self.assertEqual(len(frames), -(-len(payload) // STREAM_CHUNK_SIZE))
+
+
+class TestResetStream(unittest.TestCase):
+    def test_reset_drops_queued_data_and_sends_reset_stream(self):
+        connection = _sending_connection(
+            {TP_INITIAL_MAX_DATA: 1 << 20, TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: 1500}
+        )
+        connection.queue_stream_data(0, b"x" * 4000)
+        connection.queue_stream_data(4, b"y" * 10)
+        connection.drain_outbound()
+        self.assertEqual(connection.queued_stream_bytes(0), 2500)
+
+        connection.reset_stream(0, 0x0102)
+        connection.queue_stream_data(0, b"late", fin=True)
+        connection.drain_outbound()
+
+        (reset,) = [f for f in connection.sent_frames if isinstance(f, qf.ResetStreamFrame)]
+        self.assertEqual((reset.stream_id, reset.error_code, reset.final_size), (0, 0x0102, 1500))
+        self.assertEqual(_stream_bytes(connection, 0), 1500)
+        self.assertEqual(connection.queued_stream_bytes(0), 0)
+        # A well-formed frame: a parser skips it cleanly.
+        self.assertEqual(qf.parse_frames(reset.serialize()), [])
+
+
+class TestSendBackpressure(unittest.TestCase):
+    def test_wait_for_send_room_returns_once_bytes_leave(self):
+        connection = _sending_connection({TP_INITIAL_MAX_DATA: 0})
+        connection.queue_stream_data(0, b"x" * 5000)
+        self.assertFalse(connection.wait_for_send_room(0, 1000, timeout=0.05, poll=0.01))
+
+        released = threading.Event()
+
+        def waiter():
+            if connection.wait_for_send_room(0, 1000, timeout=5, poll=0.01):
+                released.set()
+
+        thread = threading.Thread(target=waiter, daemon=True)
+        thread.start()
+        # The peer grants credit: the queued bytes can now leave.
+        connection._handle_frames(LEVEL_APPLICATION, [qf.MaxStreamDataFrame(0, 1 << 20)], [])
+        connection._handle_frames(LEVEL_APPLICATION, [qf.MaxDataFrame(1 << 20)], [])
+        connection.drain_outbound()
+        thread.join(timeout=5)
+        self.assertTrue(released.is_set())
+
+    def test_wait_for_send_room_gives_up_when_the_connection_closes(self):
+        connection = _sending_connection({TP_INITIAL_MAX_DATA: 0})
+        connection.queue_stream_data(0, b"x" * 5000)
+        connection.closed = True
+        self.assertFalse(connection.wait_for_send_room(0, 1000, timeout=5, poll=0.01))
 
 if __name__ == "__main__":
     unittest.main()

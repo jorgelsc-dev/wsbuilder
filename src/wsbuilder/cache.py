@@ -11,6 +11,7 @@ from collections.abc import Mapping
 
 from ._coerce import safe_float as _safe_float
 from ._coerce import safe_int as _safe_int
+from ._pragma import pragma_assignment
 
 DEFAULT_NAMESPACE = "default"
 DEFAULT_CLEANUP_INTERVAL_SECONDS = 30.0
@@ -141,7 +142,7 @@ class SQLiteMemoryCache:
             cfg.update(pragmas)
         cur = self._conn.cursor()
         for key, value in cfg.items():
-            cur.execute(f"PRAGMA {key}={value}")
+            cur.execute(pragma_assignment(key, value))
         cur.close()
 
     def _create_schema(self):

@@ -1,4 +1,6 @@
 import struct
+import threading
+import time
 import unittest
 
 from wsbuilder import App, Response
@@ -8,6 +10,7 @@ from wsbuilder.http2 import (
     ERROR_ENHANCE_YOUR_CALM,
     ERROR_FLOW_CONTROL_ERROR,
     ERROR_FRAME_SIZE_ERROR,
+    ERROR_INTERNAL_ERROR,
     ERROR_NO_ERROR,
     ERROR_PROTOCOL_ERROR,
     FLAG_ACK,
@@ -205,6 +208,27 @@ class TestRequestHeaderValidation(unittest.TestCase):
             )
 
 
+class TestRequestFieldHardening(unittest.TestCase):
+    BASE = [(":method", "GET"), (":scheme", "https"), (":path", "/")]
+
+    def test_invalid_values_and_names_are_refused(self):
+        bad_fields = [
+            ("x-a", "bad\r\nInjected: 1"),
+            ("x-a", "nul\x00"),
+            ("x-a", " leading"),
+            ("x-a", "trailing "),
+            ("bad name", "x"),
+            ("x-a:", "x"),
+        ]
+        for field in bad_fields:
+            with self.subTest(field=field):
+                with self.assertRaises(StreamError) as caught:
+                    validate_request_headers(self.BASE + [field], 1)
+                self.assertEqual(caught.exception.code, ERROR_PROTOCOL_ERROR)
+        with self.assertRaises(StreamError):
+            validate_request_headers([(":method", "GET"), (":scheme", "h"), (":path", "/\r\n")], 1)
+
+
 class ConnectionHarness(unittest.TestCase):
     def setUp(self):
         self.app = App()
@@ -263,6 +287,56 @@ class ConnectionHarness(unittest.TestCase):
 
 
 class TestConnectionFlow(ConnectionHarness):
+    def test_repeated_request_fields_are_combined(self):
+        @self.app.api("/fields", methods=("GET",))
+        def fields(request):
+            return {"cookie": request.headers.get("cookie"), "accept": request.headers.get("accept")}
+
+        request = self.request("/fields") + [
+            ("cookie", "a=1"),
+            ("cookie", "b=2"),
+            ("accept", "text/html"),
+            ("accept", "*/*"),
+        ]
+        answer = self.responses(self.run_connection(self.headers_frame(1, request)))[1]
+        self.assertIn(b'"cookie":"a=1; b=2"', answer["body"])
+        self.assertIn(b'"accept":"text/html, */*"', answer["body"])
+
+    def test_conflicting_host_or_content_length_resets_the_stream(self):
+        for stream_id, extra in (
+            (1, [("host", "a.example"), ("host", "b.example")]),
+            (3, [("content-length", "0"), ("content-length", "7")]),
+        ):
+            with self.subTest(extra=extra):
+                # Each connection has its own HPACK state.
+                self.encoder, self.decoder = Encoder(), Decoder()
+                frames = self.run_connection(self.headers_frame(stream_id, self.request("/hello") + extra))
+                resets = [f for f in frames if f.type == FRAME_RST_STREAM and f.stream_id == stream_id]
+                self.assertEqual(
+                    [struct.unpack(">I", f.payload)[0] for f in resets], [ERROR_PROTOCOL_ERROR]
+                )
+        self.encoder, self.decoder = Encoder(), Decoder()
+        same = self.request("/hello") + [("content-length", "0"), ("content-length", "0")]
+        answer = self.responses(self.run_connection(self.headers_frame(5, same)))[5]
+        self.assertEqual(answer["headers"][":status"], "200")
+
+    def test_a_header_value_with_crlf_resets_the_stream(self):
+        request = self.request("/hello") + [("x-bad", "v\r\nInjected: 1")]
+        frames = self.run_connection(self.headers_frame(1, request))
+        resets = [f for f in frames if f.type == FRAME_RST_STREAM and f.stream_id == 1]
+        self.assertEqual([struct.unpack(">I", f.payload)[0] for f in resets], [ERROR_PROTOCOL_ERROR])
+        self.assertNotIn(1, {f.stream_id for f in frames if f.type == FRAME_HEADERS})
+
+    def test_list_header_values_are_sent_as_repeated_fields(self):
+        @self.app.route("/cookies", methods=("GET",))
+        def cookies(_request):
+            return Response.text("ok", headers={"Set-Cookie": ["a=1", "b=2"]})
+
+        frames = self.run_connection(self.headers_frame(1, self.request("/cookies")))
+        headers = [f for f in frames if f.type == FRAME_HEADERS and f.stream_id == 1]
+        fields = self.decoder.decode(headers[0].payload)
+        self.assertEqual([v for n, v in fields if n == "set-cookie"], ["a=1", "b=2"])
+
     def test_settings_are_exchanged_and_acknowledged(self):
         frames = self.run_connection()
         kinds = [(f.type, f.flags) for f in frames]
@@ -431,6 +505,10 @@ class TestConnectionFlow(ConnectionHarness):
         payload = (
             CONNECTION_PREFACE
             + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            # Connection-level room beyond one stream window: handlers run
+            # concurrently, so stream 1 may fill its window before stream 3
+            # answers, and only its own window must hold it back.
+            + Frame(FRAME_WINDOW_UPDATE, 0, 0, struct.pack(">I", 1 << 20)).serialize()
             + self.headers_frame(1, self.request("/endless"))
             + self.headers_frame(3, self.request("/hello?n=3"))
         )
@@ -682,6 +760,150 @@ class TestConnectionFlow(ConnectionHarness):
         self.assertEqual(self.responses(frames)[1]["headers"][":status"], "200")
 
 
+class TestConcurrentHandlers(ConnectionHarness):
+    def _opening(self, *chunks):
+        payload = bytearray(CONNECTION_PREFACE + Frame(FRAME_SETTINGS, 0, 0, b"").serialize())
+        for chunk in chunks:
+            payload += chunk
+        return bytes(payload)
+
+    def test_slow_handlers_on_two_streams_run_in_parallel(self):
+        @self.app.route("/slow", methods=("GET",))
+        def slow(_request):
+            time.sleep(0.5)
+            return Response.text("done")
+
+        pipe = Pipe(
+            self._opening(
+                self.headers_frame(1, self.request("/slow")),
+                self.headers_frame(3, self.request("/slow")),
+            )
+        )
+        started = time.monotonic()
+        Http2Connection(pipe, self.app, client_address=("127.0.0.1", 1)).serve()
+        elapsed = time.monotonic() - started
+        answers = self.responses(frames_in(pipe.sent))
+        self.assertEqual(answers[1]["body"], b"done")
+        self.assertEqual(answers[3]["body"], b"done")
+        self.assertLess(elapsed, 0.9)
+
+    def test_ping_is_answered_while_a_handler_is_busy(self):
+        ping_acked = threading.Event()
+        seen = []
+
+        @self.app.route("/wait", methods=("GET",))
+        def wait_for_ping(_request):
+            seen.append(ping_acked.wait(timeout=5))
+            return Response.text("after ping")
+
+        class Watch(Pipe):
+            def sendall(self, payload):
+                super().sendall(payload)
+                if any(f.type == FRAME_PING and f.flags & FLAG_ACK for f in frames_in(self.sent)):
+                    ping_acked.set()
+
+        pipe = Watch(
+            self._opening(
+                self.headers_frame(1, self.request("/wait")),
+                Frame(FRAME_PING, 0, 0, b"12345678").serialize(),
+            )
+        )
+        Http2Connection(pipe, self.app, client_address=("127.0.0.1", 1)).serve()
+        frames = frames_in(pipe.sent)
+        kinds = [(f.type, f.stream_id) for f in frames]
+        self.assertEqual(seen, [True])
+        self.assertLess(kinds.index((FRAME_PING, 0)), kinds.index((FRAME_HEADERS, 1)))
+        self.assertEqual(self.responses(frames)[1]["body"], b"after ping")
+
+    def test_a_stream_reset_while_its_handler_runs_gets_no_response(self):
+        reset_handled = threading.Event()
+
+        @self.app.route("/wait", methods=("GET",))
+        def wait_for_reset(_request):
+            reset_handled.wait(timeout=5)
+            return Response.text("too late")
+
+        class SignalAtEOF(Pipe):
+            def recv(self, size):
+                data = super().recv(size)
+                if not data:
+                    # Every earlier frame, the RST included, has been handled.
+                    reset_handled.set()
+                return data
+
+        pipe = SignalAtEOF(
+            self._opening(
+                self.headers_frame(1, self.request("/wait")),
+                Frame(FRAME_RST_STREAM, 0, 1, struct.pack(">I", 8)).serialize(),
+            )
+        )
+        Http2Connection(pipe, self.app, client_address=("127.0.0.1", 1)).serve()
+        frames = frames_in(pipe.sent)
+        self.assertFalse(any(f.stream_id == 1 and f.type in (FRAME_HEADERS, FRAME_DATA) for f in frames))
+
+    def test_handler_failure_resets_only_its_stream(self):
+        original = self.app.dispatch
+
+        def dispatch(request):
+            if request.path == "/boom":
+                raise RuntimeError("dispatch exploded")
+            return original(request)
+
+        self.app.dispatch = dispatch
+        frames = self.run_connection(
+            self.headers_frame(1, self.request("/boom")),
+            self.headers_frame(3, self.request("/hello?n=3")),
+        )
+        resets = [
+            struct.unpack(">I", f.payload)[0]
+            for f in frames
+            if f.type == FRAME_RST_STREAM and f.stream_id == 1
+        ]
+        self.assertEqual(resets, [ERROR_INTERNAL_ERROR])
+        self.assertIn(b'"n":"3"', self.responses(frames)[3]["body"])
+
+    def test_a_response_that_cannot_be_sent_resets_its_stream(self):
+        class Unsendable(Http2Connection):
+            def send_response(self, stream, response, *, send_body=True):
+                if stream.id == 1:
+                    raise UnicodeEncodeError("ascii", "\u00e9", 0, 1, "unencodable")
+                return super().send_response(stream, response, send_body=send_body)
+
+        pipe = Pipe(
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + self.headers_frame(1, self.request("/hello?n=1"))
+            + self.headers_frame(3, self.request("/hello?n=3"))
+        )
+        connection = Unsendable(pipe, self.app, client_address=("127.0.0.1", 1))
+        connection.serve()
+        frames = frames_in(pipe.sent)
+        resets = [
+            struct.unpack(">I", f.payload)[0]
+            for f in frames
+            if f.type == FRAME_RST_STREAM and f.stream_id == 1
+        ]
+        self.assertEqual(resets, [ERROR_INTERNAL_ERROR])
+        self.assertNotIn(1, connection.streams)
+        self.assertIn(b'"n":"3"', self.responses(frames)[3]["body"])
+
+    def test_handler_threads_are_capped_per_connection(self):
+        connection = Http2Connection(Pipe(), self.app, max_streams=500)
+        self.assertEqual(connection._max_handlers, Http2Connection.MAX_HANDLER_THREADS)
+
+    def test_content_length_must_match_the_data(self):
+        request = self.request("/echo", "POST") + [("content-length", "10")]
+        frames = self.run_connection(
+            self.headers_frame(1, request, end_stream=False),
+            Frame(FRAME_DATA, FLAG_END_STREAM, 1, b"short").serialize(),
+        )
+        resets = [
+            struct.unpack(">I", f.payload)[0]
+            for f in frames
+            if f.type == FRAME_RST_STREAM and f.stream_id == 1
+        ]
+        self.assertEqual(resets, [ERROR_PROTOCOL_ERROR])
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -827,13 +1049,36 @@ class TestOutputFlowControl(ConnectionHarness):
             return Response.text("x" * 300)
 
     def test_a_body_beyond_the_window_is_sent_in_instalments(self):
-        frames = self.run_connection(
-            Frame(
+        opening = (
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + Frame(
                 FRAME_SETTINGS, 0, 0, encode_settings({SETTINGS_INITIAL_WINDOW_SIZE: 100})
-            ).serialize(),
-            self.headers_frame(1, self.request("/big")),
-            Frame(FRAME_WINDOW_UPDATE, 0, 1, struct.pack(">I", 250)).serialize(),
+            ).serialize()
+            + self.headers_frame(1, self.request("/big"))
         )
+        credit = Frame(FRAME_WINDOW_UPDATE, 0, 1, struct.pack(">I", 250)).serialize()
+        first_data_sent = threading.Event()
+
+        class CreditAfterFirstData(Pipe):
+            # The handler runs off the frame loop, so the credit is held back
+            # until the first instalment is on the wire.
+            def recv(self, size):
+                if not self.data and credit is not None and not self.credited:
+                    first_data_sent.wait(timeout=5)
+                    self.credited = True
+                    self.data.extend(credit)
+                return super().recv(size)
+
+            def sendall(self, payload):
+                super().sendall(payload)
+                if any(f.type == FRAME_DATA for f in frames_in(self.sent)):
+                    first_data_sent.set()
+
+        pipe = CreditAfterFirstData(opening)
+        pipe.credited = False
+        Http2Connection(pipe, self.app, client_address=("127.0.0.1", 1234)).serve()
+        frames = frames_in(pipe.sent)
         data = [f for f in frames if f.type == FRAME_DATA]
         self.assertEqual(b"".join(f.payload for f in data), b"x" * 300)
         # The first 100 octets fit the window; the rest waited for credit.

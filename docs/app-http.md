@@ -249,7 +249,7 @@ Limites por defecto:
 | `MAX_CONNECTION_WORKERS` | `64` conexiones activas |
 | `MAX_REQUEST_HEADER_BYTES` | `64 KiB` |
 | `MAX_REQUEST_BODY_BYTES` | `2 MiB` |
-| `REQUEST_READ_TIMEOUT_SECONDS` | `10.0` segundos |
+| `REQUEST_READ_TIMEOUT_SECONDS` | `10.0` segundos en total para leer cabeceras y cuerpo |
 | `KEEPALIVE_TIMEOUT_SECONDS` | `5.0` segundos entre peticiones |
 | `MAX_KEEPALIVE_REQUESTS` | `100` peticiones por conexion |
 | `MAX_CONCURRENT_STREAMS` | `100` streams HTTP/2 |
@@ -257,6 +257,17 @@ Limites por defecto:
 | `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` | `10.0` segundos de espera al apagar |
 | `HANDLE_SIGTERM` | `True`: `SIGTERM` detiene el servidor de forma ordenada |
 | `MAX_WS_FRAME_BYTES` / `MAX_WS_MESSAGE_BYTES` | `None`: usa los `2 MiB` de `wsbuilder.ws` |
+
+`REQUEST_READ_TIMEOUT_SECONDS` es un plazo total: cuenta desde que llegan los
+primeros bytes de la peticion hasta que se ha leido el cuerpo completo, de modo
+que un cliente que envia los bytes muy despacio recibe `408` al agotarlo
+aunque cada lectura individual sea rapida. `KEEPALIVE_TIMEOUT_SECONDS` solo
+limita la espera entre peticiones de una conexion reutilizada.
+
+Con `app.enable_security()`, el servidor HTTP/1 evalua la lista negra, la ACL y
+el rate limit con las cabeceras, antes de responder `100 Continue` y antes de
+leer el cuerpo. Una peticion denegada recibe la respuesta de seguridad y la
+conexion se cierra; `App.dispatch()` no vuelve a evaluar la misma peticion.
 
 Se cambian con argumentos al crear el servidor, en `app.run()` o desde la CLI.
 Un valor invalido (cero workers, timeout `0`, tamano negativo) lanza

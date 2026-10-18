@@ -13,7 +13,14 @@ it would desynchronise the decoder for every later stream.
 
 import struct
 import threading
+from concurrent.futures import ThreadPoolExecutor, wait
 
+from .headers import (
+    combine_field_values,
+    field_name_problem,
+    field_value_problem,
+    iter_header_fields,
+)
 from .hpack import Decoder, Encoder, HeaderListTooLarge, HPACKError
 from .http import Response
 from .logs import get_log
@@ -280,6 +287,9 @@ def validate_request_headers(headers, stream_id):
     pseudo = {}
     regular = []
     for name, value in headers:
+        value_problem = field_value_problem(value)
+        if value_problem:
+            raise StreamError(f"{value_problem} in {name!r}", stream_id)
         if name.startswith(":"):
             if seen_regular:
                 raise StreamError("pseudo-header after a regular field", stream_id)
@@ -294,6 +304,9 @@ def validate_request_headers(headers, stream_id):
         if lowered != name:
             # Field names travel lowercase; anything else is malformed.
             raise StreamError(f"header name {name!r} is not lowercase", stream_id)
+        name_problem = field_name_problem(name)
+        if name_problem:
+            raise StreamError(name_problem, stream_id)
         if lowered in FORBIDDEN_HEADERS:
             raise StreamError(f"connection-specific header {name!r}", stream_id)
         if lowered == "te" and value.lower() != "trailers":
@@ -315,15 +328,29 @@ def validate_request_headers(headers, stream_id):
     return pseudo, regular
 
 
+def _validated_trailers(fields, stream_id):
+    """Trailer fields checked like header fields; pseudo-headers are not allowed."""
+    for name, value in fields:
+        problem = field_name_problem(name) or field_value_problem(value)
+        if problem:
+            raise StreamError(f"trailer: {problem}", stream_id)
+    try:
+        return combine_field_values(fields)
+    except ValueError as exc:
+        raise StreamError(f"trailer: {exc}", stream_id) from exc
+
+
 class Http2Connection:
     """Drives one HTTP/2 connection: frames in, responses out.
 
     Takes anything with ``recv`` and ``sendall``, so the frame logic is
     exercised in tests without a socket.
 
-    Streamed response bodies are produced on their own thread so the frame
-    loop keeps reading (WINDOW_UPDATE, other streams) meanwhile; a lock
-    serialises frame handling and sending between the two.
+    Handlers run on a per-connection pool (bounded by the advertised
+    ``max_concurrent_streams``) and streamed bodies on their own thread, so
+    the frame loop keeps reading (PING, WINDOW_UPDATE, other streams) while a
+    handler works. A lock serialises frame handling, HPACK encoding and
+    sending; no handler runs while holding it.
     """
 
     #: Ids of streams closed by RST_STREAM remembered so that a HEADERS frame
@@ -333,6 +360,9 @@ class Http2Connection:
     MAX_PENDING_STREAM_BYTES = 64 * 1024
     #: How long a closing connection waits for producers to finish their bodies.
     PRODUCER_GRACE_SECONDS = 5.0
+    #: Handler threads per connection; streams beyond it wait in the pool's
+    #: queue, so many connections cannot multiply into thousands of threads.
+    MAX_HANDLER_THREADS = 16
 
     def __init__(
         self,
@@ -383,6 +413,9 @@ class Http2Connection:
         self._reading = True
         #: Set when producers must stop at once (connection error or timeout).
         self._abandoned = False
+        self._max_handlers = max(1, min(int(max_streams), int(self.MAX_HANDLER_THREADS)))
+        self._handler_pool = None
+        self._handlers = set()
 
     # -- transport -----------------------------------------------------
 
@@ -447,9 +480,10 @@ class Http2Connection:
                 try:
                     frame = self.next_frame()
                 except TimeoutError:
-                    # A client reading a long streamed body may send nothing;
-                    # _read keeps any partial frame, so waiting again is safe.
-                    if self._streaming():
+                    # A client reading a long streamed body, or waiting on a
+                    # slow handler, may send nothing; _read keeps any partial
+                    # frame, so waiting again is safe.
+                    if self._streaming() or self._handling():
                         continue
                     raise
                 with self._lock:
@@ -473,7 +507,23 @@ class Http2Connection:
             with self._lock:
                 self.send_goaway(ERROR_NO_ERROR)
         finally:
+            self._finish_handlers()
             self._finish_producers()
+
+    def _handling(self):
+        with self._lock:
+            self._handlers = {future for future in self._handlers if not future.done()}
+            return bool(self._handlers)
+
+    def _finish_handlers(self):
+        """Wait for running handlers so their responses can still go out."""
+        with self._lock:
+            pending = set(self._handlers)
+            pool, self._handler_pool = self._handler_pool, None
+        if pending:
+            wait(pending, timeout=self.PRODUCER_GRACE_SECONDS)
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _streaming(self):
         self._producers = [thread for thread in self._producers if thread.is_alive()]
@@ -774,9 +824,17 @@ class Http2Connection:
         pseudo, regular = validate_request_headers(stream.headers, stream.id)
         target = pseudo.get(":path", "*")
         path, _, query = target.partition("?")
-        headers = {name: value for name, value in regular}
+        try:
+            headers = combine_field_values(regular)
+        except ValueError as exc:
+            raise StreamError(str(exc), stream.id) from exc
         if ":authority" in pseudo:
             headers.setdefault("host", pseudo[":authority"])
+
+        declared = headers.get("content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) != len(stream.body)):
+            # RFC 9113 section 8.1.1: the DATA must match the declared length.
+            raise StreamError("content-length does not match the DATA received", stream.id)
 
         request = Request(
             method=pseudo.get(":method", "GET"),
@@ -787,22 +845,69 @@ class Http2Connection:
             client=self.client_address,
             tls=self.tls,
             version="HTTP/2",
-            trailers={name: value for name, value in stream.trailers},
+            trailers=_validated_trailers(stream.trailers, stream.id),
         )
+        if self._handler_pool is None:
+            self._handler_pool = ThreadPoolExecutor(
+                max_workers=self._max_handlers, thread_name_prefix="http2-handler"
+            )
+        future = self._handler_pool.submit(self._run_handler, stream, request)
+        self._handlers.add(future)
+
+    def _run_handler(self, stream, request):
+        """Run the app off the frame loop, then send the answer under the lock."""
         try:
             response = self.app.dispatch(request)
         except Exception as exc:  # noqa: BLE001 - reported on the stream
             get_log(self.app).exception("http2", f"handler error on stream {stream.id}: {exc}", exc)
-            raise StreamError("handler failed", stream.id, ERROR_INTERNAL_ERROR) from exc
-        self.send_response(stream, response, send_body=request.method != "HEAD")
+            with self._lock:
+                if not stream.closed and not self._abandoned:
+                    stream.state = CLOSED
+                    stream.reset_code = ERROR_INTERNAL_ERROR
+                    self.send_rst_stream(stream.id, ERROR_INTERNAL_ERROR)
+                self._release_closed_streams()
+            return
+        try:
+            with self._lock:
+                if self._stream_abandoned(stream):
+                    # Reset by the peer, or the connection is gone.
+                    self._release_closed_streams()
+                    self._close_unsent(response)
+                    return
+                self.send_response(stream, response, send_body=request.method != "HEAD")
+                self._release_closed_streams()
+        except OSError:
+            self._close_unsent(response)
+        except Exception as exc:  # noqa: BLE001 - reported on the stream
+            # An unencodable response must not leave the stream open for ever.
+            get_log(self.app).exception(
+                "http2", f"response failed on stream {stream.id}: {exc}", exc
+            )
+            with self._lock:
+                if not stream.closed and not self._abandoned:
+                    stream.state = CLOSED
+                    stream.reset_code = ERROR_INTERNAL_ERROR
+                    self.send_rst_stream(stream.id, ERROR_INTERNAL_ERROR)
+                self._release_closed_streams()
+            self._close_unsent(response)
+
+    @staticmethod
+    def _close_unsent(response):
+        if getattr(response, "is_stream", False):
+            close = getattr(response.stream, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # noqa: BLE001 - cleanup only
+                    pass
 
     def send_response(self, stream, response, *, send_body=True):
         fields = [(":status", str(int(response.status)))]
-        for name, value in (response.headers or {}).items():
+        for name, value in iter_header_fields(response.headers):
             lowered = str(name).lower()
             if lowered in FORBIDDEN_HEADERS:
                 continue  # Section 8.2.2: these have no meaning in HTTP/2.
-            fields.append((lowered, str(value)))
+            fields.append((lowered, value))
 
         if send_body and response.is_stream:
             # Sent as it is produced: joining it first would hold an endless

@@ -18,10 +18,18 @@ from urllib.parse import urlsplit
 
 from ._coerce import safe_float as _safe_float
 from ._coerce import safe_int as _safe_int
+from .headers import header_value_text
 from .http import Response
 
 DEFAULT_STREAM_POINTS = 5
 DEFAULT_MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
+#: Largest buffered upstream body; bigger ones are answered 502.
+DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+#: Total time allowed to read a buffered upstream body.
+DEFAULT_RESPONSE_TIMEOUT_SECONDS = 30.0
+_RESPONSE_READ_CHUNK = 64 * 1024
+_ENCODED_DOT_SEGMENT_RE = re.compile(r"%2e", re.IGNORECASE)
+_ENCODED_SEPARATOR_RE = re.compile(r"%2f|%5c", re.IGNORECASE)
 DEFAULT_DASHBOARD_PATH = "/__proxyi__"
 DEFAULT_METRICS_PATH = "/__proxyi__/metrics"
 DEFAULT_STREAM_PATH = "/__proxyi__/metrics/stream"
@@ -261,6 +269,88 @@ def _path_has_prefix(path, prefix):
     return raw_path == raw_prefix or raw_path.startswith(raw_prefix + "/")
 
 
+def _has_dot_segments(path):
+    """True when ``path`` has a ``.`` or ``..`` segment, literal or percent-encoded.
+
+    Segment parameters are ignored (``..;x`` is ``..``).
+
+    Encoded dots (``%2e``) and separators (``%2f``, ``%5c``) are decoded first,
+    so ``/a/%2e%2e%2fadmin`` counts as traversal too.
+    """
+    text = _normalize_text(path)
+    decoded = _ENCODED_SEPARATOR_RE.sub("/", _ENCODED_DOT_SEGMENT_RE.sub(".", text))
+    decoded = decoded.replace("\\", "/")
+    # Some servers drop ";params" from a segment, so "..;x" counts as "..".
+    return any(segment.split(";", 1)[0] in {".", ".."} for segment in decoded.split("/"))
+
+
+class _UpstreamResponseTooLarge(Exception):
+    pass
+
+
+class _UpstreamResponseTimeout(Exception):
+    pass
+
+
+def _collect_upstream_headers(pairs):
+    """Header pairs as a dict; a repeated name keeps every value in a list."""
+    headers = {}
+    lowered = {}
+    for name, value in pairs or ():
+        key = lowered.setdefault(str(name).lower(), str(name))
+        if key in headers:
+            existing = headers[key]
+            headers[key] = (existing if isinstance(existing, list) else [existing]) + [value]
+        else:
+            headers[key] = value
+    return headers
+
+
+def _should_stream_upstream(upstream, headers):
+    lowered = {str(name).lower(): header_value_text(value) for name, value in headers.items()}
+    if "text/event-stream" in lowered.get("content-type", "").lower():
+        return True
+    if "chunked" in lowered.get("transfer-encoding", "").lower():
+        return True
+    return getattr(upstream, "length", None) is None and "content-length" not in lowered
+
+
+def _iter_upstream_body(upstream, conn):
+    """Yield the upstream body as it arrives, closing the connection at the end."""
+    try:
+        reader = getattr(upstream, "read1", None) or upstream.read
+        while True:
+            chunk = reader(_RESPONSE_READ_CHUNK)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _read_upstream_body(upstream, *, max_bytes, deadline):
+    declared = getattr(upstream, "length", None)
+    if declared is not None and declared > max_bytes:
+        raise _UpstreamResponseTooLarge(f"upstream declared {declared} bytes")
+    chunks = []
+    size = 0
+    reader = getattr(upstream, "read1", None) or upstream.read
+    while True:
+        if time.monotonic() > deadline:
+            raise _UpstreamResponseTimeout("upstream response deadline exceeded")
+        chunk = reader(_RESPONSE_READ_CHUNK)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_bytes:
+            raise _UpstreamResponseTooLarge(f"upstream body over {max_bytes} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _combine_query(path, query_string):
     if not query_string:
         return path
@@ -280,7 +370,10 @@ def _clean_response_headers(headers):
             or normalized in connection_tokens
         ):
             continue
-        clean[name] = _normalize_text(value)
+        if isinstance(value, (list, tuple)):
+            clean[name] = [_normalize_text(item) for item in value]
+        else:
+            clean[name] = _normalize_text(value)
     return clean
 
 
@@ -309,7 +402,7 @@ def _connection_header_tokens(headers):
             continue
         tokens.update(
             token.strip().lower()
-            for token in str(value or "").split(",")
+            for token in header_value_text(value or "").split(",")
             if token.strip()
         )
     return tokens
@@ -1185,6 +1278,9 @@ class ProxyI:
         metrics_stream_path=DEFAULT_STREAM_PATH,
         default_balance=BALANCING_ROUND_ROBIN,
         max_request_body_bytes=DEFAULT_MAX_REQUEST_BODY_BYTES,
+        max_response_bytes=DEFAULT_MAX_RESPONSE_BYTES,
+        response_timeout_seconds=DEFAULT_RESPONSE_TIMEOUT_SECONDS,
+        expose_upstream_header=False,
     ):
         self.name = _normalize_text(name) or "proxyi"
         self.dashboard_path = _normalize_text(dashboard_path) or DEFAULT_DASHBOARD_PATH
@@ -1192,6 +1288,12 @@ class ProxyI:
         self.metrics_stream_path = _normalize_text(metrics_stream_path) or DEFAULT_STREAM_PATH
         self.default_balance = normalize_balance_mode(default_balance)
         self.max_request_body_bytes = max(0, _safe_int(max_request_body_bytes, DEFAULT_MAX_REQUEST_BODY_BYTES))
+        self.max_response_bytes = max(0, _safe_int(max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES))
+        self.response_timeout_seconds = max(
+            0.1, _safe_float(response_timeout_seconds, DEFAULT_RESPONSE_TIMEOUT_SECONDS)
+        )
+        #: Adds ``X-ProxyI-Upstream`` (the internal upstream URL) to responses.
+        self.expose_upstream_header = bool(expose_upstream_header)
         self.started_at = time.time()
         self.metrics = ProxyMetricsBucket(label=self.name)
         self._rules = []
@@ -1315,29 +1417,57 @@ class ProxyI:
             headers["Host"] = target.authority
 
         conn = target.open_connection()
+        streaming = False
         try:
             conn.request(request.method, forward_path, body=body, headers=headers)
             upstream = conn.getresponse()
-            raw_body = upstream.read()
             status = int(getattr(upstream, "status", 502) or 502)
             reason = _normalize_text(getattr(upstream, "reason", "") or "")
-            response_headers = _clean_response_headers(dict(upstream.getheaders()))
-            if request.method.upper() == "HEAD":
-                raw_body = b""
+            raw_headers = _collect_upstream_headers(upstream.getheaders())
+            response_headers = _clean_response_headers(raw_headers)
+            response_headers.setdefault("X-ProxyI-Rule", rule.name or rule.path_prefix or rule.path or "default")
+            response_headers.setdefault("X-ProxyI-Target", target.name)
+            if self.expose_upstream_header:
+                response_headers.setdefault("X-ProxyI-Upstream", target.url)
+            has_body = request.method.upper() != "HEAD" and not (
+                100 <= status < 200 or status in {204, 304}
+            )
+            if has_body and _should_stream_upstream(upstream, raw_headers):
+                # Unbounded or event streams are relayed as they arrive: each
+                # read is bounded by the target's socket timeout.
+                for header_name in list(response_headers):
+                    if header_name.lower() == "content-length":
+                        response_headers.pop(header_name)
+                streaming = True
+                return Response(
+                    status=status,
+                    headers=response_headers,
+                    reason=reason,
+                    stream=_iter_upstream_body(upstream, conn),
+                )
+            raw_body = b""
+            if has_body:
+                deadline = time.monotonic() + self.response_timeout_seconds
+                try:
+                    raw_body = _read_upstream_body(
+                        upstream, max_bytes=self.max_response_bytes, deadline=deadline
+                    )
+                except _UpstreamResponseTooLarge:
+                    return Response.text("Bad Gateway: upstream response too large", status=502)
+                except _UpstreamResponseTimeout:
+                    return Response.text("Gateway Timeout", status=504)
             if not any(
                 name.lower() == "content-length"
                 for name in response_headers
             ):
                 response_headers["Content-Length"] = str(len(raw_body))
-            response_headers.setdefault("X-ProxyI-Rule", rule.name or rule.path_prefix or rule.path or "default")
-            response_headers.setdefault("X-ProxyI-Target", target.name)
-            response_headers.setdefault("X-ProxyI-Upstream", target.url)
             return Response(status=status, body=raw_body, headers=response_headers, reason=reason)
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            if not streaming:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _forwarded_for_value(self, request):
         client = getattr(request, "client", None)
@@ -1369,6 +1499,11 @@ class ProxyI:
             if method != "GET":
                 return Response.text("Method Not Allowed", status=405, headers={"Allow": "GET"})
             return self.response_dashboard()
+
+        if _has_dot_segments(path):
+            # Rules match on the raw path, so a dot segment the upstream may
+            # normalize away could escape a prefix rule or the target base path.
+            return Response.text("Bad Request: dot segments are not allowed", status=400)
 
         request_size = len(_request_body_bytes(request))
         started = time.time()

@@ -34,6 +34,20 @@ Response.stream(iter(["a", "b", "c"]), content_type="text/plain")
 ```
 
 `Response.stream` devuelve una respuesta en streaming con soporte para generadores, iterables y objetos con `read()`.
+Al terminar el envio (o si el cliente se desconecta) el servidor llama a
+`close()` sobre el origen del stream cuando existe.
+
+`Response.headers` es un diccionario con un valor por nombre. Un valor puede ser
+una lista o tupla para enviar el campo repetido, que es lo que necesita
+`Set-Cookie`:
+
+```python
+Response.text("ok", headers={"Set-Cookie": ["a=1; Path=/", "b=2; HttpOnly"]})
+```
+
+HTTP/1 escribe una linea por valor y HTTP/2 y HTTP/3 un campo por valor. En las
+vistas con workers, la cookie de afinidad se anade a las del handler, de modo
+que `response.headers["Set-Cookie"]` puede ser una lista.
 
 ## Enrutado
 
@@ -68,8 +82,20 @@ Si `cors_allow_origin` esta definido, la respuesta incluye:
 La libreria trae helpers para nombres, lectura y escritura:
 
 ```python
-from wsbuilder import build_set_cookie, get_cookie, get_header, has_header, normalize_header_name, set_header
+from wsbuilder import (
+    add_header,
+    build_set_cookie,
+    get_cookie,
+    get_header,
+    has_header,
+    normalize_header_name,
+    set_header,
+)
 ```
+
+`add_header(headers, name, value)` anade un valor sin reemplazar los
+existentes: el campo pasa a ser una lista. `get_header` devuelve el valor tal
+cual, que puede ser una lista si el campo se repite.
 
 Usos comunes:
 

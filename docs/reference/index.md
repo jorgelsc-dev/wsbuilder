@@ -24,7 +24,7 @@ from wsbuilder import App, Response, Database, Model, SQLiteMemoryCache
 | Proxy | `ProxyI`, `proxyi`, `ProxyRule`, `ProxyRouteBuilder`, `ProxyTarget` | Reverse proxy y balancing |
 | DNS | `LocalDNSServer` | Resolucion local y tests |
 | IA | `DataSet`, `DataSummary`, `ErrorSummary`, `NeuralNetwork`, `Predictor` | Datos y modelos sencillos |
-| Utilidades | `get_header`, `set_header`, `build_set_cookie`, `parse_cookie_header` | Helpers HTTP |
+| Utilidades | `get_header`, `set_header`, `add_header`, `build_set_cookie`, `parse_cookie_header` | Helpers HTTP |
 
 ## Core HTTP
 
@@ -195,6 +195,7 @@ fetch, store_response, invalidate_path, clear, snapshot
 - `get_header()`
 - `has_header()`
 - `set_header()`
+- `add_header()`
 - `parse_cookie_header()`
 - `get_cookie()`
 - `build_set_cookie()`

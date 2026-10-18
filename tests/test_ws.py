@@ -1,3 +1,5 @@
+import socket
+import threading
 import time
 import unittest
 
@@ -374,6 +376,79 @@ class TestWebSocketCore(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must start"):
             app.ws("ws")
 
+
+class TestWebSocketPartialFrames(unittest.TestCase):
+    def _pair(self, **options):
+        server_sock, client_sock = socket.socketpair()
+        self.addCleanup(server_sock.close)
+        self.addCleanup(client_sock.close)
+        timeouts = []
+        ws = WebSocket(
+            server_sock,
+            ("127.0.0.1", 1234),
+            "",
+            {},
+            io_poll_interval=0.1,
+            on_timeout=lambda _ws, reason: timeouts.append(reason),
+            **options,
+        )
+        return ws, client_sock, timeouts
+
+    def test_timeout_in_the_middle_of_a_frame_keeps_the_partial_bytes(self):
+        ws, client, timeouts = self._pair(idle_timeout=0.6)
+        raw = _masked_client_frame(0x1, b"hello across a pause")
+        sent_second_half = threading.Event()
+
+        def sender():
+            client.sendall(raw[:7])
+            # Longer than idle_timeout / 2 and several poll intervals.
+            time.sleep(0.35)
+            client.sendall(raw[7:])
+            sent_second_half.set()
+            client.sendall(_masked_client_frame(0x1, b"next"))
+
+        thread = threading.Thread(target=sender, daemon=True)
+        thread.start()
+        first = ws.recv_frame()
+        second = ws.recv_frame()
+        thread.join(timeout=2)
+
+        self.assertTrue(sent_second_half.is_set())
+        self.assertEqual(first.payload, b"hello across a pause")
+        self.assertEqual(second.payload, b"next")
+        self.assertEqual(timeouts, [])
+
+    def test_a_slow_but_progressing_frame_is_not_idle(self):
+        ws, client, timeouts = self._pair(idle_timeout=0.5)
+        raw = _masked_client_frame(0x2, bytes(range(40)))
+
+        def sender():
+            for index in range(0, len(raw), 6):
+                client.sendall(raw[index : index + 6])
+                time.sleep(0.12)
+
+        thread = threading.Thread(target=sender, daemon=True)
+        thread.start()
+        frame = ws.recv_frame()
+        thread.join(timeout=3)
+
+        self.assertEqual(frame.payload, bytes(range(40)))
+        self.assertEqual(timeouts, [])
+
+    def test_a_stalled_partial_frame_still_hits_the_idle_timeout(self):
+        ws, client, timeouts = self._pair(idle_timeout=0.3)
+        client.sendall(_masked_client_frame(0x1, b"never finished")[:5])
+        with self.assertRaises(WebSocketReadTimeoutError):
+            ws.recv_frame()
+        self.assertEqual(timeouts, ["idle timeout"])
+
+    def test_partial_frame_replay_with_scripted_timeouts(self):
+        raw = _masked_client_frame(0x1, b"split")
+        sock = DummySocket(
+            recv_events=[raw[:1], TimeoutError("poll"), raw[1:3], TimeoutError("poll"), raw[3:]],
+        )
+        ws = WebSocket(sock, ("127.0.0.1", 1), "", {}, idle_timeout=10.0, io_poll_interval=0.1)
+        self.assertEqual(ws.recv_frame().payload, b"split")
 
 if __name__ == "__main__":
     unittest.main()

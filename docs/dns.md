@@ -43,6 +43,24 @@ La resolucion soporta:
 - upstream servers opcionales
 - fallback cuando el upstream no responde
 
+## Endurecimiento UDP
+
+- Una consulta con un numero de preguntas distinto de uno (`MAX_QUESTIONS = 1`)
+  recibe `FORMERR`.
+- Las respuestas se limitan a 512 bytes, o al tamano que anuncia un registro
+  EDNS(0) `OPT` del cliente con tope en `max_udp_payload` (1232 por defecto). Si
+  no caben, se envia solo la pregunta con el bit `TC`. El servidor no tiene
+  listener TCP, asi que un cliente sin EDNS no obtiene respuestas mayores de 512
+  bytes; esto evita la amplificacion.
+- Un `OSError` al recibir o enviar un datagrama se registra con
+  `wsbuilder.logs` y el bucle sigue.
+- El reenvio a upstreams corre en un pool acotado (`upstream_workers=4`,
+  `max_pending_upstream=64`) y no bloquea las respuestas locales. Con el pool
+  lleno se responde `SERVFAIL`; `close()` lo detiene.
+
+Opciones nuevas solo por clave: `upstream_workers`, `max_pending_upstream`,
+`max_udp_payload` y `app` (destino de los logs, via `get_log(app)`).
+
 ## Ejemplo de test
 
 ```python

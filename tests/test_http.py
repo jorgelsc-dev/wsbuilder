@@ -21,6 +21,54 @@ class BufferSocket:
 
 
 class TestHTTPCore(unittest.TestCase):
+    def _closing_stream(self, flags):
+        def chunks():
+            try:
+                yield b"one"
+                yield b"two"
+            finally:
+                flags.append("closed")
+
+        return chunks()
+
+    def test_stream_is_closed_when_the_client_goes_away(self):
+        class Broken:
+            def __init__(self):
+                self.calls = 0
+
+            def sendall(self, _data):
+                self.calls += 1
+                if self.calls > 1:
+                    raise BrokenPipeError("gone")
+
+        flags = []
+        stream = self._closing_stream(flags)
+        send_http_response(Broken(), Response.stream(stream))
+        self.assertEqual(flags, ["closed"])
+
+    def test_stream_is_closed_when_the_body_is_skipped(self):
+        flags = []
+        stream = self._closing_stream(flags)
+        next(stream)  # started, so close() runs its finally block
+        send_http_response(BufferSocket(), Response.stream(stream), send_body=False)
+        self.assertEqual(flags, ["closed"])
+
+    def test_list_header_values_are_sent_as_separate_lines(self):
+        sock = BufferSocket()
+        response = Response.text("ok", headers={"Set-Cookie": ["a=1; Path=/", "b=2"]})
+        send_http_response(sock, response)
+        head = b"".join(sock.sent).split(b"\r\n\r\n", 1)[0].split(b"\r\n")
+        self.assertIn(b"Set-Cookie: a=1; Path=/", head)
+        self.assertIn(b"Set-Cookie: b=2", head)
+        self.assertEqual(sum(1 for line in head if line.startswith(b"Set-Cookie:")), 2)
+
+    def test_list_connection_header_value_is_still_understood(self):
+        sock = BufferSocket()
+        response = Response.text("ok", headers={"Connection": ["close"]})
+        send_http_response(sock, response, keep_alive=True)
+        head = b"".join(sock.sent).split(b"\r\n\r\n", 1)[0]
+        self.assertEqual(head.count(b"Connection:"), 1)
+
     def test_request_json_returns_none_for_unparseable_bodies(self):
         def request(body):
             return Request(
