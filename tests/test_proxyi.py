@@ -1,4 +1,5 @@
 import json
+import socket
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +11,7 @@ from wsbuilder.proxyi import (
     BALANCING_LEAST_RESPONSE_TIME,
     BALANCING_ROUND_ROBIN,
     _clean_response_headers,
+    _has_dot_segments,
 )
 
 
@@ -351,6 +353,162 @@ class TestProxyI(unittest.TestCase):
 
         self.assertEqual(response.status, 413)
 
+
+class _RawUpstream:
+    """One-shot upstream that answers every connection with ``script(conn)``."""
+
+    def __init__(self, script):
+        self.script = script
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen()
+        self.port = self.sock.getsockname()[1]
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        while not self.stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                if self.stop.is_set():
+                    return
+                conn.recv(65536)
+                try:
+                    self.script(conn, self.stop)
+                except OSError:
+                    pass
+
+    def close(self):
+        self.stop.set()
+        try:
+            # Closing a listening socket does not wake accept(); a connection does.
+            socket.create_connection(("127.0.0.1", self.port), timeout=1).close()
+        except OSError:
+            pass
+        self.thread.join(timeout=2)
+        self.sock.close()
+
+
+class TestProxyHardening(unittest.TestCase):
+    def _proxy(self, script, **options):
+        upstream = _RawUpstream(script)
+        self.addCleanup(upstream.close)
+        proxy = ProxyI(name="edge", **options)
+        proxy.route(name="r", path_prefix="/").upstream(
+            f"http://127.0.0.1:{upstream.port}", name="u", timeout_seconds=2
+        ).build()
+        return proxy
+
+    def _get(self, proxy, path="/x"):
+        return proxy.dispatch(
+            Request("GET", path, "", {"host": "edge.test"}, b"", ("127.0.0.1", 1), tls={})
+        )
+
+    def test_dot_segment_detection(self):
+        for path in (
+            "/public/../admin",
+            "/public/..",
+            "/a/./b",
+            "/public/%2e%2e/admin",
+            "/public/%2E%2e/admin",
+            "/public/.%2E/admin",
+            "/public/%2e%2e%2fadmin",
+            "/public%2f..%2fadmin",
+            "/public/..%5cadmin",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(_has_dot_segments(path))
+        for path in ("/", "/a/..b/c", "/.well-known/x", "/a/b.", "/a/%2e%2ex"):
+            with self.subTest(path=path):
+                self.assertFalse(_has_dot_segments(path))
+
+    def test_dot_segments_are_rejected_before_rules(self):
+        calls = []
+
+        def script(conn, _stop):
+            calls.append(1)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+
+        proxy = self._proxy(script)
+        for path in ("/public/../../admin", "/public/%2e%2e/%2E%2E/admin"):
+            with self.subTest(path=path):
+                self.assertEqual(self._get(proxy, path).status, 400)
+        self.assertEqual(calls, [])
+        self.assertEqual(self._get(proxy, "/public/ok").status, 200)
+
+    def test_all_upstream_set_cookie_headers_are_kept(self):
+        def script(conn, _stop):
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2; HttpOnly\r\n"
+                b"Content-Length: 2\r\n\r\nok"
+            )
+
+        response = self._get(self._proxy(script))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["Set-Cookie"], ["a=1", "b=2; HttpOnly"])
+
+    def test_upstream_url_header_is_opt_in(self):
+        def script(conn, _stop):
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+
+        response = self._get(self._proxy(script))
+        self.assertNotIn("X-ProxyI-Upstream", response.headers)
+        self.assertEqual(response.headers["X-ProxyI-Target"], "u")
+        response = self._get(self._proxy(script, expose_upstream_header=True))
+        self.assertTrue(response.headers["X-ProxyI-Upstream"].startswith("http://127.0.0.1:"))
+
+    def test_buffered_body_over_the_limit_is_502(self):
+        def declared(conn, _stop):
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n" + b"x" * 100)
+
+        response = self._get(self._proxy(declared, max_response_bytes=10))
+        self.assertEqual(response.status, 502)
+
+        def within(conn, _stop):
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n" + b"y" * 10)
+
+        response = self._get(self._proxy(within, max_response_bytes=10))
+        self.assertEqual((response.status, response.body), (200, b"y" * 10))
+
+    def test_buffered_body_has_a_total_deadline(self):
+        def trickle(conn, stop):
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n")
+            while not stop.wait(0.02):
+                conn.sendall(b"x")
+
+        proxy = self._proxy(trickle, response_timeout_seconds=0.2)
+        self.assertEqual(self._get(proxy).status, 504)
+
+    def test_event_stream_is_relayed_without_buffering(self):
+        release = threading.Event()
+
+        def sse(conn, stop):
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n7\r\ndata:1\n\r\n"
+            )
+            release.wait(timeout=5)
+            conn.sendall(b"7\r\ndata:2\n\r\n0\r\n\r\n")
+
+        response = self._get(self._proxy(sse))
+        self.assertTrue(response.is_stream)
+        self.assertNotIn("Content-Length", response.headers)
+        chunks = iter(response.stream)
+        self.assertEqual(next(chunks), b"data:1\n")
+        release.set()
+        self.assertEqual(b"".join(chunks), b"data:2\n")
+
+    def test_close_delimited_body_is_streamed(self):
+        def script(conn, _stop):
+            conn.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nabc")
+
+        response = self._get(self._proxy(script))
+        self.assertTrue(response.is_stream)
+        self.assertEqual(b"".join(response.stream), b"abc")
 
 if __name__ == "__main__":
     unittest.main()
