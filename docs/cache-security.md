@@ -208,6 +208,7 @@ Utilidades incluidas:
 - `get_header`
 - `has_header`
 - `set_header`
+- `add_header`
 - `parse_cookie_header`
 - `get_cookie`
 - `build_set_cookie`

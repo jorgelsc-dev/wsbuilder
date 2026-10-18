@@ -68,6 +68,11 @@ Callbacks opcionales:
 - fallo de ping/pong
 - error de protocolo
 
+Un timeout de lectura a mitad de un frame no pierde los bytes ya recibidos: se
+conservan y el frame se completa en la siguiente lectura, asi que el framing no
+se desincroniza. Mientras sigan llegando bytes de un frame, la conexion no
+cuenta como inactiva; `idle_timeout` solo vence si el par deja de enviar.
+
 ## Ejemplo echo
 
 ```python

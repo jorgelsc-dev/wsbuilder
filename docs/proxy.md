@@ -40,6 +40,31 @@ proxy.vhost("api.test.local", name="api-vhost").location("/api").upstream("http:
 - `verify_tls`
 - `extra_headers`
 
+## Seguridad y limites de respuesta
+
+`ProxyI` acepta estas opciones al construirse:
+
+| Opcion | Defecto | Efecto |
+| --- | --- | --- |
+| `max_request_body_bytes` | `8 MiB` | Un cuerpo de peticion mayor recibe `413`. |
+| `max_response_bytes` | `16 MiB` | Un cuerpo de upstream con buffer mayor recibe `502`. |
+| `response_timeout_seconds` | `30.0` | Plazo total para leer un cuerpo con buffer; si se agota, `504`. |
+| `expose_upstream_header` | `False` | Con `True` anade `X-ProxyI-Upstream` con la URL interna del upstream. |
+
+- Un path con segmentos `.` o `..`, literales o codificados (`%2e`, `%2f`,
+  `%5c`, tambien `..;param`), se rechaza con `400` antes de evaluar reglas, para
+  que no escape de un prefijo ni del `base_path` del target.
+- Las respuestas con `Content-Length` se leen con buffer bajo esos dos limites.
+  Las respuestas `chunked`, delimitadas por el cierre de la conexion o
+  `text/event-stream` se retransmiten como `Response.stream` por bloques, sin
+  cargarlas en memoria. En ese modo no hay plazo total ni limite de bytes: cada
+  lectura respeta `timeout_seconds` del target, de modo que un upstream que sigue
+  enviando datos (por ejemplo SSE) mantiene ocupado el worker mientras dure.
+- Se conservan todos los `Set-Cookie` del upstream: las cabeceras repetidas
+  llegan a `Response.headers` como lista.
+- `X-ProxyI-Upstream` ya no se envia por defecto; `X-ProxyI-Rule` y
+  `X-ProxyI-Target` se mantienen.
+
 ## Balanceo
 
 Estrategias disponibles:

@@ -65,7 +65,7 @@ Filtros `QuerySet` documentados:
 
 | Grupo | Exportaciones |
 | --- | --- |
-| Cabeceras | `normalize_header_name`, `get_header`, `has_header`, `set_header` |
+| Cabeceras | `normalize_header_name`, `get_header`, `has_header`, `set_header`, `add_header` |
 | Cookies | `parse_cookie_header`, `get_cookie`, `build_set_cookie` |
 
 ## DNS y proxy

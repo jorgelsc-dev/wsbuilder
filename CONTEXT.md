@@ -103,9 +103,9 @@ tests, a `tests/`; los de docs, a `docs/`.
 | Logs, métricas y tareas | `logs.py`, `metrics.py`, `tasks.py` | `test_logs.py`, `test_metrics.py`, `test_tasks.py` | `observability.md`, `observability-tasks.md`, `tasks.md` |
 | DNS, mDNS y descubrimiento | `dns.py`, `mdns.py` | `test_dns.py`, `test_mdns.py` | `dns.md`, `mdns.md`, `network-edge.md` |
 | Reverse proxy y balanceo | `proxyi.py` | `test_proxyi.py`, `test_proxyi_routing.py` | `proxy.md` |
-| Certificados y material TLS | `pki.py` | `test_pki.py` | `tls-certificates.md` |
+| Certificados y material TLS | `pki.py`, `__init__.py` (exportación diferida) | `test_pki.py`, `test_optional_extras.py` | `tls-certificates.md` |
 | Redes neuronales y predicción | `ia.py`, `predicts.py` | `test_ia.py`, `test_predicts.py` | `ia.md`, `ai-predict.md` |
-| Demo, documentación y políticas de contribución | `__main__.py`, `docs/`, `.github/workflows/`, `CONTRIBUTING.md` | `test_demo_monitor.py`, `test_docs.py`, `test_documentation_files.py`, `test_contributing_policy.py`, `test_pr_identity_policy.py` | `index.md`, `architecture.md`, `api-map.md` |
+| Demo, documentación y políticas de contribución | `__main__.py`, `docs/`, `.github/workflows/`, `CONTRIBUTING.md` | `test_demo_monitor.py`, `test_docs.py`, `test_documentation_files.py`, `test_contributing_policy.py`, `test_pr_identity_policy.py`, `test_example_full_project.py` | `index.md`, `architecture.md`, `api-map.md` |
 
 Otros documentos de `docs/`: `install.md`, `getting-started.md`,
 `beginners.md`, `intermediate.md`, `advanced.md`, `capabilities.md`,
@@ -158,12 +158,17 @@ Los atributos opcionales valen `None` hasta llamar al `enable_*` o `install_*`.
   (bytes), `client`, `tls`, `version`, `trailers`, `app`; métodos `text()` y
   `json()` (devuelve `None` si no es JSON válido).
 - `Response(status=200, body=b"", headers=None, reason=None, stream=None)`; el
-  estado debe estar en 100–599. Constructores: `Response.json(data)`,
+  estado debe estar en 100–599. `headers` es un dict con un valor por nombre; un
+  valor lista/tupla se envía como campos repetidos (varios `Set-Cookie`), una
+  línea por valor en HTTP/1 y un campo por valor en HTTP/2/3. El servidor cierra
+  el origen de un `stream` al terminar o si el cliente se va. Constructores: `Response.json(data)`,
   `Response.text(text)`, `Response.html(html)`,
   `Response.stream(chunks, content_type=None)`; todos aceptan `status` y
   `headers`.
-- Helpers: `get_header`, `has_header`, `set_header`, `normalize_header_name`
-  (`headers.py`); `parse_cookie_header`, `get_cookie`, `build_set_cookie`
+- Helpers: `get_header`, `has_header`, `set_header`, `add_header` (añade sin
+  reemplazar, convirtiendo en lista), `normalize_header_name` (`headers.py`,
+  que también tiene `iter_header_fields`, `header_value_text`,
+  `combine_field_values` y las validaciones de campos HTTP/2/3); `parse_cookie_header`, `get_cookie`, `build_set_cookie`
   (`cookies.py`).
 
 ### HTTPServer (`server.py`)
@@ -185,12 +190,23 @@ atributos de clase que cada instancia puede sobrescribir con `LIMIT_OPTIONS`
 | `max_ws_frame_bytes` | `MAX_WS_FRAME_BYTES` | `None` (defecto de `ws.py`) |
 | `max_ws_message_bytes` | `MAX_WS_MESSAGE_BYTES` | `None` (defecto de `ws.py`) |
 
+`REQUEST_READ_TIMEOUT_SECONDS` es un plazo total para cabeceras y cuerpo de
+cada petición (`BufferedReader.set_deadline`), no un timeout por `recv`; un
+cliente lento recibe `408`. Con seguridad activa, `App.security_response()`
+evalúa ACL/lista negra/rate limit con las cabeceras antes de `100 Continue` y
+de leer el cuerpo; la petición queda marcada (`security_evaluated`) y
+`dispatch()` no la cuenta otra vez. Tras una respuesta temprana con cuerpo sin
+leer, `_linger_close` drena hasta `LINGER_TIMEOUT_SECONDS` (2 s) para no
+provocar un RST.
+
 Otros atributos: `ENABLE_HTTP2 = True` (ALPN y preface en claro),
 `HANDLE_SIGTERM = True`, `ACCEPT_TIMEOUT_SECONDS = 0.5`,
 `ACQUIRE_WORKER_TIMEOUT_SECONDS = 1.0`. Los `max_*_bytes` de una ruta WebSocket
 tienen prioridad sobre los del servidor. HTTP/3: `Http3Server` e
 `install_http3(app, tls, host="0.0.0.0", port=0, attr_name="http3")` en
 `http3_server.py`; `alt_svc_header(port, max_age=86400)` anuncia HTTP/3.
+`Http2Connection` ejecuta los handlers en un pool por conexión
+(`MAX_HANDLER_THREADS = 16`) fuera del bucle de frames y sin el lock.
 
 ### CLI (`__main__.py`)
 
@@ -210,7 +226,8 @@ ayuda de la CLI están en español.
 `WebSocketMessageTooBigError`, `WebSocketReadError`,
 `WebSocketReadTimeoutError`, `WebSocketConnectionClosedError`. Helpers:
 `parse_close_payload`, `handshake_websocket_with_options`, `is_ws_request`,
-`make_ws_frame_bytes`, `read_ws_frame_raw`.
+`make_ws_frame_bytes`, `read_ws_frame_raw`. Un timeout a mitad de frame
+conserva los bytes leídos (`_FrameReader`) y el frame se completa después.
 
 ### ORM (`orm.py`, `db_replicas.py`)
 
@@ -225,7 +242,12 @@ ayuda de la CLI están en español.
   `filter`, `save`, `to_dict`, `pk_value`; `create_tables` / `drop_tables`.
 - `QuerySet`: `filter`, `exclude`, `where_raw`, `using`, `order_by`,
   `order_by_raw`, `limit`, `offset`, `paginate`, `all`, `first`, `get`,
-  `values`, `count`, `exists`, `update`, `delete`, `create`.
+  `values`, `count`, `exists`, `update`, `delete`, `create`. Con
+  `limit`/`offset`, `update()` y `delete()` solo tocan las filas del slice
+  (subconsulta por pk o `rowid`).
+- `set_pragma` y los `pragmas` de `Database`, réplicas y cache solo aceptan
+  números, booleanos o palabras clave simples (`_pragma.py`); otro valor lanza
+  `ValueError`.
 - Lookups (`campo__op`, ver `QuerySet._build_lookup`): `eq`, `ne`, `gt`,
   `gte`, `lt`, `lte`, `like`, `ilike`, `contains`, `icontains`, `startswith`,
   `istartswith`, `endswith`, `iendswith`, `in`, `not_in`.
@@ -259,11 +281,24 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   `TASK_PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/REJECTED`.
 - Proxy: `ProxyI`, `proxyi`, `ProxyRule`, `ProxyRouteBuilder`, `ProxyTarget`,
   `install_proxyi`, `normalize_balance_mode`, `normalize_target`; estrategias
-  `BALANCING_*` listadas en `SUPPORTED_BALANCING_STRATEGIES`.
+  `BALANCING_*` listadas en `SUPPORTED_BALANCING_STRATEGIES`. `ProxyI` rechaza
+  con `400` paths con segmentos `.`/`..` (también codificados), limita las
+  respuestas con buffer (`max_response_bytes` 16 MiB → 502,
+  `response_timeout_seconds` 30 → 504), retransmite en streaming las respuestas
+  sin longitud, chunked o SSE, conserva todos los `Set-Cookie` y solo envía
+  `X-ProxyI-Upstream` con `expose_upstream_header=True`.
 - DNS/mDNS: `LocalDNSServer`, `LocalMDNSServer`, `MDNSService`,
-  `discover_mdns_services`.
+  `discover_mdns_services`. `LocalDNSServer` responde `FORMERR` si
+  `qdcount != 1`, trunca a 512 B (o al payload EDNS, tope `max_udp_payload`)
+  con TC, sigue ante `OSError` por datagrama y reenvía a upstreams en un pool
+  acotado (`upstream_workers`, `max_pending_upstream`). Sin listener TCP.
 - PKI: `CertificateAuthority`, `CertificateManager`, `TLSMaterial`,
-  `MaterializedFiles`, `install_tls`.
+  `MaterializedFiles`, `install_tls`. Sin el extra `tls` estos nombres no están
+  en `__all__` y su acceso lanza `AttributeError` con la pista de instalación.
+- QUIC: el emisor respeta el control de flujo del par (`initial_max_*`,
+  `MAX_DATA`, `MAX_STREAM_DATA`, con `DATA_BLOCKED`/`STREAM_DATA_BLOCKED`) y la
+  ventana NewReno de `quic/recovery.py`; `wait_for_send_room` da backpressure al
+  pump de streaming HTTP/3, que termina con `RESET_STREAM` si falla o se atasca.
 - IA: `NeuralNetwork`, `DenseLayer`, `DataSet`, `DataSummary`, `ErrorSummary`,
   `describe_data`, `evaluate_errors`, `submit_training_task`; `Predictor`.
 
@@ -285,15 +320,16 @@ console_level="warning")` con `log(level, event, message="", exc=None,
 
 Al tocar protocolos, revisa especialmente los límites de cabeceras y cuerpos,
 el control de flujo, el streaming y la liberación de conexiones y streams.
-El timeout de handshake/lectura y la espera entre requests tienen funciones
-distintas. WebSocket debe consumir los bytes ya leídos por el buffer HTTP.
+El plazo total de lectura de una petición y la espera entre requests tienen
+funciones distintas. Los campos repetidos en HTTP/2/3 se combinan como en
+HTTP/1 (`cookie` con `"; "`). WebSocket debe consumir los bytes ya leídos por el buffer HTTP.
 HTTP/1.0 no usa codificación chunked. HPACK/QPACK decodifican las cadenas de
 campos como ISO-8859-1; los límites y tablas deben contar los octetos recibidos.
 HTTP/3 ejecuta los handlers fuera del hilo que recibe los datagramas.
 
 Al tocar persistencia, conserva las búsquedas literales del ORM y los prefijos
-literales del cache, incluidos `%`, `_` y barras invertidas. `QuerySet.count()`
-y `exists()` respetan `limit` y `offset`.
+literales del cache, incluidos `%`, `_` y barras invertidas. `QuerySet.count()`,
+`exists()`, `update()` y `delete()` respetan `limit` y `offset`.
 
 ## Restricciones técnicas
 
@@ -369,17 +405,18 @@ La demo expone `/`, `/monitor`, `/thread-demo`, `/api/health`, `/api/metrics`,
 
 | Workflow | Función |
 | --- | --- |
-| [package-build.yml](.github/workflows/package-build.yml) | Lint, build, Twine, tests e instalación de prueba del wheel en Python 3.11–3.14 |
+| [package-build.yml](.github/workflows/package-build.yml) | Lint, build, Twine, tests e instalación de prueba del wheel sin extras (comprueba `from wsbuilder import *` y los nombres TLS ausentes) en Python 3.11–3.14 |
 | [main-only-from-develop.yml](.github/workflows/main-only-from-develop.yml) | Job `enforce-source`: valida autor, rama de origen e identidades de las PRs a `main` |
 | [codeql.yml](.github/workflows/codeql.yml) | Análisis CodeQL de Python |
 | [docs-pages.yml](.github/workflows/docs-pages.yml) | Construye y publica el sitio MkDocs para cambios pertinentes en `main` |
-| [release-from-main.yml](.github/workflows/release-from-main.yml) | Prueba `main`, calcula la versión, crea `release/vX.Y.Z`, tag y GitHub Release, y abre la PR de la siguiente versión `.devN` |
-| [publish-packages.yml](.github/workflows/publish-packages.yml) | Valida y publica los paquetes de release |
+| [release-from-main.yml](.github/workflows/release-from-main.yml) | Job `test` de solo lectura; el job `create-release` (único con permisos de escritura) calcula la versión, crea `release/vX.Y.Z`, tag y GitHub Release, y abre la PR de la siguiente versión `.devN` |
+| [publish-packages.yml](.github/workflows/publish-packages.yml) | Valida y publica los paquetes de release; `id-token: write` solo en el job de PyPI y `contents: write` solo en el de GitHub Release |
 | [sync-rulesets.yml](.github/workflows/sync-rulesets.yml) | Sincroniza `.github/rulesets/*.json` con las reglas del repositorio |
 
 La navegación del sitio vive en [mkdocs.yml](mkdocs.yml); la documentación de
 APIs generada por `App.enable_docs()` es independiente de ese sitio.
-Dependabot se configura en `.github/dependabot.yml`.
+Dependabot se configura en `.github/dependabot.yml`. Las acciones de terceros
+se fijan por SHA completo con la versión en un comentario.
 
 ## Git, PRs y versiones
 

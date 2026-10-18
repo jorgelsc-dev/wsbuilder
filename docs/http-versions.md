@@ -73,6 +73,19 @@ Notas de comportamiento que conviene conocer:
 
 - Un handler que lanza responde **500**, igual que en HTTP/1, en vez de
   `RST_STREAM`. Se mantiene la coherencia con el resto del framework.
+- Los handlers se ejecutan fuera del bucle que lee frames, en un pool por
+  conexion (como mucho `MAX_HANDLER_THREADS`, 16, y nunca mas que
+  `MAX_CONCURRENT_STREAMS`). Un handler lento no bloquea `PING`,
+  `WINDOW_UPDATE` ni los demas streams. Un stream que el cliente resetea
+  mientras su handler trabaja no recibe respuesta, y una respuesta que no se
+  puede codificar termina en `RST_STREAM` `INTERNAL_ERROR`.
+- Los campos repetidos de la peticion se combinan como en HTTP/1: `cookie` con
+  `"; "` y el resto con `", "`. Un `host` o `content-length` repetido con
+  valores distintos es una peticion malformada. Los nombres deben ser tokens en
+  minuscula y los valores no pueden contener CR, LF ni NUL ni empezar o acabar
+  en espacio; si no, el stream se resetea con `PROTOCOL_ERROR` (en HTTP/3,
+  `H3_MESSAGE_ERROR`). Un `content-length` que no coincide con los DATA
+  recibidos tambien es `PROTOCOL_ERROR`.
 - Una respuesta mayor que la ventana del par **se encola** y sale cuando llega
   credito. Bloquear pararia todos los demas streams de la conexion.
 - `PRIORITY` se valida pero no se usa: RFC 9113 lo declara obsoleto.
@@ -102,6 +115,11 @@ def algo(request):
 
 - Una respuesta con `stream=` se envia por trozos a medida que el generador los
   produce, en lugar de unirse en memoria. Sirve para SSE y respuestas largas.
+  El productor espera cuando el stream tiene mas de
+  `Http3Server.MAX_PENDING_STREAM_BYTES` (256 KiB) sin enviar; si no hay sitio
+  en `STREAM_STALL_TIMEOUT_SECONDS` (30 s), o el generador falla, el stream se
+  abandona con `RESET_STREAM` (`H3_INTERNAL_ERROR`) en vez de un FIN que haria
+  pasar la respuesta truncada por completa.
 - Un `CONNECT` con `:protocol: websocket` (RFC 9220) se responde 200 y el stream
   queda abierto en ambos sentidos. Las rutas `@app.ws(...)` se ejecutan sobre
   ese stream con la misma API que en HTTP/1.1, asi que el handler no cambia.
@@ -188,7 +206,14 @@ solo describian el pasado, como un ACK, se descartan al retransmitir.
 
 El control de congestion es NewReno: slow start hasta la primera perdida, luego
 crecimiento lineal, con la ventana partida por la mitad y un unico evento de
-congestion por RTT.
+congestion por RTT. Los datos nuevos de los streams solo salen mientras
+`bytes_in_flight` cabe en la ventana; las retransmisiones y los probes de PTO no
+esperan. No hay deteccion de congestion persistente ni pacing.
+
+El emisor tambien respeta el control de flujo del par: `initial_max_data`,
+`initial_max_stream_data_*` y los `MAX_DATA` / `MAX_STREAM_DATA` que llegan
+despues. Un stream bloqueado no frena a los demas, y el bloqueo se anuncia una
+vez por limite con `DATA_BLOCKED` o `STREAM_DATA_BLOCKED`.
 
 ```python
 app.enable_metrics()   # el snapshot incluye rtt, ventana y perdidas

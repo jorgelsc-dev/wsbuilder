@@ -30,6 +30,11 @@ Capacidades principales:
 - `read_replica_*` para lecturas balanceadas.
 - `set_pragma`, `get_pragma`, `checkpoint`, `vacuum`, `optimize`.
 
+`set_pragma` (y los `pragmas` del constructor, de las replicas y del cache)
+solo acepta numeros, booleanos o una palabra clave simple como `WAL` o
+`NORMAL`; cualquier otro valor lanza `ValueError`, porque los PRAGMA no admiten
+parametros enlazados.
+
 Los lotes de escritura ejecutados con `executemany` son atomicos: si una fila
 falla, el prefijo ya procesado se revierte. `replica_count` debe ser mayor que
 cero cuando se construye un pool de replicas.
@@ -93,6 +98,12 @@ Metodos utiles:
 - `all`, `first`, `get`, `values`
 - `count`, `exists`, `update`, `delete`, `create`
 - `where_raw`, `using`
+
+`update()` y `delete()` respetan el slice: con `limit` u `offset` (y su
+`order_by`) solo cambian las filas que seleccionaria la consulta, mediante una
+subconsulta por clave primaria (o `rowid` si el modelo no declara una). Asi
+`Note.objects(db).order_by("-id").limit(1).delete()` borra una sola fila. Sin
+slice el `WHERE` es el de los filtros, como antes.
 
 Ejemplo con replica de lectura:
 
