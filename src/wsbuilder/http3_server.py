@@ -31,6 +31,8 @@ from .quic.packet import (
 )
 
 DEFAULT_MAX_CONNECTIONS = 256
+#: Same ceiling HTTPServer applies to HTTP/1 and HTTP/2 request bodies.
+DEFAULT_MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024
 
 
 def alt_svc_header(port, max_age=86400):
@@ -63,8 +65,12 @@ class Http3Server:
     ACCEPT_TIMEOUT_SECONDS = 0.02
 
     def __init__(self, host, port, app, tls, *, max_connections=DEFAULT_MAX_CONNECTIONS,
-                 require_address_validation=False):
+                 require_address_validation=False,
+                 max_request_body_bytes=DEFAULT_MAX_REQUEST_BODY_BYTES):
         self.host = host
+        self.max_request_body_bytes = int(max_request_body_bytes)
+        if self.max_request_body_bytes < 0:
+            raise ValueError("max_request_body_bytes must be at least 0")
         self.port = port
         self.app = app
         self.tls = tls
@@ -258,7 +264,7 @@ class Http3Server:
             connection.h3_streams = streams
         stream = streams.get(stream_id)
         if stream is None:
-            stream = http3.RequestStream(stream_id)
+            stream = http3.RequestStream(stream_id, max_body_bytes=self.max_request_body_bytes)
             streams[stream_id] = stream
 
         try:
@@ -267,6 +273,19 @@ class Http3Server:
             get_log(self.app).warning("http3", f"stream {stream_id}: {e}")
             if stream.websocket is not None:
                 stream.websocket.push_eof()
+            return []
+
+        if stream.body_rejected:
+            if not stream.answered:
+                from .http import Response
+
+                stream.answered = True
+                self._send_response(
+                    connection,
+                    stream_id,
+                    Response.text("Payload Too Large", status=413),
+                    send_body=True,
+                )
             return []
 
         if stream.websocket is not None:

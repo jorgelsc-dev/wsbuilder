@@ -46,6 +46,20 @@ MAX_DATAGRAM_SIZE = 1350
 #: Largest stream payload put in one frame, leaving room for the packet header.
 STREAM_CHUNK_SIZE = 1000
 
+#: Receive windows we advertise and keep topping up as data is delivered
+#: (RFC 9000 section 4). A peer that writes past them is closed.
+STREAM_RECEIVE_WINDOW = 262144
+CONNECTION_RECEIVE_WINDOW = 1048576
+#: Peer-initiated streams of each kind (bidirectional, unidirectional).
+MAX_PEER_STREAMS = 100
+#: CRYPTO bytes buffered per level before the handshake is refused.
+MAX_CRYPTO_BUFFER = 65536
+
+# Transport error codes (RFC 9000 section 20.1).
+ERROR_FLOW_CONTROL = 0x03
+ERROR_STREAM_LIMIT = 0x04
+ERROR_CRYPTO_BUFFER_EXCEEDED = 0x0D
+
 # Transport parameter identifiers (RFC 9000 section 18.2).
 TP_ORIGINAL_DESTINATION_CONNECTION_ID = 0x00
 TP_MAX_IDLE_TIMEOUT = 0x01
@@ -83,34 +97,62 @@ def decode_transport_parameters(data):
 
 
 class StreamBuffer:
-    """Reassembles one direction of a stream from offset-tagged pieces."""
+    """Reassembles one direction of a stream from offset-tagged pieces.
 
-    def __init__(self):
+    With ``retain=False`` delivered bytes are only counted, not kept: the
+    caller consumes them from ``add``'s return value, so a long-lived stream
+    does not hold its whole history in memory.
+    """
+
+    def __init__(self, *, retain=True, limit=None):
+        self.retain = bool(retain)
         self.data = bytearray()
+        #: Contiguous bytes delivered so far.
+        self.received = 0
+        #: One past the highest byte the peer has sent.
+        self.highest = 0
+        #: Receive limit currently advertised for this stream, if any.
+        self.limit = limit
         self.pending = {}
+        self.pending_bytes = 0
         self.final_size = None
 
     @property
     def complete(self):
-        return self.final_size is not None and len(self.data) >= self.final_size
+        return self.final_size is not None and self.received >= self.final_size
 
     def add(self, offset, payload, fin=False):
         """Returns the newly contiguous bytes, which may be empty."""
         offset = int(offset)
+        self.highest = max(self.highest, offset + len(payload))
         if fin:
             self.final_size = offset + len(payload)
-        if offset > len(self.data):
+        if offset > self.received:
             # Arrived early: hold it until the gap in front is filled.
+            previous = self.pending.get(offset)
+            self.pending_bytes += len(payload) - (len(previous) if previous else 0)
             self.pending[offset] = bytes(payload)
             return b""
-        start = len(self.data) - offset
+        start = self.received - offset
         fresh = bytes(payload[start:]) if start < len(payload) else b""
-        self.data.extend(fresh)
         grew = bytearray(fresh)
-        while len(self.data) in self.pending:
-            queued = self.pending.pop(len(self.data))
-            self.data.extend(queued)
-            grew.extend(queued)
+        self.received += len(fresh)
+        # Held pieces may overlap what just arrived; trim instead of
+        # requiring an exact offset match.
+        while self.pending:
+            ready = [held for held in self.pending if held <= self.received]
+            if not ready:
+                break
+            for held in sorted(ready):
+                queued = self.pending.pop(held)
+                self.pending_bytes -= len(queued)
+                skip = self.received - held
+                if skip < len(queued):
+                    tail = queued[skip:]
+                    grew.extend(tail)
+                    self.received += len(tail)
+        if self.retain:
+            self.data.extend(grew)
         return bytes(grew)
 
 
@@ -137,6 +179,9 @@ class QuicConnection:
         self.crypto_buffers = {level: StreamBuffer() for level in
                                (LEVEL_INITIAL, LEVEL_HANDSHAKE, LEVEL_APPLICATION)}
         self.streams = {}
+        self._recv_max_data = CONNECTION_RECEIVE_WINDOW
+        self._recv_highest_total = 0
+        self._recv_consumed = 0
         # Stream bytes queued from other threads (a WebSocket handler, a
         # streaming response) and sent by the thread that owns the socket.
         self._outbound_lock = threading.Lock()
@@ -177,12 +222,12 @@ class QuicConnection:
     def _transport_parameters(self):
         values = {
             TP_INITIAL_SOURCE_CONNECTION_ID: self.host_cid,
-            TP_INITIAL_MAX_DATA: 1048576,
-            TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: 262144,
-            TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE: 262144,
-            TP_INITIAL_MAX_STREAM_DATA_UNI: 262144,
-            TP_INITIAL_MAX_STREAMS_BIDI: 100,
-            TP_INITIAL_MAX_STREAMS_UNI: 100,
+            TP_INITIAL_MAX_DATA: CONNECTION_RECEIVE_WINDOW,
+            TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: STREAM_RECEIVE_WINDOW,
+            TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE: STREAM_RECEIVE_WINDOW,
+            TP_INITIAL_MAX_STREAM_DATA_UNI: STREAM_RECEIVE_WINDOW,
+            TP_INITIAL_MAX_STREAMS_BIDI: MAX_PEER_STREAMS,
+            TP_INITIAL_MAX_STREAMS_UNI: MAX_PEER_STREAMS,
             TP_MAX_IDLE_TIMEOUT: 30000,
             TP_MAX_UDP_PAYLOAD_SIZE: MAX_DATAGRAM_SIZE,
         }
@@ -260,7 +305,14 @@ class QuicConnection:
 
     def _handle_frames(self, level, parsed, outgoing):
         for frame in parsed:
+            if self.closed:
+                return
             if isinstance(frame, qframes.CryptoFrame):
+                if frame.offset + len(frame.data) > MAX_CRYPTO_BUFFER:
+                    self._close_with_error(
+                        level, ERROR_CRYPTO_BUFFER_EXCEEDED, "CRYPTO data exceeds buffer", outgoing
+                    )
+                    return
                 fresh = self.crypto_buffers[level].add(frame.offset, frame.data)
                 if fresh:
                     self._advance_handshake(level, outgoing)
@@ -387,13 +439,48 @@ class QuicConnection:
                 )
 
     def _on_stream_frame(self, frame, outgoing):
-        buffer = self.streams.setdefault(frame.stream_id, StreamBuffer())
+        buffer = self.streams.get(frame.stream_id)
+        if buffer is None:
+            if (frame.stream_id >> 2) >= MAX_PEER_STREAMS:
+                self._close_with_error(
+                    LEVEL_APPLICATION, ERROR_STREAM_LIMIT, "stream limit exceeded", outgoing
+                )
+                return
+            buffer = StreamBuffer(retain=False, limit=STREAM_RECEIVE_WINDOW)
+            self.streams[frame.stream_id] = buffer
+        end = frame.offset + len(frame.data)
+        grown = max(0, end - buffer.highest)
+        if end > buffer.limit or self._recv_highest_total + grown > self._recv_max_data:
+            self._close_with_error(
+                LEVEL_APPLICATION, ERROR_FLOW_CONTROL, "data exceeds the receive window", outgoing
+            )
+            return
+        self._recv_highest_total += grown
         fresh = buffer.add(frame.offset, frame.data, frame.fin)
+        self._recv_consumed += len(fresh)
+        self._replenish_windows(frame.stream_id, buffer, outgoing)
         if self.on_stream_data is None:
             return
         reply = self.on_stream_data(self, frame.stream_id, fresh, buffer.complete)
         if reply:
             outgoing.append((LEVEL_APPLICATION, reply))
+
+    def _replenish_windows(self, stream_id, buffer, outgoing):
+        """Advertise more room once half of a window has been delivered."""
+        frames = []
+        if buffer.final_size is None and buffer.limit - buffer.received < STREAM_RECEIVE_WINDOW // 2:
+            buffer.limit = buffer.received + STREAM_RECEIVE_WINDOW
+            frames.append(qframes.MaxStreamDataFrame(stream_id, buffer.limit))
+        if self._recv_max_data - self._recv_consumed < CONNECTION_RECEIVE_WINDOW // 2:
+            self._recv_max_data = self._recv_consumed + CONNECTION_RECEIVE_WINDOW
+            frames.append(qframes.MaxDataFrame(self._recv_max_data))
+        if frames:
+            outgoing.append((LEVEL_APPLICATION, frames))
+
+    def _close_with_error(self, level, code, reason, outgoing):
+        """Send CONNECTION_CLOSE for a transport error and stop processing."""
+        outgoing.append((level, [qframes.ConnectionCloseFrame(code, reason)]))
+        self.closed = True
 
     # -- sending -------------------------------------------------------
 

@@ -138,6 +138,35 @@ class TestRequestStream(unittest.TestCase):
         self.assertTrue(done)
         self.assertEqual(bytes(stream.body), b"hello world")
 
+    def _post(self, max_body_bytes):
+        stream = RequestStream(4, max_body_bytes=max_body_bytes)
+        stream.feed(encode_frame(FRAME_HEADERS, encode_field_section(request_fields("/e", "POST"))))
+        return stream
+
+    def test_a_body_over_the_limit_is_rejected_and_the_rest_discarded(self):
+        stream = self._post(max_body_bytes=8)
+        self.assertFalse(stream.feed(encode_frame(FRAME_DATA, b"12345")))
+        self.assertFalse(stream.feed(encode_frame(FRAME_DATA, b"6789")))
+        self.assertTrue(stream.body_rejected)
+        self.assertEqual(bytes(stream.body), b"")
+        self.assertFalse(stream.feed(encode_frame(FRAME_DATA, b"more"), fin=True))
+        self.assertTrue(stream.finished)
+
+    def test_a_half_received_oversized_frame_is_rejected(self):
+        stream = self._post(max_body_bytes=8)
+        # A DATA frame announcing 1 MiB: its bytes must not pile up waiting.
+        header = encode_frame(FRAME_DATA, b"x" * (1 << 20))[:8]
+        stream.feed(header)
+        stream.feed(b"x" * 70000)
+        self.assertTrue(stream.body_rejected)
+        self.assertEqual(bytes(stream.buffer), b"")
+
+    def test_a_body_within_the_limit_is_kept(self):
+        stream = self._post(max_body_bytes=8)
+        self.assertTrue(stream.feed(encode_frame(FRAME_DATA, b"12345678"), fin=True))
+        self.assertFalse(stream.body_rejected)
+        self.assertEqual(bytes(stream.body), b"12345678")
+
     def test_a_frame_split_mid_octets_is_reassembled(self):
         whole = encode_frame(FRAME_HEADERS, encode_field_section(request_fields()))
         stream = RequestStream(0)

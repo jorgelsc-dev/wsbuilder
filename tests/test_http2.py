@@ -7,6 +7,7 @@ from wsbuilder.http2 import (
     CONNECTION_PREFACE,
     ERROR_FLOW_CONTROL_ERROR,
     ERROR_FRAME_SIZE_ERROR,
+    ERROR_NO_ERROR,
     ERROR_PROTOCOL_ERROR,
     FLAG_ACK,
     FLAG_END_HEADERS,
@@ -234,14 +235,16 @@ class ConnectionHarness(unittest.TestCase):
             (":authority", "example.test"),
         ]
 
-    def run_connection(self, *chunks, preface=True):
+    def run_connection(self, *chunks, preface=True, **connection_options):
         payload = bytearray()
         if preface:
             payload += CONNECTION_PREFACE + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
         for chunk in chunks:
             payload += chunk
         pipe = Pipe(bytes(payload))
-        Http2Connection(pipe, self.app, client_address=("127.0.0.1", 1234)).serve()
+        Http2Connection(
+            pipe, self.app, client_address=("127.0.0.1", 1234), **connection_options
+        ).serve()
         return frames_in(pipe.sent)
 
     def responses(self, frames):
@@ -287,6 +290,55 @@ class TestConnectionFlow(ConnectionHarness):
         answer = self.responses(frames)[3]
         self.assertIn(b'"length":11', answer["body"])
         self.assertIn(b'"body":"hello world"', answer["body"])
+
+    def _rst_codes(self, frames, stream_id):
+        return [
+            struct.unpack(">I", f.payload)[0]
+            for f in frames
+            if f.type == FRAME_RST_STREAM and f.stream_id == stream_id
+        ]
+
+    def test_a_body_over_the_limit_is_answered_413_and_reset(self):
+        calls = []
+        original = self.app.dispatch
+
+        def spy(request):
+            calls.append(request.path)
+            return original(request)
+
+        self.app.dispatch = spy
+        frames = self.run_connection(
+            self.headers_frame(3, self.request("/echo", "POST"), end_stream=False),
+            Frame(FRAME_DATA, 0, 3, b"x" * 6).serialize(),
+            Frame(FRAME_DATA, 0, 3, b"y" * 6).serialize(),
+            Frame(FRAME_DATA, FLAG_END_STREAM, 3, b"z" * 6).serialize(),
+            self.headers_frame(5, self.request("/hello?n=5")),
+            max_body_bytes=10,
+        )
+        answers = self.responses(frames)
+
+        self.assertEqual(answers[3]["headers"][":status"], "413")
+        self.assertEqual(self._rst_codes(frames, 3), [ERROR_NO_ERROR])
+        self.assertEqual(calls, ["/hello"])
+        # The connection survives and keeps serving other streams.
+        self.assertIn(b'"n":"5"', answers[5]["body"])
+
+    def test_a_declared_content_length_over_the_limit_is_refused_early(self):
+        request = self.request("/echo", "POST") + [("content-length", "1000")]
+        frames = self.run_connection(
+            self.headers_frame(3, request, end_stream=False),
+            max_body_bytes=10,
+        )
+        self.assertEqual(self.responses(frames)[3]["headers"][":status"], "413")
+        self.assertEqual(self._rst_codes(frames, 3), [ERROR_NO_ERROR])
+
+    def test_a_body_within_the_limit_is_served(self):
+        frames = self.run_connection(
+            self.headers_frame(3, self.request("/echo", "POST"), end_stream=False),
+            Frame(FRAME_DATA, FLAG_END_STREAM, 3, b"0123456789").serialize(),
+            max_body_bytes=10,
+        )
+        self.assertIn(b'"length":10', self.responses(frames)[3]["body"])
 
     def test_streams_are_multiplexed(self):
         frames = self.run_connection(
