@@ -4,6 +4,7 @@ import signal
 import socket
 import ssl
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -115,6 +116,49 @@ class TestHTTPServer(unittest.TestCase):
                     b"HTTP/1.1 400 Bad Request",
                     b"".join(conn.sent),
                 )
+
+    def test_content_length_with_too_many_digits_returns_413(self):
+        app = App()
+
+        @app.api("/echo", methods=("POST",))
+        def echo(_request):
+            raise AssertionError("handler must not be called")
+
+        server = HTTPServer("127.0.0.1", 0, app)
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                + b"Content-Length: " + b"9" * 5000 + b"\r\n\r\n"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"HTTP/1.1 413 Payload Too Large", b"".join(conn.sent))
+
+    def test_content_length_leading_zeros_do_not_count_toward_the_limit(self):
+        app = App()
+
+        @app.api("/echo", methods=("POST",))
+        def echo(request):
+            return Response.text(request.body.decode())
+
+        server = HTTPServer("127.0.0.1", 0, app)
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Connection: close\r\n"
+                + b"Content-Length: " + b"0" * 5000 + b"5\r\n\r\nhello"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        sent = b"".join(conn.sent)
+        self.assertIn(b"HTTP/1.1 200 OK", sent)
+        self.assertTrue(sent.endswith(b"hello"))
 
     def test_oversized_query_returns_400(self):
         app = App()
@@ -340,6 +384,33 @@ class TestHTTPServer(unittest.TestCase):
         self.assertEqual(seen["route"], (32, 32))
 
 
+    def test_websocket_frames_sent_with_the_upgrade_reach_the_handler(self):
+        app = App()
+        seen = []
+
+        @app.ws("/ws")
+        def handler(ws, _request):
+            seen.append(ws.recv_frame().payload)
+
+        mask = b"\x01\x02\x03\x04"
+        masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(b"hi"))
+        frame = b"\x81\x82" + mask + masked
+        server = HTTPServer("127.0.0.1", 0, app)
+        conn = DummyConn(
+            [
+                b"GET /ws HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Upgrade: websocket\r\n"
+                b"Connection: Upgrade\r\n"
+                b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                b"Sec-WebSocket-Version: 13\r\n\r\n" + frame
+            ]
+        )
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"101", b"".join(conn.sent))
+        self.assertEqual(seen, [b"hi"])
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -547,6 +618,28 @@ class TestHTTPServerLifecycle(unittest.TestCase):
         server.handle_conn(left, ("127.0.0.1", 0))
 
         self.assertEqual(seen, [0.2])
+
+    def test_idle_keepalive_connection_closes_after_the_keepalive_timeout(self):
+        server = HTTPServer(
+            "127.0.0.1", 0, self._ping_app(), request_read_timeout=5.0, keepalive_timeout=0.2
+        )
+        self._serve(server)
+
+        with socket.create_connection(server.server_address, timeout=3.0) as sock:
+            sock.sendall(b"GET /ping HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            started = time.monotonic()
+            received = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(received.count(b"HTTP/1.1 "), 1)
+        self.assertIn(b"200 OK", received)
+        self.assertNotIn(b"408", received)
+        self.assertLess(elapsed, 2.0)
 
 
 class TestHTTPServerLimits(unittest.TestCase):

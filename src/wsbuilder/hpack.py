@@ -157,6 +157,14 @@ class HPACKError(Exception):
     """A header block that cannot be decoded. Always a connection error."""
 
 
+class HeaderListTooLarge(Exception):
+    """A decoded header list over the caller's limit.
+
+    Raised only after the whole block was decoded, so the dynamic table is
+    still in step with the peer and only the request has to be refused.
+    """
+
+
 def _build_huffman_tree():
     """Bit-trie for decoding: nested lists indexed by bit."""
     root = [None, None]
@@ -292,16 +300,20 @@ def decode_string(data, offset):
     raw = bytes(data[offset:end])
     if huffman:
         raw = huffman_decode(raw)
-    return raw.decode("utf-8", errors="strict"), end
+    # Field values may carry obs-text (RFC 9110 section 5.5); ISO-8859-1 maps
+    # every octet, as the HTTP/1 parser does.
+    return raw.decode("iso-8859-1"), end
 
 
 class DynamicTable:
     """The half of the header table that both peers mutate in step."""
 
-    def __init__(self, max_size=DEFAULT_DYNAMIC_TABLE_SIZE):
+    def __init__(self, max_size=DEFAULT_DYNAMIC_TABLE_SIZE, encoding="utf-8"):
         self._entries = []
         self._size = 0
         self._max_size = int(max_size)
+        #: How the entries' strings map to octets, which is what size counts.
+        self.encoding = encoding
 
     def __len__(self):
         return len(self._entries)
@@ -319,16 +331,16 @@ class DynamicTable:
         self._evict()
 
     @staticmethod
-    def entry_size(name, value):
-        return len(name.encode("utf-8")) + len(value.encode("utf-8")) + ENTRY_OVERHEAD
+    def entry_size(name, value, encoding="utf-8"):
+        return len(name.encode(encoding)) + len(value.encode(encoding)) + ENTRY_OVERHEAD
 
     def _evict(self):
         while self._size > self._max_size and self._entries:
             name, value = self._entries.pop()
-            self._size -= self.entry_size(name, value)
+            self._size -= self.entry_size(name, value, self.encoding)
 
     def add(self, name, value):
-        cost = self.entry_size(name, value)
+        cost = self.entry_size(name, value, self.encoding)
         if cost > self._max_size:
             # Section 4.4: an oversized insert empties the table instead.
             self._entries.clear()
@@ -373,7 +385,7 @@ class Decoder:
     """Decodes header blocks, keeping the dynamic table in step with the peer."""
 
     def __init__(self, max_size=DEFAULT_DYNAMIC_TABLE_SIZE):
-        self.table = DynamicTable(max_size)
+        self.table = DynamicTable(max_size, encoding="iso-8859-1")
         #: Ceiling the peer may raise the table to, from SETTINGS.
         self.max_allowed_size = int(max_size)
 
@@ -384,21 +396,38 @@ class Decoder:
             return STATIC_TABLE[index]
         return self.table.get(index - STATIC_TABLE_SIZE)
 
-    def decode(self, block):
+    def decode(self, block, max_list_size=None):
+        """Decode ``block``; ``max_list_size`` bounds the RFC 7541 list size.
+
+        Indexed fields can expand a small block into a large list, so past
+        the limit fields are no longer kept, decoding still runs to the end
+        to keep the table in step, and ``HeaderListTooLarge`` is raised.
+        """
         data = bytes(block)
         offset = 0
         headers = []
         saw_field = False
+        list_size = 0
+
+        def keep(field):
+            nonlocal list_size
+            if max_list_size is None:
+                headers.append(field)
+                return
+            list_size += DynamicTable.entry_size(*field, encoding=self.table.encoding)
+            if list_size <= max_list_size:
+                headers.append(field)
+
         while offset < len(data):
             byte = data[offset]
             if byte & 0x80:
                 index, offset = decode_integer(data, offset, 7)
-                headers.append(self._lookup(index))
+                keep(self._lookup(index))
                 saw_field = True
             elif byte & 0x40:
                 name, value, offset = self._decode_literal(data, offset, 6)
                 self.table.add(name, value)
-                headers.append((name, value))
+                keep((name, value))
                 saw_field = True
             elif byte & 0x20:
                 size, offset = decode_integer(data, offset, 5)
@@ -413,8 +442,12 @@ class Decoder:
             else:
                 # 0000 never-indexed and 0001 without-indexing share a shape.
                 name, value, offset = self._decode_literal(data, offset, 4)
-                headers.append((name, value))
+                keep((name, value))
                 saw_field = True
+        if max_list_size is not None and list_size > max_list_size:
+            raise HeaderListTooLarge(
+                f"header list of {list_size} octets over the {max_list_size} limit"
+            )
         return headers
 
     def _decode_literal(self, data, offset, prefix_bits):
@@ -505,6 +538,7 @@ __all__ = [
     "Encoder",
     "HPACKError",
     "HUFFMAN_CODES",
+    "HeaderListTooLarge",
     "NEVER_INDEXED",
     "STATIC_TABLE",
     "STATIC_TABLE_SIZE",

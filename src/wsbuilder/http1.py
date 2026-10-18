@@ -93,6 +93,11 @@ class BufferedReader:
                 return False
         return bytes(self._buffer[: len(prefix)]) == prefix
 
+    def wait_for_data(self):
+        """Block until at least one byte is buffered, reading only if empty."""
+        if not self._buffer:
+            self._fill()
+
     def unread(self, data):
         """Push bytes back so the next read sees them first."""
         if data:
@@ -228,7 +233,7 @@ def client_wants_keep_alive(version, headers):
     return False
 
 
-def response_is_self_delimiting(response, *, send_body=True):
+def response_is_self_delimiting(response, *, send_body=True, version=None):
     """True when the client can tell where the response ends without EOF."""
     status = int(getattr(response, "status", 200))
     if 100 <= status < 200 or status in (204, 304) or not send_body:
@@ -240,6 +245,9 @@ def response_is_self_delimiting(response, *, send_body=True):
     if not getattr(response, "is_stream", False):
         # A buffered body always gets a Content-Length when serialized.
         return True
+    if version == HTTP_1_0:
+        # Chunked coding is never sent to HTTP/1.0, so only EOF delimits.
+        return False
     for name, value in headers.items():
         if str(name).lower() == "transfer-encoding":
             return "chunked" in str(value).lower()
@@ -256,7 +264,7 @@ def should_keep_alive(version, request_headers, response, *, send_body=True, ser
         return False
     if "close" in parse_connection_tokens(getattr(response, "headers", None)):
         return False
-    return response_is_self_delimiting(response, send_body=send_body)
+    return response_is_self_delimiting(response, send_body=send_body, version=version)
 
 
 def connection_header_value(version, keep_alive):

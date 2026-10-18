@@ -5,6 +5,7 @@ from wsbuilder.hpack import (
     Decoder,
     DynamicTable,
     Encoder,
+    HeaderListTooLarge,
     HPACKError,
     decode_integer,
     decode_string,
@@ -205,6 +206,38 @@ class TestRepresentations(unittest.TestCase):
     def test_an_index_past_the_table_is_rejected(self):
         with self.assertRaisesRegex(HPACKError, "out of range"):
             Decoder().decode(h("ff00"))
+
+
+class TestObsText(unittest.TestCase):
+    """Octets 0x80-0xFF in field values decode losslessly, as in HTTP/1."""
+
+    def literal(self, name, value):
+        # Literal header field with incremental indexing, new name, no Huffman.
+        return b"\x40" + encode_integer(len(name), 7) + name + encode_integer(len(value), 7) + value
+
+    def test_a_latin1_value_is_decoded(self):
+        decoder = Decoder()
+        headers = decoder.decode(self.literal(b"x-a", b"caf\xe9"))
+        self.assertEqual(headers, [("x-a", "caf\xe9")])
+        self.assertEqual(headers[0][1].encode("iso-8859-1"), b"caf\xe9")
+
+    def test_the_table_counts_the_octets_the_peer_sent(self):
+        decoder = Decoder()
+        decoder.decode(self.literal(b"x-a", b"caf\xe9"))
+        # RFC 7541 section 4.1: 3 + 4 octets plus 32, as the encoder counts.
+        self.assertEqual(decoder.table.size, 39)
+
+    def test_header_list_limits_count_received_octets(self):
+        literal = self.literal(b"x-a", b"caf\xe9")
+        for block in (literal, b"\xbe"):
+            with self.subTest(block=block):
+                decoder = Decoder()
+                decoder.decode(literal)
+                self.assertEqual(
+                    decoder.decode(block, max_list_size=39), [("x-a", "caf\xe9")]
+                )
+                with self.assertRaises(HeaderListTooLarge):
+                    decoder.decode(block, max_list_size=38)
 
 
 class TestDynamicTable(unittest.TestCase):

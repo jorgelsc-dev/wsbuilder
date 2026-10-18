@@ -55,6 +55,45 @@ class TestORM(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
+    def test_substring_lookups_match_the_value_literally(self):
+        for name in ("50% off", "500 off", "a_b", "axb", "Hello", "back\\slash"):
+            User.create(self.db, username=name)
+
+        def names(**lookup):
+            rows = User.objects(self.db).filter(**lookup).order_by("username").all()
+            return [u.username for u in rows]
+
+        self.assertEqual(names(username__contains="50%"), ["50% off"])
+        self.assertEqual(names(username__contains="_"), ["a_b"])
+        self.assertEqual(names(username__contains="hello"), [])
+        self.assertEqual(names(username__icontains="hello"), ["Hello"])
+        self.assertEqual(names(username__icontains="%"), ["50% off"])
+        self.assertEqual(names(username__icontains="\\"), ["back\\slash"])
+        self.assertEqual(names(username__startswith="a_"), ["a_b"])
+        self.assertEqual(names(username__startswith="h"), [])
+        self.assertEqual(names(username__istartswith="h"), ["Hello"])
+        self.assertEqual(names(username__endswith="_b"), ["a_b"])
+        self.assertEqual(names(username__endswith="LO"), [])
+        self.assertEqual(names(username__iendswith="LO"), ["Hello"])
+        self.assertEqual(names(username__iendswith="_b"), ["a_b"])
+        self.assertEqual(names(username__endswith="xx a_b"), [])
+
+    def test_count_and_exists_respect_limit_and_offset(self):
+        for i in range(5):
+            User.create(self.db, username=f"user{i}", age=i)
+
+        users = User.objects(self.db)
+        self.assertEqual(users.count(), 5)
+        self.assertEqual(users.limit(2).count(), 2)
+        self.assertEqual(users.offset(3).count(), 2)
+        self.assertEqual(users.paginate(3, 2).count(), 1)
+        self.assertEqual(users.filter(age__gte=1).limit(10).count(), 4)
+        self.assertTrue(users.exists())
+        self.assertTrue(users.paginate(3, 2).exists())
+        self.assertFalse(users.offset(5).exists())
+        self.assertFalse(users.limit(0).exists())
+        self.assertFalse(users.filter(age__gt=10).exists())
+
     def test_crud_and_filters(self):
         a = User.create(self.db, username="alice", age=30, active=True)
         b = User.create(self.db, username="bob", age=18, active=True)

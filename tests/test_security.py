@@ -1,5 +1,7 @@
 import json
+import time
 import unittest
+from unittest.mock import patch
 
 from wsbuilder import App, Request, SecurityPolicy
 from wsbuilder.security import _safe_float, _safe_int, _to_ip, _to_network
@@ -201,6 +203,38 @@ class TestSecurityTrackingLimits(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.status, 429)
         self.assertEqual(decision.reason, "rate_limit")
+
+    def test_requests_do_not_sweep_every_client_each_time(self):
+        policy = SecurityPolicy(max_tracked_clients=5000)
+        for index in range(2000):
+            policy.evaluate(_req("GET", "/", client=(f"10.1.{index // 256}.{index % 256}", 1)))
+
+        sweeps = []
+        original = policy._prune_events_locked
+
+        def counting(store, now, window_seconds):
+            sweeps.append(len(store))
+            return original(store, now, window_seconds)
+
+        later = time.time() + 60.0
+        with patch.object(policy, "_prune_events_locked", side_effect=counting), patch(
+            "wsbuilder.security.time.time", return_value=later
+        ):
+            for _ in range(500):
+                policy.evaluate(_req("GET", "/", client=("10.2.0.1", 1)))
+                policy.observe_response(_req("GET", "/", client=("10.2.0.1", 1)), 404)
+
+        # One full pass for the interval, over three stores, not one per call.
+        self.assertEqual(len(sweeps), 3)
+
+    def test_an_expired_block_is_lifted_without_waiting_for_a_sweep(self):
+        policy = SecurityPolicy()
+        with patch("wsbuilder.security.time.time", return_value=1000.0):
+            policy.block_ip("192.0.2.7", duration_seconds=5)
+            self.assertFalse(policy.evaluate(_req("GET", "/", client=("192.0.2.7", 1))).allowed)
+        with patch("wsbuilder.security.time.time", return_value=1000.5 + 5):
+            # Still inside the sweep interval of the call above.
+            self.assertTrue(policy.evaluate(_req("GET", "/", client=("192.0.2.7", 1))).allowed)
 
     def test_temporary_blocks_are_capped(self):
         policy = SecurityPolicy(max_temporary_blocks=8)

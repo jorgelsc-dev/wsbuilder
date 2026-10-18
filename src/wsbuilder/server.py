@@ -31,6 +31,10 @@ class _ReaderWriter:
     def sendall(self, payload):
         return self._conn.sendall(payload)
 
+    def __getattr__(self, name):
+        # Timeouts, close and peer details still belong to the socket.
+        return getattr(self._conn, name)
+
 
 def _first_set(*values):
     for value in values:
@@ -318,11 +322,14 @@ class HTTPServer:
             while True:
                 if served:
                     # Idle time between requests is cheaper to give up than a
-                    # first read, so a reused connection waits less.
+                    # first read, so a reused connection waits less. Only the
+                    # wait for the next request's first bytes uses it; an idle
+                    # connection is closed without a 408.
                     try:
                         conn.settimeout(self.KEEPALIVE_TIMEOUT_SECONDS)
-                    except OSError:
-                        pass
+                        reader.wait_for_data()
+                    except (ConnectionError, OSError):
+                        return
                 try:
                     keep_alive = self._serve_one_request(reader, conn, addr, tls_meta)
                 except (ConnectionError, OSError):
@@ -367,6 +374,7 @@ class HTTPServer:
             client_address=addr,
             max_streams=self.MAX_CONCURRENT_STREAMS,
             max_body_bytes=self.MAX_REQUEST_BODY_BYTES,
+            max_header_bytes=self.MAX_REQUEST_HEADER_BYTES,
         )
         # The reader already owns any bytes read while sniffing, and writes
         # still go straight to the socket.
@@ -492,7 +500,16 @@ class HTTPServer:
             ):
                 send_http_response(conn, Response.text("Invalid Content-Length", status=400))
                 return False
-            cl = int(content_length)
+            # Compare digit counts first: int() refuses very long decimal
+            # strings, and any length longer than the ceiling is too large.
+            significant = content_length.lstrip("0")
+            if len(significant) > len(str(self.MAX_REQUEST_BODY_BYTES)):
+                send_http_response(
+                    conn,
+                    Response.text("Payload Too Large", status=413),
+                )
+                return False
+            cl = int(significant or "0")
             if cl < 0:
                 send_http_response(conn, Response.text("Invalid Content-Length", status=400))
                 return False
@@ -641,8 +658,10 @@ class HTTPServer:
                 if security:
                     security.observe_response(request, handshake_error.status)
                 return False
+            # Frames that arrived with the upgrade request are already in the
+            # reader's buffer, so the WebSocket must read through it.
             ws = handshake_websocket_with_options(
-                conn,
+                _ReaderWriter(reader, conn),
                 addr,
                 headers,
                 supported_subprotocols=ws_route.get("subprotocols", ()),

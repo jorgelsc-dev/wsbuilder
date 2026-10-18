@@ -5,6 +5,7 @@ from wsbuilder import App, Response
 from wsbuilder.hpack import Decoder, Encoder
 from wsbuilder.http2 import (
     CONNECTION_PREFACE,
+    ERROR_ENHANCE_YOUR_CALM,
     ERROR_FLOW_CONTROL_ERROR,
     ERROR_FRAME_SIZE_ERROR,
     ERROR_NO_ERROR,
@@ -25,6 +26,7 @@ from wsbuilder.http2 import (
     MAX_WINDOW_SIZE,
     SETTINGS_INITIAL_WINDOW_SIZE,
     SETTINGS_MAX_FRAME_SIZE,
+    SETTINGS_MAX_HEADER_LIST_SIZE,
     FlowControlWindow,
     Frame,
     Http2Connection,
@@ -332,6 +334,34 @@ class TestConnectionFlow(ConnectionHarness):
         self.assertEqual(self.responses(frames)[3]["headers"][":status"], "413")
         self.assertEqual(self._rst_codes(frames, 3), [ERROR_NO_ERROR])
 
+    def test_finished_streams_are_released(self):
+        chunks = [CONNECTION_PREFACE, Frame(FRAME_SETTINGS, 0, 0, b"").serialize()]
+        for stream_id in range(1, 41, 2):
+            chunks.append(self.headers_frame(stream_id, self.request("/echo", "POST"), False))
+            chunks.append(Frame(FRAME_DATA, FLAG_END_STREAM, stream_id, b"x" * 64).serialize())
+        pipe = Pipe(b"".join(chunks))
+        connection = Http2Connection(pipe, self.app, client_address=("127.0.0.1", 1234))
+        connection.serve()
+
+        answers = self.responses(frames_in(pipe.sent))
+        self.assertEqual(len(answers), 20)
+        self.assertEqual(connection.streams, {})
+
+    def test_headers_on_a_released_reset_stream_are_ignored(self):
+        trailers = [("x-checksum", "abc")]
+        frames = self.run_connection(
+            self.headers_frame(3, self.request("/echo", "POST"), end_stream=False),
+            Frame(FRAME_DATA, 0, 3, b"x" * 20).serialize(),
+            self.headers_frame(3, trailers),
+            self.headers_frame(5, self.request("/hello?n=5")),
+            max_body_bytes=10,
+        )
+        answers = self.responses(frames)
+        self.assertEqual(answers[3]["headers"][":status"], "413")
+        self.assertFalse(any(f.type == FRAME_GOAWAY and struct.unpack(">II", f.payload[:8])[1]
+                             for f in frames))
+        self.assertIn(b'"n":"5"', answers[5]["body"])
+
     def test_a_body_within_the_limit_is_served(self):
         frames = self.run_connection(
             self.headers_frame(3, self.request("/echo", "POST"), end_stream=False),
@@ -339,6 +369,126 @@ class TestConnectionFlow(ConnectionHarness):
             max_body_bytes=10,
         )
         self.assertIn(b'"length":10', self.responses(frames)[3]["body"])
+
+    def test_a_streamed_body_is_sent_as_it_is_produced(self):
+        @self.app.api("/chunks", methods=("GET",))
+        def chunks(_request):
+            return Response.stream(iter([b"one ", b"two ", b"three"]))
+
+        frames = self.run_connection(self.headers_frame(1, self.request("/chunks")))
+        data = [f for f in frames if f.type == FRAME_DATA and f.stream_id == 1]
+        self.assertGreaterEqual(len(data), 3)
+        self.assertEqual(b"".join(f.payload for f in data), b"one two three")
+        self.assertTrue(data[-1].flags & FLAG_END_STREAM)
+        self.assertNotIn("content-length", self.responses(frames)[1]["headers"])
+
+    def test_finished_streamed_responses_are_released_without_another_frame(self):
+        import threading
+
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def body():
+            if release.wait(5.0):
+                yield b"streamed body"
+
+        @self.app.api("/chunks", methods=("GET",))
+        def chunks(_request):
+            return Response.stream(body())
+
+        class ReleaseOnEOF(Pipe):
+            def recv(self, size):
+                if not self.data:
+                    release.set()
+                return super().recv(size)
+
+        pipe = ReleaseOnEOF(
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + self.headers_frame(1, self.request("/chunks"))
+        )
+        connection = Http2Connection(pipe, self.app)
+        connection.serve()
+
+        self.assertEqual(self.responses(frames_in(pipe.sent))[1]["body"], b"streamed body")
+        self.assertEqual(connection.streams, {})
+
+    def test_an_endless_stream_is_held_to_the_window_and_others_are_served(self):
+        produced = []
+
+        def endless():
+            for _ in range(10_000):
+                produced.append(1)
+                yield b"x" * 1024
+
+        @self.app.api("/endless", methods=("GET",))
+        def endless_route(_request):
+            return Response.stream(endless())
+
+        class QuickConnection(Http2Connection):
+            PRODUCER_GRACE_SECONDS = 0.5
+
+        payload = (
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + self.headers_frame(1, self.request("/endless"))
+            + self.headers_frame(3, self.request("/hello?n=3"))
+        )
+        pipe = Pipe(payload)
+        QuickConnection(pipe, self.app, client_address=("127.0.0.1", 1234)).serve()
+        frames = frames_in(pipe.sent)
+
+        sent = sum(len(f.payload) for f in frames if f.type == FRAME_DATA and f.stream_id == 1)
+        # Only the peer's window was sent; the rest was never produced.
+        self.assertLessEqual(sent, 65535)
+        self.assertLess(len(produced), 10_000)
+        self.assertIn(b'"n":"3"', self.responses(frames)[3]["body"])
+
+    def test_a_long_stream_continues_as_the_client_grants_window(self):
+        import socket
+        import threading
+
+        total = 200 * 1024
+
+        @self.app.api("/big", methods=("GET",))
+        def big(_request):
+            return Response.stream(b"y" * 1024 for _ in range(total // 1024))
+
+        server_side, client = socket.socketpair()
+        self.addCleanup(client.close)
+        server_side.settimeout(5.0)
+        client.settimeout(5.0)
+        connection = Http2Connection(server_side, self.app, client_address=("127.0.0.1", 1))
+        thread = threading.Thread(target=connection.serve, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5.0)
+        self.addCleanup(server_side.close)
+
+        client.sendall(
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + self.headers_frame(1, self.request("/big"))
+        )
+        received, ended, buffer = 0, False, b""
+        while not ended:
+            buffer += client.recv(65536)
+            while len(buffer) >= 9:
+                length = int.from_bytes(buffer[:3], "big")
+                if len(buffer) < 9 + length:
+                    break
+                frame_type, flags, stream_id = buffer[3], buffer[4], buffer[5:9]
+                body, buffer = buffer[9 : 9 + length], buffer[9 + length :]
+                if frame_type == FRAME_DATA and int.from_bytes(stream_id, "big") == 1:
+                    received += len(body)
+                    ended = bool(flags & FLAG_END_STREAM)
+                    if body:
+                        grant = struct.pack(">I", len(body))
+                        client.sendall(
+                            Frame(FRAME_WINDOW_UPDATE, 0, 0, grant).serialize()
+                            + Frame(FRAME_WINDOW_UPDATE, 0, 1, grant).serialize()
+                        )
+        self.assertEqual(received, total)
+        client.close()
 
     def test_streams_are_multiplexed(self):
         frames = self.run_connection(
@@ -368,6 +518,54 @@ class TestConnectionFlow(ConnectionHarness):
             Frame(FRAME_CONTINUATION, FLAG_END_HEADERS, 1, rest).serialize(),
         )
         self.assertIn(b'"n":"9"', self.responses(frames)[1]["body"])
+
+    def test_a_continuation_flood_past_the_header_limit_is_fatal(self):
+        block = self.encoder.encode(self.request("/hello"))
+        filler = Frame(FRAME_CONTINUATION, 0, 1, b"\x00" * 1024).serialize()
+        frames = self.run_connection(
+            Frame(FRAME_HEADERS, FLAG_END_STREAM, 1, block).serialize(),
+            *([filler] * 8),
+            max_header_bytes=4096,
+        )
+        goaway = [f for f in frames if f.type == FRAME_GOAWAY][0]
+        self.assertEqual(struct.unpack(">II", goaway.payload[:8])[1], ERROR_ENHANCE_YOUR_CALM)
+
+    def test_the_header_limit_is_advertised(self):
+        frames = self.run_connection(max_header_bytes=4096)
+        settings = [f for f in frames if f.type == FRAME_SETTINGS and not f.flags & FLAG_ACK][0]
+        self.assertIn(
+            struct.pack(">HI", SETTINGS_MAX_HEADER_LIST_SIZE, 4096), settings.payload
+        )
+
+    def test_a_header_list_that_expands_past_the_limit_is_answered_431(self):
+        # One literal indexed into the table, then many one-octet references.
+        fields = self.request("/hello") + [("x-big", "v" * 200)]
+        block = self.encoder.encode(fields)
+        reference = self.encoder.encode([("x-big", "v" * 200)])
+        self.assertEqual(len(reference), 1)
+        frames = self.run_connection(
+            Frame(FRAME_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 1, block + reference * 40)
+            .serialize(),
+            self.headers_frame(3, self.request("/hello?n=3")),
+            max_header_bytes=4096,
+        )
+        answers = self.responses(frames)
+        self.assertEqual(answers[1]["headers"][":status"], "431")
+        self.assertFalse(any(f.type == FRAME_GOAWAY and struct.unpack(">II", f.payload[:8])[1]
+                             for f in frames))
+        # The shared HPACK table stayed in step, so the next stream works.
+        self.assertIn(b'"n":"3"', answers[3]["body"])
+
+    def test_an_obs_text_header_value_is_served(self):
+        block = self.encoder.encode(self.request("/hello?n=7"))
+        # Literal without indexing, new name: x-a: "caf\xe9" (not UTF-8).
+        block += b"\x00\x03x-a\x04caf\xe9"
+        frames = self.run_connection(
+            Frame(FRAME_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 1, block).serialize()
+        )
+        self.assertFalse(any(f.type == FRAME_GOAWAY and struct.unpack(">II", f.payload[:8])[1]
+                             for f in frames))
+        self.assertIn(b'"n":"7"', self.responses(frames)[1]["body"])
 
     def test_a_frame_between_headers_and_continuation_is_fatal(self):
         block = self.encoder.encode(self.request("/hello"))

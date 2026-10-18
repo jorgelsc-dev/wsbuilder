@@ -25,6 +25,13 @@ class TestSQLiteMemoryCache(unittest.TestCase):
         self.assertEqual(self.cache.pop("k"), "v")
         self.assertIsNone(self.cache.get("k"))
 
+    def test_key_prefix_is_matched_literally(self):
+        for key in ("user_1", "userX1", "USER_2", "100%off", "100-off"):
+            self.cache.set(key, 1)
+        self.assertEqual(self.cache.keys(prefix="user_"), ["user_1"])
+        self.assertEqual(self.cache.keys(prefix="100%"), ["100%off"])
+        self.assertEqual(self.cache.keys(prefix="USER"), ["USER_2"])
+
     def test_add_replace_and_delete_many(self):
         self.assertTrue(self.cache.add("k1", "v1"))
         self.assertFalse(self.cache.add("k1", "v2"))

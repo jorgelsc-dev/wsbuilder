@@ -12,6 +12,8 @@ QUIC has and TCP does not.
 
 import socket
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -20,7 +22,7 @@ from . import http3
 from .http3_websocket import Http3WebSocketStream
 from .logs import get_log
 from .quic.address import AddressValidator
-from .quic.connection import QuicConnection
+from .quic.connection import LEVEL_INITIAL, QuicConnection
 from .quic.crypto import retry_integrity_tag
 from .quic.packet import (
     PACKET_INITIAL,
@@ -63,6 +65,12 @@ class Http3Server:
 
     #: Short enough that bytes queued by a handler thread leave promptly.
     ACCEPT_TIMEOUT_SECONDS = 0.02
+    #: Connections silent this long are dropped; matches the max_idle_timeout
+    #: transport parameter the server advertises (RFC 9000 section 10.1).
+    IDLE_TIMEOUT_SECONDS = 30.0
+    #: Threads that run request handlers, so a slow one never holds up the
+    #: socket thread that every connection's packets go through.
+    MAX_DISPATCH_WORKERS = 32
 
     def __init__(self, host, port, app, tls, *, max_connections=DEFAULT_MAX_CONNECTIONS,
                  require_address_validation=False,
@@ -85,6 +93,9 @@ class Http3Server:
         self._sock = None
         self._stop = threading.Event()
         self._serving = threading.Event()
+        self._dispatch_pool = ThreadPoolExecutor(
+            max_workers=self.MAX_DISPATCH_WORKERS, thread_name_prefix="http3-dispatch"
+        )
 
     # -- lifecycle -----------------------------------------------------
 
@@ -136,12 +147,12 @@ class Http3Server:
             finally:
                 for connection in {id(c): c for c in self.connections.values()}.values():
                     self._drop(connection)
+                self._dispatch_pool.shutdown(wait=False, cancel_futures=True)
 
     def _tick(self, now=None):
         """Fire any due loss timer, send queued stream bytes, and send what both ask for."""
-        import time as _time
-
-        moment = _time.monotonic() if now is None else now
+        moment = time.monotonic() if now is None else now
+        self._expire_idle(moment)
         sent = 0
         for connection in {id(c): c for c in self.connections.values()}.values():
             deadline = connection.loss_timer()
@@ -167,6 +178,23 @@ class Http3Server:
                     break
         return sent
 
+    def connection_count(self):
+        """Distinct connections; each one is reachable under several ids."""
+        return len({id(c) for c in self.connections.values()})
+
+    def _expire_idle(self, now=None):
+        """Drop connections that have not been heard from within the idle timeout."""
+        moment = time.monotonic() if now is None else now
+        cutoff = moment - self.IDLE_TIMEOUT_SECONDS
+        stale = {
+            id(c): c
+            for c in self.connections.values()
+            if getattr(c, "last_activity", moment) < cutoff
+        }
+        for connection in stale.values():
+            self._drop(connection)
+        return len(stale)
+
     # -- routing -------------------------------------------------------
 
     @staticmethod
@@ -185,18 +213,28 @@ class Http3Server:
         connection = self.connections.get(key)
         if connection is None:
             connection = self.connections.get(bytes(key))
+        now = time.monotonic()
         if connection is None:
-            if len(self.connections) >= self.max_connections:
-                return []
+            if self.connection_count() >= self.max_connections:
+                self._expire_idle(now)
+                if self.connection_count() >= self.max_connections:
+                    return []
             retry = self._maybe_retry(datagram, address)
             if retry is not None:
                 return [retry]
             connection = self._new_connection(address)
+            replies = list(connection.receive_datagram(datagram, address=address))
+            if connection.largest_received[LEVEL_INITIAL] < 0:
+                # Nothing in the datagram opened with the Initial keys, so
+                # it holds no table slot: anyone can send a parseable header.
+                return []
             # The client's chosen id routes its first flight; ours routes
             # everything after the handshake tells it which to use.
             self.connections[bytes(key)] = connection
             self.connections[connection.host_cid] = connection
-        replies = list(connection.receive_datagram(datagram, address=address))
+        else:
+            replies = list(connection.receive_datagram(datagram, address=address))
+        connection.last_activity = now
         # Answers queued while handling this datagram leave in the same reply.
         replies.extend(connection.drain_outbound())
         if connection.closed:
@@ -312,12 +350,28 @@ class Http3Server:
         tls_meta = {"enabled": True, "version": "TLSv1.3", "alpn": connection.alpn}
         try:
             request = http3.build_request(stream, connection.client_address, tls_meta)
-            response = self.app.dispatch(request)
         except http3.H3Error as e:
             get_log(self.app).warning("http3", f"malformed request on stream {stream_id}: {e}")
             return []
-        self._send_response(connection, stream_id, response, send_body=request.method != "HEAD")
+        # The response is queued from the worker; the socket loop sends it.
+        self._dispatch_pool.submit(self._dispatch, connection, stream_id, request)
         return []
+
+    def _dispatch(self, connection, stream_id, request):
+        """Run the app for one request on a worker thread and queue the answer."""
+        from .http import Response
+
+        try:
+            response = self.app.dispatch(request)
+        except Exception as e:
+            get_log(self.app).exception("http3", f"dispatch failed on stream {stream_id}: {e}", e)
+            response = Response.text("Internal Server Error", status=500)
+        if connection.closed:
+            return
+        try:
+            self._send_response(connection, stream_id, response, send_body=request.method != "HEAD")
+        except Exception as e:
+            get_log(self.app).exception("http3", f"response failed on stream {stream_id}: {e}", e)
 
     def _send_response(self, connection, stream_id, response, *, send_body):
         """Queue a response. A streamed body is sent chunk by chunk as it is produced."""

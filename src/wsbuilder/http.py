@@ -8,6 +8,7 @@ from .logs import get_log
 
 MAX_QUERY_FIELDS = 1024
 HTTP_0_9 = "HTTP/0.9"
+HTTP_1_0 = "HTTP/1.0"
 HTTP_1_1 = "HTTP/1.1"
 _HTTP_METHOD_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
@@ -256,7 +257,15 @@ def send_http_response(conn, response, *, send_body=True, keep_alive=False, vers
                 headers.pop(name)
         lowermap = {k.lower(): v for k, v in headers.items()}
     elif getattr(response, "is_stream", False):
-        if "transfer-encoding" not in lowermap and "content-length" not in lowermap:
+        if version == HTTP_1_0:
+            # RFC 9112 section 6.1: an HTTP/1.0 client does not understand
+            # Transfer-Encoding, so without a length the close ends the body.
+            for name in list(headers):
+                if name.lower() == "transfer-encoding":
+                    headers.pop(name)
+            if "content-length" not in lowermap:
+                keep_alive = False
+        elif "transfer-encoding" not in lowermap and "content-length" not in lowermap:
             headers["Transfer-Encoding"] = "chunked"
         lowermap = {k.lower(): v for k, v in headers.items()}
     elif "content-length" not in lowermap:

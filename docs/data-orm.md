@@ -81,6 +81,10 @@ Operadores soportados:
 - `field__not_in=[...]`
 - `field__isnull=True`
 
+`like` e `ilike` reciben un patron SQL (`%` y `_` son comodines). `contains`,
+`startswith` y `endswith` comparan el valor literal y distinguen mayusculas;
+sus variantes `i*` tambien son literales pero ignoran mayusculas ASCII.
+
 Metodos utiles:
 
 - `filter`, `exclude`

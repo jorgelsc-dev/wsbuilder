@@ -192,6 +192,26 @@ class TestPersistence(unittest.TestCase):
         streamed.headers.pop("Transfer-Encoding", None)
         self.assertTrue(should_keep_alive(HTTP_1_1, {}, streamed, send_body=False))
 
+    def test_a_chunked_stream_is_not_self_delimiting_for_http_1_0(self):
+        streamed = Response.stream(iter([b"a"]), headers={"Transfer-Encoding": "chunked"})
+        self.assertFalse(should_keep_alive(HTTP_1_0, {"connection": "keep-alive"}, streamed))
+        self.assertTrue(should_keep_alive(HTTP_1_1, {}, streamed))
+
+    def test_a_stream_to_http_1_0_is_close_delimited_without_chunked_coding(self):
+        from wsbuilder.http import send_http_response
+
+        for headers in (None, {"Transfer-Encoding": "chunked"}):
+            with self.subTest(headers=headers):
+                sock = FakeSocket(b"")
+                sock.sent = bytearray()
+                sock.sendall = sock.sent.extend
+                streamed = Response.stream(iter([b"hello", b"world"]), headers=headers)
+                send_http_response(sock, streamed, keep_alive=True, version=HTTP_1_0)
+                head, _, body = bytes(sock.sent).partition(b"\r\n\r\n")
+                self.assertNotIn(b"transfer-encoding", head.lower())
+                self.assertIn(b"Connection: close", head)
+                self.assertEqual(body, b"helloworld")
+
     def test_connection_header_spells_keep_alive_only_for_http_1_0(self):
         self.assertIsNone(connection_header_value(HTTP_1_1, True))
         self.assertEqual(connection_header_value(HTTP_1_0, True), "keep-alive")

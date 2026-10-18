@@ -607,6 +607,28 @@ class QuerySet:
             return key.split("__", 1)
         return key, "eq"
 
+    @staticmethod
+    def _build_text_lookup(column: str, op: str, text: str):
+        """Substring lookups that match ``text`` literally.
+
+        LIKE would read ``%`` and ``_`` in the value as wildcards and fold
+        ASCII case, so the exact variants compare with instr/substr and the
+        ``i`` variants escape the value before LIKE.
+        """
+        if op.startswith("i"):
+            escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = {
+                "icontains": f"%{escaped}%",
+                "istartswith": f"{escaped}%",
+                "iendswith": f"%{escaped}",
+            }[op]
+            return f"LOWER({column}) LIKE LOWER(?) ESCAPE '\\'", [pattern]
+        if op == "contains":
+            return f"instr({column}, ?) > 0", [text]
+        if op == "startswith":
+            return f"substr({column}, 1, length(?)) = ?", [text, text]
+        return f"substr({column}, length({column}) - length(?) + 1) = ?", [text, text]
+
     def _build_lookup(self, field_name: str, op: str, value):
         column = self._column(field_name)
         field = self.model._meta["fields"][field_name]
@@ -631,21 +653,8 @@ class QuerySet:
             return f"{column} LIKE ?", [value]
         if op == "ilike":
             return f"LOWER({column}) LIKE LOWER(?)", [value]
-        if op in {"contains", "icontains"}:
-            pattern = f"%{value}%"
-            if op == "icontains":
-                return f"LOWER({column}) LIKE LOWER(?)", [pattern]
-            return f"{column} LIKE ?", [pattern]
-        if op in {"startswith", "istartswith"}:
-            pattern = f"{value}%"
-            if op == "istartswith":
-                return f"LOWER({column}) LIKE LOWER(?)", [pattern]
-            return f"{column} LIKE ?", [pattern]
-        if op in {"endswith", "iendswith"}:
-            pattern = f"%{value}"
-            if op == "iendswith":
-                return f"LOWER({column}) LIKE LOWER(?)", [pattern]
-            return f"{column} LIKE ?", [pattern]
+        if op in {"contains", "icontains", "startswith", "istartswith", "endswith", "iendswith"}:
+            return self._build_text_lookup(column, op, str(value))
         if op in {"in", "not_in"}:
             values = list(value or [])
             if not values:
@@ -806,7 +815,14 @@ class QuerySet:
             out.append(item)
         return out
 
+    def _is_sliced(self) -> bool:
+        return self.limit_value is not None or self.offset_value is not None
+
     def count(self) -> int:
+        if self._is_sliced():
+            # A slice limits which rows exist, so count what it selects.
+            sql, params = self._build_select(columns=["1"])
+            return int(self._read_scalar(f"SELECT COUNT(*) FROM ({sql})", params, default=0))
         table = quote_identifier(self.model._meta["table"])
         sql = f"SELECT COUNT(*) FROM {table}"
         params = list(self.params)
@@ -815,7 +831,12 @@ class QuerySet:
         return int(self._read_scalar(sql, params, default=0))
 
     def exists(self) -> bool:
-        return self.limit(1).count() > 0
+        sql, params = self._build_select(columns=["1"])
+        if self._is_sliced():
+            sql = f"SELECT 1 FROM ({sql}) LIMIT 1"
+        else:
+            sql += " LIMIT 1"
+        return self._read_fetchone(sql, params) is not None
 
     def update(self, **kwargs) -> int:
         self._assert_writable()
