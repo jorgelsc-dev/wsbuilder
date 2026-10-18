@@ -126,7 +126,7 @@ def __getattr__(name):
 def __dir__():
     return sorted(set(globals()) | _PKI_EXPORTS)
 
-__version__ = "1.0.2.dev0"
+__version__ = "1.0.3.dev0"
 
 __all__ = [
     "App",
