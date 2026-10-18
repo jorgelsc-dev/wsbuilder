@@ -414,7 +414,7 @@ class Decoder:
             if max_list_size is None:
                 headers.append(field)
                 return
-            list_size += DynamicTable.entry_size(*field)
+            list_size += DynamicTable.entry_size(*field, encoding=self.table.encoding)
             if list_size <= max_list_size:
                 headers.append(field)
 

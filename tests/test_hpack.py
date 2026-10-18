@@ -5,6 +5,7 @@ from wsbuilder.hpack import (
     Decoder,
     DynamicTable,
     Encoder,
+    HeaderListTooLarge,
     HPACKError,
     decode_integer,
     decode_string,
@@ -225,6 +226,18 @@ class TestObsText(unittest.TestCase):
         decoder.decode(self.literal(b"x-a", b"caf\xe9"))
         # RFC 7541 section 4.1: 3 + 4 octets plus 32, as the encoder counts.
         self.assertEqual(decoder.table.size, 39)
+
+    def test_header_list_limits_count_received_octets(self):
+        literal = self.literal(b"x-a", b"caf\xe9")
+        for block in (literal, b"\xbe"):
+            with self.subTest(block=block):
+                decoder = Decoder()
+                decoder.decode(literal)
+                self.assertEqual(
+                    decoder.decode(block, max_list_size=39), [("x-a", "caf\xe9")]
+                )
+                with self.assertRaises(HeaderListTooLarge):
+                    decoder.decode(block, max_list_size=38)
 
 
 class TestDynamicTable(unittest.TestCase):

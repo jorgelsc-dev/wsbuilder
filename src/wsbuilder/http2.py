@@ -872,6 +872,8 @@ class Http2Connection:
                     close()
                 except Exception as exc:  # noqa: BLE001 - cleanup only
                     get_log(self.app).warning("http2", f"stream {stream.id} cleanup failed: {exc}")
+            with self._lock:
+                self._release_closed_streams()
 
     def _send_header_block(self, stream_id, block, end_stream):
         limit = self.peer_settings[SETTINGS_MAX_FRAME_SIZE]

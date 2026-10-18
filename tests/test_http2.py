@@ -382,6 +382,37 @@ class TestConnectionFlow(ConnectionHarness):
         self.assertTrue(data[-1].flags & FLAG_END_STREAM)
         self.assertNotIn("content-length", self.responses(frames)[1]["headers"])
 
+    def test_finished_streamed_responses_are_released_without_another_frame(self):
+        import threading
+
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def body():
+            if release.wait(5.0):
+                yield b"streamed body"
+
+        @self.app.api("/chunks", methods=("GET",))
+        def chunks(_request):
+            return Response.stream(body())
+
+        class ReleaseOnEOF(Pipe):
+            def recv(self, size):
+                if not self.data:
+                    release.set()
+                return super().recv(size)
+
+        pipe = ReleaseOnEOF(
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + self.headers_frame(1, self.request("/chunks"))
+        )
+        connection = Http2Connection(pipe, self.app)
+        connection.serve()
+
+        self.assertEqual(self.responses(frames_in(pipe.sent))[1]["body"], b"streamed body")
+        self.assertEqual(connection.streams, {})
+
     def test_an_endless_stream_is_held_to_the_window_and_others_are_served(self):
         produced = []
 
