@@ -333,7 +333,10 @@ def _validated_trailers(fields, stream_id):
         problem = field_name_problem(name) or field_value_problem(value)
         if problem:
             raise StreamError(f"trailer: {problem}", stream_id)
-    return combine_field_values(fields)
+    try:
+        return combine_field_values(fields)
+    except ValueError as exc:
+        raise StreamError(f"trailer: {exc}", stream_id) from exc
 
 
 class Http2Connection:
@@ -795,7 +798,10 @@ class Http2Connection:
         pseudo, regular = validate_request_headers(stream.headers, stream.id)
         target = pseudo.get(":path", "*")
         path, _, query = target.partition("?")
-        headers = combine_field_values(regular)
+        try:
+            headers = combine_field_values(regular)
+        except ValueError as exc:
+            raise StreamError(str(exc), stream.id) from exc
         if ":authority" in pseudo:
             headers.setdefault("host", pseudo[":authority"])
 

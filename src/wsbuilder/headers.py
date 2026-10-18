@@ -27,14 +27,23 @@ def field_value_problem(value):
     return None
 
 
+_SINGLE_VALUE_FIELDS = frozenset({"content-length", "host"})
+
+
 def combine_field_values(fields):
     """Fold repeated fields into one value per name, as HTTP/1 parsing does.
 
     ``cookie`` crumbs are joined with ``"; "`` (RFC 9113 section 8.2.3); any
-    other repeated field with ``", "``.
+    other repeated field with ``", "``. A repeated ``content-length`` or
+    ``host`` is collapsed when identical and raises ``ValueError`` otherwise,
+    as HTTP/1 parsing refuses it.
     """
     headers = {}
     for name, value in fields:
+        if name in _SINGLE_VALUE_FIELDS and name in headers:
+            if headers[name] != value:
+                raise ValueError(f"conflicting duplicate {name} field")
+            continue
         if name in headers:
             separator = "; " if name == "cookie" else ", "
             headers[name] = f"{headers[name]}{separator}{value}"

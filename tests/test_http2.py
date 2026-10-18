@@ -299,6 +299,24 @@ class TestConnectionFlow(ConnectionHarness):
         self.assertIn(b'"cookie":"a=1; b=2"', answer["body"])
         self.assertIn(b'"accept":"text/html, */*"', answer["body"])
 
+    def test_conflicting_host_or_content_length_resets_the_stream(self):
+        for stream_id, extra in (
+            (1, [("host", "a.example"), ("host", "b.example")]),
+            (3, [("content-length", "0"), ("content-length", "7")]),
+        ):
+            with self.subTest(extra=extra):
+                # Each connection has its own HPACK state.
+                self.encoder, self.decoder = Encoder(), Decoder()
+                frames = self.run_connection(self.headers_frame(stream_id, self.request("/hello") + extra))
+                resets = [f for f in frames if f.type == FRAME_RST_STREAM and f.stream_id == stream_id]
+                self.assertEqual(
+                    [struct.unpack(">I", f.payload)[0] for f in resets], [ERROR_PROTOCOL_ERROR]
+                )
+        self.encoder, self.decoder = Encoder(), Decoder()
+        same = self.request("/hello") + [("content-length", "0"), ("content-length", "0")]
+        answer = self.responses(self.run_connection(self.headers_frame(5, same)))[5]
+        self.assertEqual(answer["headers"][":status"], "200")
+
     def test_a_header_value_with_crlf_resets_the_stream(self):
         request = self.request("/hello") + [("x-bad", "v\r\nInjected: 1")]
         frames = self.run_connection(self.headers_frame(1, request))

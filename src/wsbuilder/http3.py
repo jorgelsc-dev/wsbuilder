@@ -286,7 +286,10 @@ def _validated_trailers(fields):
         problem = field_name_problem(name) or field_value_problem(value)
         if problem:
             raise H3Error(f"trailer: {problem}", H3_MESSAGE_ERROR)
-    return combine_field_values(fields)
+    try:
+        return combine_field_values(fields)
+    except ValueError as exc:
+        raise H3Error(f"trailer: {exc}", H3_MESSAGE_ERROR) from exc
 
 
 def build_request(stream, client_address, tls=None):
@@ -296,7 +299,10 @@ def build_request(stream, client_address, tls=None):
     pseudo, regular = validate_request_headers(stream.headers)
     target = pseudo.get(":path", "*")
     path, _, query = target.partition("?")
-    headers = combine_field_values(regular)
+    try:
+        headers = combine_field_values(regular)
+    except ValueError as exc:
+        raise H3Error(str(exc), H3_MESSAGE_ERROR) from exc
     if ":authority" in pseudo:
         headers.setdefault("host", pseudo[":authority"])
     request = Request(

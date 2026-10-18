@@ -261,6 +261,23 @@ class TestRequestFieldHardening(unittest.TestCase):
         self.assertEqual(request.headers["cookie"], "a=1; b=2")
         self.assertEqual(request.headers["accept"], "text/html, */*")
 
+    def _build(self, extra):
+        stream = RequestStream(0)
+        fields = request_fields() + extra
+        stream.feed(encode_frame(FRAME_HEADERS, encode_field_section(fields)), fin=True)
+        return build_request(stream, ("127.0.0.1", 1))
+
+    def test_conflicting_host_or_content_length_is_refused(self):
+        for extra in (
+            [("host", "a.example"), ("host", "b.example")],
+            [("content-length", "5"), ("content-length", "7")],
+        ):
+            with self.subTest(extra=extra):
+                with self.assertRaises(H3Error):
+                    self._build(extra)
+        request = self._build([("content-length", "0"), ("content-length", "0")])
+        self.assertEqual(request.headers["content-length"], "0")
+
 
 class TestRepeatedResponseFields(unittest.TestCase):
     def test_list_values_become_separate_fields(self):
