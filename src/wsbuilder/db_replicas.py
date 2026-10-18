@@ -59,10 +59,13 @@ class DatabaseReplica:
         self.detect_types = detect_types
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.RLock()
+        self._closed = False
 
     def connect(self) -> sqlite3.Connection:
         """Get or create read-only connection."""
         with self._lock:
+            if self._closed:
+                raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
             if self._conn is None:
                 self._conn = sqlite3.connect(
                     f"file:{self.db_path}?mode=ro",
@@ -79,16 +82,17 @@ class DatabaseReplica:
     def close(self):
         """Close the replica connection."""
         with self._lock:
+            self._closed = True
             if self._conn:
                 self._conn.close()
                 self._conn = None
 
     def execute(self, sql: str, params=None):
         """Execute a read-only query."""
-        conn = self.connect()
         if params is None:
             params = ()
         with self._lock:
+            conn = self.connect()
             return conn.execute(sql, tuple(params))
 
     def fetchone(self, sql: str, params=None):
@@ -138,10 +142,13 @@ class DatabaseReplicaPool:
         ]
         self._current_index = 0
         self._lock = threading.RLock()
+        self._closed = False
 
     def get_replica(self) -> DatabaseReplica:
         """Get the next replica in round-robin fashion."""
         with self._lock:
+            if self._closed:
+                raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
             replica = self._replicas[self._current_index]
             self._current_index = (self._current_index + 1) % len(self._replicas)
             return replica
@@ -168,6 +175,10 @@ class DatabaseReplicaPool:
 
     def close_all(self):
         """Close all replica connections."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
         for replica in self._replicas:
             replica.close()
 
@@ -197,6 +208,7 @@ class OptimizedDatabase:
     ):
         self.debug = debug
         self._lock = threading.RLock()
+        self._closed = False
         self._tx_depth = threading.local()
         self._savepoint_sequence = 0
         self.optimization_config = optimization_config or SQLite3OptimizationConfig()
@@ -273,6 +285,10 @@ class OptimizedDatabase:
         if self.debug:
             get_log().info("db", " ".join(str(part) for part in parts))
 
+    def _require_open(self):
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+
     def _get_tx_depth(self) -> int:
         return getattr(self._tx_depth, "value", 0)
 
@@ -311,10 +327,17 @@ class OptimizedDatabase:
             commit = _is_write_statement(sql)
 
         with self._lock:
+            self._require_open()
             self._log("SQL:", sql.strip(), "params=", params)
-            cur = self._conn.execute(sql, tuple(params))
-            if commit and not self.in_transaction():
-                self._conn.commit()
+            auto_commit = bool(commit) and not self.in_transaction()
+            try:
+                cur = self._conn.execute(sql, tuple(params))
+                if auto_commit:
+                    self._conn.commit()
+            except BaseException:
+                if auto_commit:
+                    self._conn.rollback()
+                raise
             return cur
 
     def executemany(
@@ -331,9 +354,11 @@ class OptimizedDatabase:
             commit = _is_write_statement(sql)
 
         with self._lock:
+            self._require_open()
             self._log("SQL many:", sql.strip())
             params = [tuple(p) for p in seq_of_params]
             atomic = bool(commit) or self.in_transaction()
+            auto_commit = bool(commit) and not self.in_transaction()
             savepoint = None
             if atomic:
                 self._savepoint_sequence += 1
@@ -341,24 +366,28 @@ class OptimizedDatabase:
                 self._conn.execute(f"SAVEPOINT {savepoint}")
             try:
                 cur = self._conn.executemany(sql, params)
-            except BaseException:
                 if savepoint is not None:
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                if auto_commit:
+                    self._conn.commit()
+            except BaseException:
+                if auto_commit:
+                    self._conn.rollback()
+                elif savepoint is not None and self._conn.in_transaction:
                     self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                     self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 raise
-            if savepoint is not None:
-                self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-            if commit and not self.in_transaction():
-                self._conn.commit()
             return cur.rowcount
 
     def fetchone(self, sql: str, params=None):
         """Fetch one row."""
-        return self.execute(sql, params).fetchone()
+        with self._lock:
+            return self.execute(sql, params).fetchone()
 
     def fetchall(self, sql: str, params=None):
         """Fetch all rows."""
-        return self.execute(sql, params).fetchall()
+        with self._lock:
+            return self.execute(sql, params).fetchall()
 
     def scalar(self, sql: str, params=None, default=None):
         """Fetch a scalar value."""
@@ -369,21 +398,27 @@ class OptimizedDatabase:
 
     def read_replica_fetchone(self, sql: str, params=None):
         """Execute query on a read replica."""
-        if self._replicas is None:
+        self._require_open()
+        replicas = self._replicas
+        if replicas is None:
             return self.fetchone(sql, params)
-        return self._replicas.fetchone(sql, params)
+        return replicas.fetchone(sql, params)
 
     def read_replica_fetchall(self, sql: str, params=None):
         """Execute query on a read replica."""
-        if self._replicas is None:
+        self._require_open()
+        replicas = self._replicas
+        if replicas is None:
             return self.fetchall(sql, params)
-        return self._replicas.fetchall(sql, params)
+        return replicas.fetchall(sql, params)
 
     def read_replica_scalar(self, sql: str, params=None, default=None):
         """Execute query on a read replica."""
-        if self._replicas is None:
+        self._require_open()
+        replicas = self._replicas
+        if replicas is None:
             return self.scalar(sql, params, default)
-        return self._replicas.scalar(sql, params, default)
+        return replicas.scalar(sql, params, default)
 
     def checkpoint(self, mode: str = "RESTART"):
         """Perform WAL checkpoint."""
@@ -406,9 +441,12 @@ class OptimizedDatabase:
     def close(self):
         """Close the database and all replicas."""
         with self._lock:
-            if self._replicas:
-                self._replicas.close_all()
+            if self._closed:
+                return
+            self._closed = True
             self._conn.close()
+        if self._replicas:
+            self._replicas.close_all()
 
     def __enter__(self):
         return self

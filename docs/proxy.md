@@ -55,6 +55,8 @@ proxy.vhost("api.test.local", name="api-vhost").location("/api").upstream("http:
   `%5c`, tambien `..;param`), se rechaza con `400` antes de evaluar reglas, para
   que no escape de un prefijo ni del `base_path` del target.
 - Las respuestas con `Content-Length` se leen con buffer bajo esos dos limites.
+  Si el upstream cierra antes de entregar la longitud declarada, se responde
+  `502`.
   Las respuestas `chunked`, delimitadas por el cierre de la conexion o
   `text/event-stream` se retransmiten como `Response.stream` por bloques, sin
   cargarlas en memoria. En ese modo no hay plazo total ni limite de bytes: cada

@@ -232,6 +232,28 @@ class TestHeaderValidation(unittest.TestCase):
 
 
 class TestRequestFieldHardening(unittest.TestCase):
+    def test_content_length_matches_data_and_uses_only_ascii_digits(self):
+        for declared in ("4", "2", "-3", "+3", "3.0", "abc", "\xb3", "9" * 5000):
+            with self.subTest(declared=declared[:20]):
+                stream = RequestStream(0)
+                fields = request_fields("/echo", "POST") + [("content-length", declared)]
+                stream.feed(
+                    encode_frame(FRAME_HEADERS, encode_field_section(fields))
+                    + encode_frame(FRAME_DATA, b"abc"), fin=True,
+                )
+                with self.assertRaises(H3Error) as error:
+                    build_request(stream, ("127.0.0.1", 1))
+                self.assertEqual(error.exception.code, 0x010E)
+        for declared, body in (("3", b"abc"), ("0003", b"abc"), ("0", b""), ("0" * 5000 + "3", b"abc")):
+            with self.subTest(declared=declared):
+                stream = RequestStream(0)
+                stream.feed(
+                    encode_frame(FRAME_HEADERS, encode_field_section(
+                        request_fields("/echo", "POST") + [("content-length", declared)]
+                    )) + encode_frame(FRAME_DATA, body), fin=True,
+                )
+                self.assertEqual(build_request(stream, ("127.0.0.1", 1)).body, body)
+
     def test_invalid_values_and_names_are_refused(self):
         bad_fields = [
             ("x-a", "bad\r\nInjected: 1"),

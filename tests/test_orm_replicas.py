@@ -1,8 +1,10 @@
 """Tests for database replicas and SQLite3 optimizations."""
 
 import os
+import sqlite3
 import tempfile
 import threading
+import unittest
 
 from wsbuilder.db_replicas import (
     DatabaseReplica,
@@ -20,6 +22,101 @@ class ReplicaUser(Model):
     id = IntegerField(primary_key=True, auto_increment=True)
     name = TextField()
     email = TextField()
+
+
+class TestDatabaseFailureCleanup(unittest.TestCase):
+    def test_replica_reads_do_not_wait_for_the_primary_transaction(self):
+        for database_type in (Database, OptimizedDatabase):
+            with self.subTest(database=database_type.__name__):
+                with tempfile.TemporaryDirectory() as directory:
+                    path = os.path.join(directory, "database.sqlite")
+                    with database_type(path, enable_replicas=True) as db:
+                        db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+                        db.execute("INSERT INTO items VALUES (1)")
+                        done = threading.Event()
+                        rows = []
+
+                        def read_replica():
+                            try:
+                                rows.append(db.read_replica_scalar("SELECT COUNT(*) FROM items"))
+                            finally:
+                                done.set()
+
+                        with db.transaction():
+                            db.execute("INSERT INTO items VALUES (2)")
+                            reader = threading.Thread(target=read_replica)
+                            reader.start()
+                            completed_during_transaction = done.wait(1.0)
+                        reader.join(1.0)
+                        self.assertTrue(completed_during_transaction)
+                        self.assertEqual(rows, [1])
+
+    def test_failed_automatic_commit_cannot_leak_into_the_next_write(self):
+        for database_type in (Database, OptimizedDatabase):
+            for many in (False, True):
+                with self.subTest(database=database_type.__name__, many=many):
+                    with database_type() as db:
+                        db.execute("CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+                        db.execute(
+                            "CREATE TABLE children (parent_id INTEGER REFERENCES "
+                            "parents(id) DEFERRABLE INITIALLY DEFERRED)"
+                        )
+                        with self.assertRaises(sqlite3.IntegrityError):
+                            if many:
+                                db.executemany("INSERT INTO children VALUES (?)", [(7,)])
+                            else:
+                                db.execute("INSERT INTO children VALUES (?)", (7,))
+                        self.assertFalse(db._conn.in_transaction)
+                        self.assertEqual(db.scalar("SELECT COUNT(*) FROM children"), 0)
+                        db.execute("INSERT INTO parents VALUES (7)")
+                        self.assertEqual(db.scalar("SELECT COUNT(*) FROM children"), 0)
+                        with db.transaction():
+                            db.execute("INSERT INTO children VALUES (7)")
+                        self.assertEqual(db.scalar("SELECT COUNT(*) FROM children"), 1)
+
+    def test_statement_errors_preserve_an_explicit_transaction(self):
+        for database_type in (Database, OptimizedDatabase):
+            with self.subTest(database=database_type.__name__):
+                with database_type() as db:
+                    db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+                    with db.transaction():
+                        db.execute("INSERT INTO items VALUES (1)")
+                        with self.assertRaises(sqlite3.IntegrityError):
+                            db.execute("INSERT INTO items VALUES (1)")
+                        with self.assertRaises(sqlite3.IntegrityError):
+                            db.executemany("INSERT INTO items VALUES (?)", [(2,), (1,)])
+                        self.assertTrue(db.in_transaction())
+                        db.execute("INSERT INTO items VALUES (3)")
+                    self.assertEqual(
+                        [row[0] for row in db.fetchall("SELECT id FROM items ORDER BY id")],
+                        [1, 3],
+                    )
+
+    def test_database_close_permanently_closes_its_replicas(self):
+        for database_type in (Database, OptimizedDatabase):
+            with self.subTest(database=database_type.__name__):
+                with tempfile.TemporaryDirectory() as directory:
+                    path = os.path.join(directory, "database.sqlite")
+                    db = database_type(path, enable_replicas=True, replica_count=1)
+                    db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+                    db.execute("INSERT INTO items VALUES (1)")
+                    self.assertEqual(db.read_replica_scalar("SELECT id FROM items"), 1)
+                    pool = db._replicas
+                    replica = pool._replicas[0]
+                    db.close()
+                    db.close()
+                    for read in (
+                        db.read_replica_scalar,
+                        db.read_replica_fetchone,
+                        db.read_replica_fetchall,
+                        pool.scalar,
+                        replica.scalar,
+                    ):
+                        with self.assertRaises(sqlite3.ProgrammingError):
+                            read("SELECT id FROM items")
+                    self.assertIsNone(replica._conn)
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        replica.connect()
 
 
 def test_sqlite3_optimization_config():
