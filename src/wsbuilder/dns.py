@@ -1,6 +1,9 @@
 import base64
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor
+
+from .logs import get_log
 
 QTYPE_A = 1
 QTYPE_NS = 2
@@ -35,6 +38,14 @@ RCODE_SERVFAIL = 2
 RCODE_NXDOMAIN = 3
 RCODE_NOTIMP = 4
 RCODE_REFUSED = 5
+
+#: Questions accepted per query; anything else is answered with FORMERR.
+MAX_QUESTIONS = 1
+#: Classic DNS-over-UDP response size limit (RFC 1035 section 4.2.1).
+DNS_UDP_MIN_PAYLOAD = 512
+#: Largest UDP payload honoured from an EDNS(0) OPT record (RFC 6891).
+DEFAULT_MAX_UDP_PAYLOAD = 1232
+FLAG_TC = 0x0200
 
 
 TYPE_CODES = {
@@ -292,22 +303,78 @@ def _decode_name(data, offset):
     return ".".join(labels).lower(), next_offset
 
 
-def _parse_query(data):
+def _parse_header(data):
     if len(data) < 12:
         raise ValueError("invalid DNS packet: header too short")
-
     txid = int.from_bytes(data[0:2], byteorder="big", signed=False)
     flags = int.from_bytes(data[2:4], byteorder="big", signed=False)
-    qdcount = int.from_bytes(data[4:6], byteorder="big", signed=False)
-    offset = 12
+    counts = tuple(
+        int.from_bytes(data[index : index + 2], byteorder="big", signed=False)
+        for index in (4, 6, 8, 10)
+    )
+    return txid, flags, counts
+
+
+def _parse_questions(data, qdcount, offset=12):
     questions = []
     for _ in range(qdcount):
         qname, offset = _decode_name(data, offset)
         qtype, offset = _read_u16(data, offset)
         qclass, offset = _read_u16(data, offset)
         questions.append((qname, qtype, qclass))
+    return questions, offset
 
+
+def _parse_query(data):
+    txid, flags, counts = _parse_header(data)
+    questions, _offset = _parse_questions(data, counts[0])
     return txid, flags, questions
+
+
+def _edns_payload_size(data, offset, counts):
+    """UDP payload size advertised by an OPT record, or ``None`` without one."""
+    _qdcount, ancount, nscount, arcount = counts
+    try:
+        for index in range(ancount + nscount + arcount):
+            _name, offset = _decode_name(data, offset)
+            rtype, offset = _read_u16(data, offset)
+            rclass, offset = _read_u16(data, offset)
+            offset += 4
+            rdlength, offset = _read_u16(data, offset)
+            offset += rdlength
+            if offset > len(data):
+                return None
+            if index >= ancount + nscount and rtype == TYPE_CODES["OPT"]:
+                return rclass
+    except ValueError:
+        return None
+    return None
+
+
+def _truncate_response(response, limit):
+    """Fit ``response`` in ``limit`` bytes, keeping only the question and setting TC."""
+    if len(response) <= limit:
+        return response
+    try:
+        _txid, flags, counts = _parse_header(response)
+        _questions, offset = _parse_questions(response, counts[0])
+    except ValueError:
+        offset = 12
+        counts = (0, 0, 0, 0)
+        flags = int.from_bytes(response[2:4], byteorder="big", signed=False)
+    question_bytes = response[12:offset] if offset <= limit else b""
+    qdcount = counts[0] if question_bytes else 0
+    return b"".join(
+        [
+            response[0:2],
+            _u16(flags | FLAG_TC),
+            _u16(qdcount),
+            _u16(0),
+            _u16(0),
+            _u16(0),
+            question_bytes,
+        ]
+    )
 
 
 def _build_response(
@@ -691,14 +758,26 @@ class LocalDNSServer:
         upstream_servers=None,
         upstream_timeout=1.2,
         fallback_to_upstream=None,
+        *,
+        upstream_workers=4,
+        max_pending_upstream=64,
+        max_udp_payload=DEFAULT_MAX_UDP_PAYLOAD,
+        app=None,
     ):
         self.host = host
         self.port = int(port)
         self.ttl = max(0, int(ttl))
         self.upstream_timeout = max(0.05, float(upstream_timeout))
+        self.upstream_workers = max(1, int(upstream_workers))
+        self.max_pending_upstream = max(1, int(max_pending_upstream))
+        self.max_udp_payload = max(DNS_UDP_MIN_PAYLOAD, min(65535, int(max_udp_payload)))
+        self.app = app
         self._sock = None
         self._thread = None
         self._running = threading.Event()
+        self._executor = None
+        self._executor_lock = threading.Lock()
+        self._pending_upstream = 0
         self._records = {}
         self._upstreams = []
 
@@ -973,38 +1052,123 @@ class LocalDNSServer:
                     sock.close()
         return None
 
-    def _handle_packet(self, data):
-        try:
-            txid, flags, questions = _parse_query(data)
-        except ValueError:
-            return None
+    def _response_limit(self, data, offset, counts):
+        advertised = _edns_payload_size(data, offset, counts)
+        if advertised is None:
+            return DNS_UDP_MIN_PAYLOAD
+        return max(DNS_UDP_MIN_PAYLOAD, min(int(advertised), self.max_udp_payload))
 
-        is_response = bool(flags & 0x8000)
-        opcode = flags & 0x7800
-        if is_response:
-            return None
-        if opcode:
-            return _build_response(txid, flags, questions, [], RCODE_NOTIMP, authoritative=False)
+    def _servfail(self, txid, flags, questions):
+        return _build_response(
+            txid,
+            flags,
+            questions,
+            [],
+            RCODE_SERVFAIL,
+            authoritative=False,
+            recursion_available=True,
+        )
+
+    def _prepare_response(self, data):
+        """Answer ``data`` locally.
+
+        Returns ``(response, forward)``: ``response`` is the datagram to send (or
+        ``None``) and ``forward`` is ``(txid, flags, questions, limit)`` when the
+        query must go to an upstream resolver instead.
+        """
+        try:
+            txid, flags, counts = _parse_header(data)
+        except ValueError:
+            return None, None
+        if flags & 0x8000:
+            return None, None
+        if counts[0] != MAX_QUESTIONS:
+            return _build_response(txid, flags, [], [], RCODE_FORMERR, authoritative=False), None
+        try:
+            questions, offset = _parse_questions(data, counts[0])
+        except ValueError:
+            return None, None
+        limit = self._response_limit(data, offset, counts)
+
+        if flags & 0x7800:
+            response = _build_response(txid, flags, questions, [], RCODE_NOTIMP, authoritative=False)
+            return _truncate_response(response, limit), None
 
         rcode, answers = self._resolve_questions(questions)
         if answers:
-            return _build_response(txid, flags, questions, answers, rcode, authoritative=True)
+            response = _build_response(txid, flags, questions, answers, rcode, authoritative=True)
+            return _truncate_response(response, limit), None
 
         if self.fallback_to_upstream:
-            upstream_response = self._forward_to_upstream(data)
-            if upstream_response is not None:
-                return upstream_response
-            return _build_response(
-                txid,
-                flags,
-                questions,
-                [],
-                RCODE_SERVFAIL,
-                authoritative=False,
-                recursion_available=True,
-            )
+            return None, (txid, flags, questions, limit)
 
-        return _build_response(txid, flags, questions, answers, rcode, authoritative=True)
+        response = _build_response(txid, flags, questions, answers, rcode, authoritative=True)
+        return _truncate_response(response, limit), None
+
+    def _forward_response(self, data, forward):
+        txid, flags, questions, limit = forward
+        upstream_response = self._forward_to_upstream(data)
+        if upstream_response is None:
+            upstream_response = self._servfail(txid, flags, questions)
+        return _truncate_response(upstream_response, limit)
+
+    def _handle_packet(self, data):
+        response, forward = self._prepare_response(data)
+        if forward is not None:
+            return self._forward_response(data, forward)
+        return response
+
+    def _send(self, response, addr):
+        sock = self._sock
+        if sock is None or not response:
+            return
+        try:
+            sock.sendto(response, addr)
+        except OSError as exc:
+            if self._running.is_set():
+                get_log(self.app).warning(
+                    "dns.send_error", f"DNS response to {addr!r} not sent: {exc}"
+                )
+
+    def _get_executor(self):
+        with self._executor_lock:
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(
+                    max_workers=self.upstream_workers,
+                    thread_name_prefix=f"wsbuilder-dns-upstream-{self.port}",
+                )
+            return self._executor
+
+    def _forward_in_background(self, data, addr, forward):
+        with self._executor_lock:
+            if self._pending_upstream >= self.max_pending_upstream:
+                saturated = True
+            else:
+                saturated = False
+                self._pending_upstream += 1
+        if saturated:
+            txid, flags, questions, limit = forward
+            self._send(_truncate_response(self._servfail(txid, flags, questions), limit), addr)
+            return
+
+        def run():
+            try:
+                self._send(self._forward_response(data, forward), addr)
+            except Exception as exc:
+                get_log(self.app).exception("dns.upstream_error", "DNS upstream forward failed", exc)
+
+        def release(_future=None):
+            with self._executor_lock:
+                self._pending_upstream = max(0, self._pending_upstream - 1)
+
+        try:
+            future = self._get_executor().submit(run)
+        except RuntimeError:
+            # The executor was shut down by close(); drop the query.
+            release()
+            return
+        # Runs on completion and on cancellation by close().
+        future.add_done_callback(release)
 
     def _open_socket(self):
         if self._sock is not None:
@@ -1025,26 +1189,30 @@ class LocalDNSServer:
         self._running.set()
         try:
             while self._running.is_set():
+                sock = self._sock
+                if sock is None:
+                    break
                 try:
-                    data, addr = self._sock.recvfrom(4096)
+                    data, addr = sock.recvfrom(4096)
                 except TimeoutError:
                     continue
-                except OSError:
-                    if self._running.is_set():
-                        raise
-                    break
+                except OSError as exc:
+                    if not self._running.is_set() or sock.fileno() == -1:
+                        break
+                    # Per-datagram errors (for example ICMP-driven ECONNREFUSED)
+                    # must not stop the service.
+                    get_log(self.app).warning("dns.recv_error", f"DNS receive failed: {exc}")
+                    continue
 
                 try:
-                    response = self._handle_packet(data)
+                    response, forward = self._prepare_response(data)
                 except Exception:
                     # A malformed datagram must not terminate the DNS service loop.
                     continue
-                if response:
-                    try:
-                        self._sock.sendto(response, addr)
-                    except OSError:
-                        if self._running.is_set():
-                            raise
+                if forward is not None:
+                    self._forward_in_background(data, addr, forward)
+                    continue
+                self._send(response, addr)
         finally:
             self._running.clear()
 
@@ -1064,6 +1232,10 @@ class LocalDNSServer:
 
     def close(self):
         self._running.clear()
+        with self._executor_lock:
+            executor, self._executor = self._executor, None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
         if self._sock is not None:
             try:
                 self._sock.close()
