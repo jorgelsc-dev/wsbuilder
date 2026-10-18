@@ -12,6 +12,7 @@ from .http1 import (
     should_keep_alive,
 )
 from .http2 import CONNECTION_PREFACE as HTTP2_PREFACE
+from .logs import get_log
 from .ws import _websocket_handshake_error_response, handshake_websocket_with_options, is_ws_request
 
 
@@ -83,7 +84,7 @@ class HTTPServer:
             return None
 
         def _on_sigterm(_signum, _frame):
-            print("[shutdown] SIGTERM received. stopping server...")
+            get_log(self.app).info("shutdown", "SIGTERM received. stopping server...")
             self.stop()
 
         try:
@@ -97,7 +98,7 @@ class HTTPServer:
         with self._workers_lock:
             pending = list(self._workers)
         if pending:
-            print(f"[shutdown] waiting for {len(pending)} open connection(s)...")
+            get_log(self.app).info("shutdown", f"waiting for {len(pending)} open connection(s)...")
         for worker in pending:
             worker.join(max(0.0, deadline - time.monotonic()))
         return self.active_connections()
@@ -119,14 +120,14 @@ class HTTPServer:
             try:
                 hook()
             except Exception as e:
-                print(f"[startup] error: {e}")
+                get_log(self.app).exception("startup", f"error: {e}", e)
 
         s = self._create_listening_socket()
         self._sock = s
         self.server_address = s.getsockname()[:2]
         scheme = "https" if self.ssl_context else "http"
         host, port = self.server_address
-        print(f"Server listening on {scheme}://{host}:{port}/")
+        get_log(self.app).info("server", f"listening on {scheme}://{host}:{port}/")
         worker_limiter = threading.BoundedSemaphore(self.MAX_CONNECTION_WORKERS)
         interrupted = False
         previous_sigterm = self._install_sigterm_handler()
@@ -142,7 +143,7 @@ class HTTPServer:
                     # exhaustion, ...) must not take the whole server down.
                     if self._stop.is_set():
                         break
-                    print(f"[accept] error: {e}")
+                    get_log(self.app).warning("accept", f"error: {e}")
                     continue
                 acquired = worker_limiter.acquire(timeout=self.ACQUIRE_WORKER_TIMEOUT_SECONDS)
                 if not acquired:
@@ -162,7 +163,7 @@ class HTTPServer:
                 t.start()
         except KeyboardInterrupt:
             interrupted = True
-            print("\n[shutdown] interrupted by user (Ctrl+C). stopping server...")
+            get_log(self.app).info("shutdown", "interrupted by user (Ctrl+C). stopping server...")
         finally:
             self._stop.set()
             self._serving.clear()
@@ -171,14 +172,14 @@ class HTTPServer:
                 signal.signal(signal.SIGTERM, previous_sigterm)
             remaining = self._drain_workers()
             if remaining:
-                print(f"[shutdown] {remaining} connection(s) still open after timeout")
+                get_log(self.app).warning("shutdown", f"{remaining} connection(s) still open after timeout")
             try:
                 if hasattr(self.app, "close"):
                     self.app.close()
             except Exception as e:
-                print(f"[shutdown] app.close() error: {e}")
+                get_log(self.app).exception("shutdown", f"app.close() error: {e}", e)
             if interrupted:
-                print("[shutdown] server stopped.")
+                get_log(self.app).info("shutdown", "server stopped.")
 
     def _handle_conn_with_release(self, conn, addr, limiter):
         metrics = getattr(self.app, "metrics", None)
@@ -220,7 +221,7 @@ class HTTPServer:
         except Exception as e:
             # A failed rotation (expired authority, unreachable store) must
             # refuse the connection, not kill the worker and strand the socket.
-            print(f"[tls] could not resolve a context for {addr}: {e}")
+            get_log(self.app).warning("tls", f"could not resolve a context for {addr}: {e}")
             metrics = getattr(self.app, "metrics", None)
             if metrics:
                 metrics.error("tls_context", e)
@@ -243,14 +244,14 @@ class HTTPServer:
                 tls_meta["cipher"] = conn.cipher()
                 tls_meta["version"] = conn.version()
             except ssl.SSLError as e:
-                print(f"[tls] handshake error from {addr}: {e}")
+                get_log(self.app).warning("tls", f"handshake error from {addr}: {e}")
                 try:
                     conn.close()
                 except OSError:
                     pass
                 return
             except Exception as e:
-                print(f"[tls] wrap error from {addr}: {e}")
+                get_log(self.app).warning("tls", f"wrap error from {addr}: {e}")
                 try:
                     conn.close()
                 except OSError:
@@ -320,7 +321,7 @@ class HTTPServer:
         try:
             connection.serve()
         except Exception as e:
-            print(f"[http2] connection error from {addr}: {e}")
+            get_log(self.app).warning("http2", f"connection error from {addr}: {e}")
             if metrics:
                 metrics.error("http2", e)
 
@@ -631,7 +632,7 @@ class HTTPServer:
             try:
                 ws_route["handler"](ws, request)
             except Exception as e:
-                print(f"[ws] error: {e}")
+                get_log(self.app).exception("ws", f"handler error: {e}", e)
                 if metrics:
                     metrics.error("ws_handler", e)
             finally:

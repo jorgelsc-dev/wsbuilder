@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives import serialization
 
 from . import http3
 from .http3_websocket import Http3WebSocketStream
+from .logs import get_log
 from .quic.address import AddressValidator
 from .quic.connection import QuicConnection
 from .quic.crypto import retry_integrity_tag
@@ -99,7 +100,7 @@ class Http3Server:
         self._sock = sock
         self.server_address = sock.getsockname()[:2]
         host, port = self.server_address
-        print(f"HTTP/3 listening on udp://{host}:{port}/")
+        get_log(self.app).info("http3", f"listening on udp://{host}:{port}/")
         self._serving.set()
         try:
             while not self._stop.is_set():
@@ -114,13 +115,13 @@ class Http3Server:
                 except OSError as e:
                     if self._stop.is_set():
                         break
-                    print(f"[http3] receive error: {e}")
+                    get_log(self.app).warning("http3", f"receive error: {e}")
                     continue
                 try:
                     for reply in self.handle_datagram(datagram, address):
                         sock.sendto(reply, address)
                 except Exception as e:
-                    print(f"[http3] error from {address}: {e}")
+                    get_log(self.app).exception("http3", f"error from {address}: {e}", e)
                 self._send_outbound()
         finally:
             self._serving.clear()
@@ -263,7 +264,7 @@ class Http3Server:
         try:
             ready = stream.feed(data, fin=complete)
         except http3.H3Error as e:
-            print(f"[http3] stream {stream_id}: {e}")
+            get_log(self.app).warning("http3", f"stream {stream_id}: {e}")
             if stream.websocket is not None:
                 stream.websocket.push_eof()
             return []
@@ -276,7 +277,7 @@ class Http3Server:
             try:
                 extended = http3.is_extended_connect(stream)
             except http3.H3Error as e:
-                print(f"[http3] malformed request on stream {stream_id}: {e}")
+                get_log(self.app).warning("http3", f"malformed request on stream {stream_id}: {e}")
                 return []
             if extended:
                 # RFC 9220: a WebSocket request is answered at once and its
@@ -294,7 +295,7 @@ class Http3Server:
             request = http3.build_request(stream, connection.client_address, tls_meta)
             response = self.app.dispatch(request)
         except http3.H3Error as e:
-            print(f"[http3] malformed request on stream {stream_id}: {e}")
+            get_log(self.app).warning("http3", f"malformed request on stream {stream_id}: {e}")
             return []
         self._send_response(connection, stream_id, response, send_body=request.method != "HEAD")
         return []
@@ -321,7 +322,7 @@ class Http3Server:
                         break
                     connection.queue_stream_data(stream_id, http3.encode_frame(http3.FRAME_DATA, chunk))
             except Exception as e:
-                print(f"[http3] streaming response on stream {stream_id} failed: {e}")
+                get_log(self.app).exception("http3", f"streaming response on stream {stream_id} failed: {e}", e)
             finally:
                 # Closing the producer lets its own cleanup run (for example a
                 # realtime client deregistering itself) once the peer is gone.
@@ -330,7 +331,7 @@ class Http3Server:
                     if callable(close):
                         close()
                 except Exception as e:
-                    print(f"[http3] streaming cleanup on stream {stream_id} failed: {e}")
+                    get_log(self.app).exception("http3", f"streaming cleanup on stream {stream_id} failed: {e}", e)
                 finally:
                     connection.queue_stream_data(stream_id, b"", fin=True)
 
@@ -342,7 +343,7 @@ class Http3Server:
         try:
             request = http3.build_request(stream, connection.client_address, tls_meta)
         except http3.H3Error as e:
-            print(f"[http3] malformed WebSocket request on stream {stream.id}: {e}")
+            get_log(self.app).warning("http3", f"malformed WebSocket request on stream {stream.id}: {e}")
             connection.queue_stream_data(stream.id, self._refusal(400, "Bad Request"), fin=True)
             return
 
@@ -436,7 +437,7 @@ class Http3Server:
         try:
             route["handler"](ws, request)
         except Exception as e:
-            print(f"[ws] error over HTTP/3: {e}")
+            get_log().exception("ws", f"handler error over HTTP/3: {e}", e)
         finally:
             transport.close()
 

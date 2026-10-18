@@ -65,6 +65,30 @@ logger.event("server_start", host="0.0.0.0", port=8765)
 
 `NDJSONLog` escribe un evento por linea y funciona bien para ingest para herramientas externas.
 
+### Mensajes del framework
+
+Los avisos y errores del propio framework (handlers que fallan, errores TLS,
+arranque y apagado del servidor) pasan por `wsbuilder.logs`:
+
+- sin `enable_logs()`, salen por **stderr** como `[evento] mensaje`; los errores
+  incluyen el traceback completo;
+- con `enable_logs()`, cada mensaje se guarda en el NDJSON con `ts`, `level`,
+  `event`, `message` y, si hubo excepcion, `error.type`, `error.message` y
+  `error.traceback`. Los de nivel `warning` o superior tambien se muestran por
+  stderr.
+
+```python
+logger = app.enable_logs(path="logs/wsbuilder.ndjson", console_level="error")
+logger.info("deploy", "version publicada", version="1.0.3")
+logger.exception("pagos", "fallo el cobro", exc)
+
+from wsbuilder.logs import console
+console.level = "warning"  # sin enable_logs: oculta los mensajes info
+```
+
+Niveles: `debug`, `info`, `warning`, `error`. `console_level=None` deja los
+mensajes solo en el archivo.
+
 ## Docs nativas
 
 `App.enable_docs()` publica una vista HTML y un endpoint JSON con `App.describe()`.
