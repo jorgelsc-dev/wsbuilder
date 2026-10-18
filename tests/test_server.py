@@ -1,10 +1,13 @@
+import io
 import os
 import signal
 import socket
 import threading
 import unittest
+from unittest.mock import patch
 
 from wsbuilder import App, Response
+from wsbuilder.__main__ import main as cli_main
 from wsbuilder.metrics import AppMetrics
 from wsbuilder.security import SecurityDecision
 from wsbuilder.server import HTTPServer
@@ -306,6 +309,35 @@ class TestHTTPServer(unittest.TestCase):
             b"".join(conn.sent),
         )
 
+    def test_websocket_limits_resolve_route_then_server_then_default(self):
+        app = App()
+        seen = {}
+
+        @app.ws("/server-limit")
+        def server_limit(ws, _request):
+            seen["server"] = (ws.max_frame_bytes, ws.max_message_bytes)
+
+        @app.ws("/route-limit", max_message_bytes=32)
+        def route_limit(ws, _request):
+            seen["route"] = (ws.max_frame_bytes, ws.max_message_bytes)
+
+        server = HTTPServer("127.0.0.1", 0, app, max_ws_frame_bytes=128, max_ws_message_bytes=256)
+        for path in ("/server-limit", "/route-limit"):
+            conn = DummyConn(
+                [
+                    f"GET {path} HTTP/1.1\r\n".encode()
+                    + b"Host: example.test\r\n"
+                    b"Upgrade: websocket\r\n"
+                    b"Connection: Upgrade\r\n"
+                    b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    b"Sec-WebSocket-Version: 13\r\n\r\n"
+                ]
+            )
+            server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertEqual(seen["server"], (128, 256))
+        self.assertEqual(seen["route"], (32, 32))
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -480,6 +512,74 @@ class TestHTTPServerLifecycle(unittest.TestCase):
         self.assertFalse(thread.is_alive())
 
 
+class TestHTTPServerLimits(unittest.TestCase):
+    def test_constructor_limits_override_only_this_instance(self):
+        server = HTTPServer(
+            "127.0.0.1",
+            0,
+            App(),
+            max_connection_workers=8,
+            keepalive_timeout=1.5,
+            max_ws_message_bytes=1024,
+            request_read_timeout=None,
+        )
+
+        self.assertEqual(server.MAX_CONNECTION_WORKERS, 8)
+        self.assertEqual(server.KEEPALIVE_TIMEOUT_SECONDS, 1.5)
+        self.assertEqual(server.MAX_WS_MESSAGE_BYTES, 1024)
+        self.assertEqual(server.REQUEST_READ_TIMEOUT_SECONDS, HTTPServer.REQUEST_READ_TIMEOUT_SECONDS)
+        self.assertEqual(HTTPServer.MAX_CONNECTION_WORKERS, 64)
+
+    def test_invalid_limits_are_rejected(self):
+        cases = (
+            ({"max_conections": 4}, TypeError),
+            ({"max_connection_workers": True}, TypeError),
+            ({"max_connection_workers": 0}, ValueError),
+            ({"keepalive_timeout": 0}, ValueError),
+            ({"max_request_body_bytes": -1}, ValueError),
+            ({"max_request_body_bytes": "big"}, ValueError),
+        )
+        for limits, error in cases:
+            with self.subTest(limits=limits), self.assertRaises(error):
+                HTTPServer("127.0.0.1", 0, App(), **limits)
+
+    def test_app_run_forwards_server_limits(self):
+        app = App()
+        captured = []
+
+        def fake_serve_forever(server):
+            captured.append(server)
+
+        with patch.object(HTTPServer, "serve_forever", fake_serve_forever):
+            app.run("127.0.0.1", 0, max_request_body_bytes=1024)
+
+        self.assertEqual(captured[0].MAX_REQUEST_BODY_BYTES, 1024)
+
+    def test_cli_flags_become_server_limits(self):
+        with (
+            patch("sys.argv", ["wsbuilder", "--port", "0", "--max-workers", "4", "--shutdown-timeout", "2.5"]),
+            patch.object(App, "run") as run,
+        ):
+            cli_main()
+
+        _args, kwargs = run.call_args
+        self.assertEqual(kwargs["max_connection_workers"], 4)
+        self.assertEqual(kwargs["graceful_shutdown_timeout"], 2.5)
+        self.assertIsNone(kwargs["max_request_body_bytes"])
+
+    def test_cli_reports_invalid_limits_by_flag(self):
+        stderr = io.StringIO()
+        with (
+            patch("sys.argv", ["wsbuilder", "--port", "0", "--max-workers", "0"]),
+            patch("sys.stderr", stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            cli_main()
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--max-workers must be at least 1", stderr.getvalue())
+
+
 class TestChunkedRequests(unittest.TestCase):
     def _app(self, seen):
         app = App()
@@ -559,6 +659,22 @@ class TestChunkedRequests(unittest.TestCase):
                 b"Host: example.test\r\n"
                 b"Transfer-Encoding: chunked\r\n\r\n"
                 b"10\r\n" + b"x" * 16 + b"\r\n0\r\n\r\n"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"HTTP/1.1 413 Payload Too Large", b"".join(conn.sent))
+        self.assertEqual(seen, [])
+
+    def test_limits_can_be_passed_to_the_constructor(self):
+        seen = []
+        server = HTTPServer("127.0.0.1", 0, self._app(seen), max_request_body_bytes=8)
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Content-Length: 16\r\n\r\n" + b"x" * 16
             ]
         )
 

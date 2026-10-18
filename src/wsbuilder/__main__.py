@@ -184,16 +184,42 @@ def build_demo_app():
     return app
 
 
+#: CLI flag -> HTTPServer limit keyword, type and help.
+CLI_LIMITS = (
+    ("--max-workers", "max_connection_workers", int, "conexiones atendidas a la vez"),
+    ("--max-header-bytes", "max_request_header_bytes", int, "tamano maximo de cabeceras"),
+    ("--max-body-bytes", "max_request_body_bytes", int, "tamano maximo del body"),
+    ("--request-timeout", "request_read_timeout", float, "segundos para leer una peticion"),
+    ("--keepalive-timeout", "keepalive_timeout", float, "segundos de espera entre peticiones"),
+    ("--max-keepalive-requests", "max_keepalive_requests", int, "peticiones por conexion (0 = sin limite)"),
+    ("--shutdown-timeout", "graceful_shutdown_timeout", float, "segundos de espera al apagar"),
+    ("--max-ws-message-bytes", "max_ws_message_bytes", int, "tamano maximo de un mensaje WebSocket"),
+)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Levanta un servidor demo HTTP + WebSocket de wsbuilder"
     )
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host de escucha")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Puerto de escucha")
+    limits = parser.add_argument_group("limites del servidor (por defecto los de HTTPServer)")
+    for flag, option, kind, help_text in CLI_LIMITS:
+        metavar = "SEG" if kind is float else "N"
+        limits.add_argument(
+            flag, dest=option, type=kind, default=None, metavar=metavar, help=help_text
+        )
     args = parser.parse_args()
 
+    server_options = {option: getattr(args, option) for _flag, option, _kind, _help in CLI_LIMITS}
     app = build_demo_app()
-    app.run(args.host, args.port)
+    try:
+        app.run(args.host, args.port, **server_options)
+    except ValueError as exc:
+        message = str(exc)
+        for flag, option, _kind, _help in CLI_LIMITS:
+            message = message.replace(option, flag)
+        parser.error(message)
 
 
 if __name__ == "__main__":

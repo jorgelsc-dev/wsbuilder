@@ -11,10 +11,24 @@ WSBuilder incluye handshake, framing y una clase `WebSocket` para manejar la con
     idle_timeout=15.0,
     keepalive_interval=5.0,
     pong_timeout=3.0,
+    max_message_bytes=256 * 1024,
 )
 def handler(ws, _request):
     ...
 ```
+
+### Limites de tamano
+
+| Opcion | Por defecto | Efecto |
+| --- | --- | --- |
+| `max_frame_bytes` | `2 MiB` | frame mas grande aceptado |
+| `max_message_bytes` | `2 MiB` | mensaje reensamblado mas grande; tambien limita cada frame |
+
+Si un cliente los supera, la conexion se cierra con el codigo `1009`
+(*Message Too Big*) y `recv_frame()` lanza `WebSocketMessageTooBigError`
+(subclase de `WebSocketProtocolError`). Para fijar el limite de todas las
+rutas usa `HTTPServer(..., max_ws_frame_bytes=..., max_ws_message_bytes=...)`;
+el valor de la ruta tiene prioridad sobre el del servidor.
 
 ## Handshake
 

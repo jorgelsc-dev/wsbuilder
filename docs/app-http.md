@@ -250,20 +250,53 @@ Limites por defecto:
 | `MAX_REQUEST_HEADER_BYTES` | `64 KiB` |
 | `MAX_REQUEST_BODY_BYTES` | `2 MiB` |
 | `REQUEST_READ_TIMEOUT_SECONDS` | `10.0` segundos |
+| `KEEPALIVE_TIMEOUT_SECONDS` | `5.0` segundos entre peticiones |
+| `MAX_KEEPALIVE_REQUESTS` | `100` peticiones por conexion |
+| `MAX_CONCURRENT_STREAMS` | `100` streams HTTP/2 |
 | `ACCEPT_TIMEOUT_SECONDS` | `0.5` segundos |
 | `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` | `10.0` segundos de espera al apagar |
 | `HANDLE_SIGTERM` | `True`: `SIGTERM` detiene el servidor de forma ordenada |
+| `MAX_WS_FRAME_BYTES` / `MAX_WS_MESSAGE_BYTES` | `None`: usa los `2 MiB` de `wsbuilder.ws` |
 
-Para cambiarlos, instancia `HTTPServer` manualmente y ajusta atributos antes de
-llamar `serve_forever()`.
+Se cambian con argumentos al crear el servidor, en `app.run()` o desde la CLI.
+Un valor invalido (cero workers, timeout `0`, tamano negativo) lanza
+`ValueError`; una clave desconocida, `TypeError`.
 
 ```python
 from wsbuilder import HTTPServer
 
-server = HTTPServer("127.0.0.1", 8765, app)
-server.MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024
+server = HTTPServer(
+    "127.0.0.1",
+    8765,
+    app,
+    max_connection_workers=128,
+    max_request_body_bytes=4 * 1024 * 1024,
+    keepalive_timeout=2.0,
+)
 server.serve_forever()
+
+# equivalente
+app.run("127.0.0.1", 8765, max_request_body_bytes=4 * 1024 * 1024)
 ```
+
+| Argumento | Atributo | CLI |
+| --- | --- | --- |
+| `max_connection_workers` | `MAX_CONNECTION_WORKERS` | `--max-workers` |
+| `max_request_header_bytes` | `MAX_REQUEST_HEADER_BYTES` | `--max-header-bytes` |
+| `max_request_body_bytes` | `MAX_REQUEST_BODY_BYTES` | `--max-body-bytes` |
+| `request_read_timeout` | `REQUEST_READ_TIMEOUT_SECONDS` | `--request-timeout` |
+| `keepalive_timeout` | `KEEPALIVE_TIMEOUT_SECONDS` | `--keepalive-timeout` |
+| `max_keepalive_requests` | `MAX_KEEPALIVE_REQUESTS` | `--max-keepalive-requests` |
+| `max_concurrent_streams` | `MAX_CONCURRENT_STREAMS` | |
+| `graceful_shutdown_timeout` | `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` | `--shutdown-timeout` |
+| `max_ws_frame_bytes` | `MAX_WS_FRAME_BYTES` | |
+| `max_ws_message_bytes` | `MAX_WS_MESSAGE_BYTES` | `--max-ws-message-bytes` |
+
+```bash
+python -m wsbuilder --max-workers 128 --max-body-bytes 4194304 --shutdown-timeout 5
+```
+
+Asignar los atributos (`server.MAX_REQUEST_BODY_BYTES = ...`) sigue funcionando.
 
 ### Apagado ordenado
 
