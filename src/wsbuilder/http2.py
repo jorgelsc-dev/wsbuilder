@@ -14,6 +14,7 @@ it would desynchronise the decoder for every later stream.
 import struct
 import threading
 
+from .headers import iter_header_fields
 from .hpack import Decoder, Encoder, HeaderListTooLarge, HPACKError
 from .http import Response
 from .logs import get_log
@@ -798,11 +799,11 @@ class Http2Connection:
 
     def send_response(self, stream, response, *, send_body=True):
         fields = [(":status", str(int(response.status)))]
-        for name, value in (response.headers or {}).items():
+        for name, value in iter_header_fields(response.headers):
             lowered = str(name).lower()
             if lowered in FORBIDDEN_HEADERS:
                 continue  # Section 8.2.2: these have no meaning in HTTP/2.
-            fields.append((lowered, str(value)))
+            fields.append((lowered, value))
 
         if send_body and response.is_stream:
             # Sent as it is produced: joining it first would hold an endless

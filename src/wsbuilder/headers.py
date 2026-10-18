@@ -23,6 +23,52 @@ def validate_header_value(value):
     return text
 
 
+def validate_header_field_value(value):
+    """Validate one value, or a list/tuple of values sent as repeated fields.
+
+    A list keeps each value as its own field line (needed for ``Set-Cookie``,
+    which cannot be comma-joined); a single value stays a string.
+    """
+    if isinstance(value, (list, tuple)):
+        if not value:
+            raise ValueError("HTTP header value lists must not be empty")
+        return [validate_header_value(item) for item in value]
+    return validate_header_value(value)
+
+
+def header_values(value):
+    """The field values ``value`` stands for, as a list of strings."""
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def header_value_text(value):
+    """``value`` as one string; list values are joined with ``", "``."""
+    return ", ".join(header_values(value))
+
+
+def iter_header_fields(headers):
+    """Yield ``(name, value)`` per field line, expanding list values."""
+    for name, value in (headers or {}).items():
+        for item in header_values(value):
+            yield name, item
+
+
+def add_header(headers, name, value):
+    """Append ``value`` to ``name``, keeping any existing values as a list."""
+    if headers is None:
+        raise ValueError("headers container is required")
+    header_name = validate_header_name(name)
+    new_values = header_values(validate_header_field_value(value))
+    target = normalize_header_name(header_name)
+    for key in list(headers.keys()):
+        if normalize_header_name(key) == target:
+            headers[key] = header_values(headers[key]) + new_values
+            return
+    headers[header_name] = new_values[0] if len(new_values) == 1 else new_values
+
+
 def get_header(headers, name, default=""):
     if not headers:
         return default
@@ -42,7 +88,7 @@ def set_header(headers, name, value, overwrite=True):
     if headers is None:
         raise ValueError("headers container is required")
     header_name = validate_header_name(name)
-    header_value = validate_header_value(value)
+    header_value = validate_header_field_value(value)
     target = normalize_header_name(header_name)
     for key in list(headers.keys()):
         if normalize_header_name(key) == target:

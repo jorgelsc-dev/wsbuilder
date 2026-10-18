@@ -11,6 +11,7 @@ make HTTP/2 intricate are either handled by QUIC or, in QPACK's case, moved
 onto separate ordered streams.
 """
 
+from .headers import iter_header_fields
 from .qpack import QPACKError, decode_field_section, encode_field_section
 from .quic.varint import decode_varint, encode_varint
 
@@ -305,11 +306,11 @@ def is_extended_connect(stream):
 def build_response_head(status, headers=None):
     """The HEADERS frame that opens a response, with no body after it."""
     fields = [(":status", str(int(status)))]
-    for name, value in (headers or {}).items():
+    for name, value in iter_header_fields(headers):
         lowered = str(name).lower()
         if lowered in FORBIDDEN_HEADERS:
             continue
-        fields.append((lowered, str(value)))
+        fields.append((lowered, value))
     return fields
 
 

@@ -1,6 +1,8 @@
 import unittest
 
 from wsbuilder import (
+    Response,
+    add_header,
     build_set_cookie,
     get_cookie,
     get_header,
@@ -12,6 +14,28 @@ from wsbuilder import (
 
 
 class TestHeadersCookies(unittest.TestCase):
+    def test_add_header_keeps_existing_values_as_a_list(self):
+        headers = {"set-cookie": "a=1"}
+        add_header(headers, "Set-Cookie", "b=2")
+        add_header(headers, "Set-Cookie", ["c=3", "d=4"])
+        add_header(headers, "X-New", "v")
+        self.assertEqual(headers, {"set-cookie": ["a=1", "b=2", "c=3", "d=4"], "X-New": "v"})
+        with self.assertRaises(ValueError):
+            add_header(headers, "Set-Cookie", "bad\r\nInjected: 1")
+
+    def test_response_accepts_list_header_values_and_validates_each(self):
+        response = Response.text("ok", headers={"Set-Cookie": ("a=1", "b=2")})
+        self.assertEqual(response.headers["Set-Cookie"], ["a=1", "b=2"])
+        with self.assertRaises(ValueError):
+            Response(headers={"Set-Cookie": ["a=1", "b=2\nX: y"]})
+        with self.assertRaises(ValueError):
+            Response(headers={"Set-Cookie": []})
+
+    def test_set_header_accepts_list_values(self):
+        headers = {}
+        set_header(headers, "Set-Cookie", ["a=1", "b=2"])
+        self.assertEqual(headers["Set-Cookie"], ["a=1", "b=2"])
+
     def test_header_helpers(self):
         headers = {"Content-Type": "text/plain", "X-Test": "1"}
         self.assertEqual(normalize_header_name(" Content-Type "), "content-type")

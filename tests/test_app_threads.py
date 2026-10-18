@@ -55,7 +55,7 @@ class TestViewThreadRouting(unittest.TestCase):
         self.assertIn("WSBuilder-Thread", response.headers)
         self.assertIn("Set-Cookie", response.headers)
 
-    def test_threaded_view_keeps_the_handlers_own_cookie(self):
+    def test_threaded_view_keeps_the_handlers_cookie_and_adds_affinity(self):
         from wsbuilder import Response
         from wsbuilder.http import send_http_response
 
@@ -71,8 +71,12 @@ class TestViewThreadRouting(unittest.TestCase):
                 request = self._request("/login")
                 request.query = {"name": name}
                 response = app.dispatch(request)
-                cookies = [v for k, v in response.headers.items() if k.lower() == "set-cookie"]
-                self.assertEqual(cookies, ["session=abc; HttpOnly"])
+                keys = [k for k in response.headers if k.lower() == "set-cookie"]
+                self.assertEqual(keys, [name])
+                cookies = response.headers[name]
+                self.assertEqual(cookies[0], "session=abc; HttpOnly")
+                self.assertEqual(len(cookies), 2)
+                self.assertTrue(cookies[1].startswith(f"{app.thread_cookie_name}="))
 
                 sent = bytearray()
 
@@ -82,6 +86,10 @@ class TestViewThreadRouting(unittest.TestCase):
 
                 send_http_response(Sink(), response)
                 self.assertIn(b"200 OK", bytes(sent))
+                lines = bytes(sent).split(b"\r\n")
+                set_cookie_lines = [line for line in lines if line.lower().startswith(b"set-cookie:")]
+                self.assertEqual(len(set_cookie_lines), 2)
+                self.assertIn(b"session=abc; HttpOnly", set_cookie_lines[0])
 
     def test_requests_per_thread_zero_allows_queue_growth(self):
         app = self._new_app()

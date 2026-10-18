@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from ._coerce import safe_float as _safe_float
 from ._coerce import safe_int as _safe_int
 from .cache import SQLiteMemoryCache
+from .headers import header_value_text
 from .http import Response
 
 DEFAULT_VIEW_CACHE_NAMESPACE = "http-view-cache"
@@ -67,7 +68,7 @@ def _normalize_methods(methods):
 
 def _normalize_headers(headers):
     return {
-        str(key or "").strip().lower(): str(value)
+        str(key or "").strip().lower(): header_value_text(value)
         for key, value in (headers or {}).items()
         if str(key or "").strip()
     }
@@ -105,7 +106,7 @@ def _strip_uncacheable_headers(headers):
         low = k.lower()
         if low in _DROP_HEADERS or low in _THREAD_HEADERS:
             continue
-        clean[k] = str(value)
+        clean[k] = header_value_text(value)
     return clean
 
 

@@ -263,6 +263,16 @@ class ConnectionHarness(unittest.TestCase):
 
 
 class TestConnectionFlow(ConnectionHarness):
+    def test_list_header_values_are_sent_as_repeated_fields(self):
+        @self.app.route("/cookies", methods=("GET",))
+        def cookies(_request):
+            return Response.text("ok", headers={"Set-Cookie": ["a=1", "b=2"]})
+
+        frames = self.run_connection(self.headers_frame(1, self.request("/cookies")))
+        headers = [f for f in frames if f.type == FRAME_HEADERS and f.stream_id == 1]
+        fields = self.decoder.decode(headers[0].payload)
+        self.assertEqual([v for n, v in fields if n == "set-cookie"], ["a=1", "b=2"])
+
     def test_settings_are_exchanged_and_acknowledged(self):
         frames = self.run_connection()
         kinds = [(f.type, f.flags) for f in frames]

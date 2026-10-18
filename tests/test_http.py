@@ -21,6 +21,22 @@ class BufferSocket:
 
 
 class TestHTTPCore(unittest.TestCase):
+    def test_list_header_values_are_sent_as_separate_lines(self):
+        sock = BufferSocket()
+        response = Response.text("ok", headers={"Set-Cookie": ["a=1; Path=/", "b=2"]})
+        send_http_response(sock, response)
+        head = b"".join(sock.sent).split(b"\r\n\r\n", 1)[0].split(b"\r\n")
+        self.assertIn(b"Set-Cookie: a=1; Path=/", head)
+        self.assertIn(b"Set-Cookie: b=2", head)
+        self.assertEqual(sum(1 for line in head if line.startswith(b"Set-Cookie:")), 2)
+
+    def test_list_connection_header_value_is_still_understood(self):
+        sock = BufferSocket()
+        response = Response.text("ok", headers={"Connection": ["close"]})
+        send_http_response(sock, response, keep_alive=True)
+        head = b"".join(sock.sent).split(b"\r\n\r\n", 1)[0]
+        self.assertEqual(head.count(b"Connection:"), 1)
+
     def test_request_json_returns_none_for_unparseable_bodies(self):
         def request(body):
             return Request(

@@ -59,7 +59,7 @@ from .framework import (
     parse_query_string,
     proxyi,
 )
-from .headers import get_header, has_header, normalize_header_name, set_header
+from .headers import add_header, get_header, has_header, normalize_header_name, set_header
 from .ia import (
     DataSet,
     DataSummary,
@@ -181,6 +181,7 @@ __all__ = [
     "get_header",
     "has_header",
     "set_header",
+    "add_header",
     "parse_cookie_header",
     "get_cookie",
     "build_set_cookie",

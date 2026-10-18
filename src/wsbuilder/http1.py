@@ -6,7 +6,7 @@ reader rather than a socket so the same code paths are exercised by tests
 without a network.
 """
 
-from .headers import validate_header_name, validate_header_value
+from .headers import header_value_text, validate_header_name, validate_header_value
 
 HTTP_0_9 = "HTTP/0.9"
 HTTP_1_0 = "HTTP/1.0"
@@ -218,7 +218,7 @@ def parse_connection_tokens(headers):
     raw = ""
     for key, value in (headers or {}).items():
         if str(key).lower() == "connection":
-            raw = str(value)
+            raw = header_value_text(value)
             break
     return {token.strip().lower() for token in raw.split(",") if token.strip()}
 
@@ -250,7 +250,7 @@ def response_is_self_delimiting(response, *, send_body=True, version=None):
         return False
     for name, value in headers.items():
         if str(name).lower() == "transfer-encoding":
-            return "chunked" in str(value).lower()
+            return "chunked" in header_value_text(value).lower()
     return False
 
 

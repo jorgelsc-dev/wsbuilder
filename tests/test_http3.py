@@ -10,6 +10,7 @@ from wsbuilder.http3 import (
     build_control_stream,
     build_request,
     build_response_frames,
+    build_response_head,
     decode_settings,
     encode_frame,
     is_reserved_frame_type,
@@ -228,6 +229,17 @@ class TestHeaderValidation(unittest.TestCase):
     def test_a_pseudo_header_after_a_regular_one_is_refused(self):
         with self.assertRaisesRegex(H3Error, "pseudo-header after"):
             validate_request_headers([("accept", "*/*"), (":method", "GET")])
+
+
+class TestRepeatedResponseFields(unittest.TestCase):
+    def test_list_values_become_separate_fields(self):
+        fields = build_response_head(200, {"Set-Cookie": ["a=1", "b=2"], "X-One": "1"})
+        self.assertEqual(fields.count(("set-cookie", "a=1")), 1)
+        self.assertEqual(fields.count(("set-cookie", "b=2")), 1)
+        response = Response.text("ok", headers={"Set-Cookie": ["a=1", "b=2"]})
+        frames, _tail = parse_frames(build_response_frames(response))
+        decoded = decode_field_section(frames[0][1])
+        self.assertEqual([v for n, v in decoded if n == "set-cookie"], ["a=1", "b=2"])
 
 
 class TestEndToEnd(unittest.TestCase):
