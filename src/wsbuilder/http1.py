@@ -6,6 +6,8 @@ reader rather than a socket so the same code paths are exercised by tests
 without a network.
 """
 
+import time
+
 from .headers import header_value_text, validate_header_name, validate_header_value
 
 HTTP_0_9 = "HTTP/0.9"
@@ -51,12 +53,28 @@ class BufferedReader:
     def __init__(self, conn, buffered=b""):
         self._conn = conn
         self._buffer = bytearray(buffered)
+        self._deadline = None
+
+    def set_deadline(self, deadline):
+        """Bound every following socket read by ``deadline`` (``time.monotonic()``).
+
+        Each read waits at most for the time left, and a read attempted after
+        the deadline raises ``TimeoutError``; ``None`` removes the bound.
+        """
+        self._deadline = deadline
 
     @property
     def buffered(self):
         return bytes(self._buffer)
 
     def _fill(self, size=65536):
+        if self._deadline is not None:
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("request read deadline exceeded")
+            settimeout = getattr(self._conn, "settimeout", None)
+            if callable(settimeout):
+                settimeout(remaining)
         chunk = self._conn.recv(size)
         if not chunk:
             raise ConnectionError("connection closed")

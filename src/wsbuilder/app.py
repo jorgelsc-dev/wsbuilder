@@ -1233,6 +1233,39 @@ class App:
             if pool:
                 pool.close()
 
+    def security_response(self, request):
+        """Evaluate the security policy once for ``request``.
+
+        Returns the denial ``Response``, or ``None`` when the request may go
+        on. The request is marked as evaluated, so a later ``dispatch()`` does
+        not count it again; the server calls this with the headers alone,
+        before it answers ``100 Continue`` or reads the body.
+        """
+        security = getattr(self, "security", None)
+        try:
+            request.security_evaluated = True
+        except Exception:
+            pass
+        if not security:
+            return None
+        decision = security.evaluate(request)
+        if decision.allowed:
+            return None
+        cors_allow_origin = self.cors_allow_origin
+        route_for_format = self.router.resolve(request.path, request.method)
+        headers = decision.response_headers()
+        if cors_allow_origin:
+            headers.setdefault("Access-Control-Allow-Origin", cors_allow_origin)
+            if cors_allow_origin != "*":
+                headers.setdefault("Vary", "Origin")
+        if route_for_format and route_for_format.kind == "api":
+            return Response.json(
+                {"status": "error", "message": decision.message, "reason": decision.reason},
+                status=decision.status,
+                headers=headers,
+            )
+        return Response.text(decision.message, status=decision.status, headers=headers)
+
     def dispatch(self, request):
         try:
             request.app = self
@@ -1240,23 +1273,10 @@ class App:
             pass
         cors_allow_origin = self.cors_allow_origin
 
-        security = getattr(self, "security", None)
-        if security:
-            decision = security.evaluate(request)
-            if not decision.allowed:
-                route_for_format = self.router.resolve(request.path, request.method)
-                headers = decision.response_headers()
-                if cors_allow_origin:
-                    headers.setdefault("Access-Control-Allow-Origin", cors_allow_origin)
-                    if cors_allow_origin != "*":
-                        headers.setdefault("Vary", "Origin")
-                if route_for_format and route_for_format.kind == "api":
-                    return Response.json(
-                        {"status": "error", "message": decision.message, "reason": decision.reason},
-                        status=decision.status,
-                        headers=headers,
-                    )
-                return Response.text(decision.message, status=decision.status, headers=headers)
+        if not getattr(request, "security_evaluated", False):
+            denied = self.security_response(request)
+            if denied is not None:
+                return denied
 
         if request.method == "OPTIONS" and not self.router.resolve(
             request.path,

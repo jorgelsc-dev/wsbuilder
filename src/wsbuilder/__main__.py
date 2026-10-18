@@ -189,7 +189,7 @@ CLI_LIMITS = (
     ("--max-workers", "max_connection_workers", int, "conexiones atendidas a la vez"),
     ("--max-header-bytes", "max_request_header_bytes", int, "tamano maximo de cabeceras"),
     ("--max-body-bytes", "max_request_body_bytes", int, "tamano maximo del body"),
-    ("--request-timeout", "request_read_timeout", float, "segundos para leer una peticion"),
+    ("--request-timeout", "request_read_timeout", float, "segundos en total para leer una peticion"),
     ("--keepalive-timeout", "keepalive_timeout", float, "segundos de espera entre peticiones"),
     ("--max-keepalive-requests", "max_keepalive_requests", int, "peticiones por conexion (0 = sin limite)"),
     ("--shutdown-timeout", "graceful_shutdown_timeout", float, "segundos de espera al apagar"),

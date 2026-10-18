@@ -10,6 +10,7 @@ from .headers import (
     validate_header_name,
     validate_header_value,
 )
+from .http1 import encode_chunk, encode_last_chunk
 from .logs import get_log
 
 MAX_QUERY_FIELDS = 1024
@@ -312,14 +313,10 @@ def _send_http_response(conn, response, *, send_body=True, keep_alive=False, ver
         if getattr(response, "is_stream", False):
             use_chunked = "chunked" in lowermap.get("transfer-encoding", "").lower()
             for chunk in _iter_stream_chunks(response.stream):
-                if use_chunked:
-                    conn.sendall(f"{len(chunk):X}\r\n".encode())
-                    conn.sendall(chunk)
-                    conn.sendall(b"\r\n")
-                else:
-                    conn.sendall(chunk)
+                # One write per chunk: size line, data and CRLF together.
+                conn.sendall(encode_chunk(chunk) if use_chunked else chunk)
             if use_chunked:
-                conn.sendall(b"0\r\n\r\n")
+                conn.sendall(encode_last_chunk())
         else:
             conn.sendall(response.body)
     except Exception as e:
