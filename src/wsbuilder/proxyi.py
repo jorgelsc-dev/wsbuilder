@@ -869,7 +869,9 @@ class ProxyRule:
     def choose_target(self, request, *, proxy=None):
         targets = self.enabled_targets()
         if not targets:
-            return None
+            # Every upstream of this rule is disabled: the proxy's default
+            # rule, when there is one, still answers the request.
+            return proxy._fallback_target(request) if proxy is not None else None
         mode = normalize_balance_mode(self.balance or BALANCING_ROUND_ROBIN)
         if mode == BALANCING_ROUND_ROBIN:
             target = self._round_robin(targets)
