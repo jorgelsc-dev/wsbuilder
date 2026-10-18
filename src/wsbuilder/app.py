@@ -455,7 +455,7 @@ class App:
         thread_id = parts[0]
         try:
             normalized = str(uuid.UUID(thread_id))
-        except Exception:
+        except ValueError:
             return ""
 
         issued_text, sig = parts[1], parts[2]

@@ -69,7 +69,7 @@ def _is_valid_websocket_key(value):
         return False
     try:
         decoded = base64.b64decode(raw.encode("ascii"), validate=True)
-    except Exception:
+    except ValueError:
         return False
     return len(decoded) == 16
 

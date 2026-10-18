@@ -21,6 +21,23 @@ class BufferSocket:
 
 
 class TestHTTPCore(unittest.TestCase):
+    def test_request_json_returns_none_for_unparseable_bodies(self):
+        def request(body):
+            return Request(
+                method="POST",
+                path="/",
+                query_string="",
+                headers={},
+                body=body,
+                client=("127.0.0.1", 1234),
+                tls={},
+            )
+
+        self.assertEqual(request(b'{"ok": true}').json(), {"ok": True})
+        for body in (b"", b"{not json", b"[" * 100_000):
+            with self.subTest(body=body[:16]):
+                self.assertIsNone(request(body).json())
+
     def test_query_string_decodes_standard_url_encoding(self):
         parsed = parse_query_string(
             "name=Ana+Mar%C3%ADa&empty=&flag&name=final"
