@@ -495,7 +495,16 @@ class HTTPServer:
             ):
                 send_http_response(conn, Response.text("Invalid Content-Length", status=400))
                 return False
-            cl = int(content_length)
+            # Compare digit counts first: int() refuses very long decimal
+            # strings, and any length longer than the ceiling is too large.
+            significant = content_length.lstrip("0")
+            if len(significant) > len(str(self.MAX_REQUEST_BODY_BYTES)):
+                send_http_response(
+                    conn,
+                    Response.text("Payload Too Large", status=413),
+                )
+                return False
+            cl = int(significant or "0")
             if cl < 0:
                 send_http_response(conn, Response.text("Invalid Content-Length", status=400))
                 return False

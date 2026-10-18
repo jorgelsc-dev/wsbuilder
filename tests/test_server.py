@@ -117,6 +117,49 @@ class TestHTTPServer(unittest.TestCase):
                     b"".join(conn.sent),
                 )
 
+    def test_content_length_with_too_many_digits_returns_413(self):
+        app = App()
+
+        @app.api("/echo", methods=("POST",))
+        def echo(_request):
+            raise AssertionError("handler must not be called")
+
+        server = HTTPServer("127.0.0.1", 0, app)
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                + b"Content-Length: " + b"9" * 5000 + b"\r\n\r\n"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        self.assertIn(b"HTTP/1.1 413 Payload Too Large", b"".join(conn.sent))
+
+    def test_content_length_leading_zeros_do_not_count_toward_the_limit(self):
+        app = App()
+
+        @app.api("/echo", methods=("POST",))
+        def echo(request):
+            return Response.text(request.body.decode())
+
+        server = HTTPServer("127.0.0.1", 0, app)
+        conn = DummyConn(
+            [
+                b"POST /echo HTTP/1.1\r\n"
+                b"Host: example.test\r\n"
+                b"Connection: close\r\n"
+                + b"Content-Length: " + b"0" * 5000 + b"5\r\n\r\nhello"
+            ]
+        )
+
+        server.handle_conn(conn, ("127.0.0.1", 1234))
+
+        sent = b"".join(conn.sent)
+        self.assertIn(b"HTTP/1.1 200 OK", sent)
+        self.assertTrue(sent.endswith(b"hello"))
+
     def test_oversized_query_returns_400(self):
         app = App()
 
