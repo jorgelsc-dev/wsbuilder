@@ -59,7 +59,7 @@ class Request:
     def json(self):
         try:
             return json.loads(self.text())
-        except Exception:
+        except (ValueError, RecursionError):
             return None
 
 

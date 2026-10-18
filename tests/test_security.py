@@ -2,6 +2,7 @@ import json
 import unittest
 
 from wsbuilder import App, Request, SecurityPolicy
+from wsbuilder.security import _safe_float, _safe_int, _to_ip, _to_network
 
 
 def _req(method, path, query_string="", client=("127.0.0.1", 1234), headers=None, tls=None):
@@ -150,6 +151,23 @@ class TestSecurityPolicy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSecurityParsing(unittest.TestCase):
+    def test_numeric_helpers_fall_back_on_unconvertible_values(self):
+        for value in (None, "", "abc", float("inf"), float("nan"), object()):
+            with self.subTest(value=value):
+                self.assertEqual(_safe_int(value, 7), 7)
+        self.assertEqual(_safe_int("12", 7), 12)
+        self.assertEqual(_safe_float(None, 1.5), 1.5)
+        self.assertEqual(_safe_float(10**400, 1.5), 1.5)
+        self.assertEqual(_safe_float("2.5", 1.5), 2.5)
+
+    def test_address_helpers_return_none_for_invalid_text(self):
+        self.assertIsNone(_to_ip("999.1.1.1"))
+        self.assertIsNone(_to_network("not-a-network"))
+        self.assertEqual(str(_to_network("10.0.0.0/8")), "10.0.0.0/8")
+        self.assertEqual(str(_to_ip("::1")), "::1")
 
 
 class TestSecurityTrackingLimits(unittest.TestCase):

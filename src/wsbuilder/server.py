@@ -105,7 +105,7 @@ class HTTPServer:
                 if not acquired:
                     try:
                         conn.close()
-                    except Exception:
+                    except OSError:
                         pass
                     continue
                 t = threading.Thread(
@@ -172,7 +172,7 @@ class HTTPServer:
                 metrics.error("tls_context", e)
             try:
                 conn.close()
-            except Exception:
+            except OSError:
                 pass
             return
         tls_meta = {
@@ -192,14 +192,14 @@ class HTTPServer:
                 print(f"[tls] handshake error from {addr}: {e}")
                 try:
                     conn.close()
-                except Exception:
+                except OSError:
                     pass
                 return
             except Exception as e:
                 print(f"[tls] wrap error from {addr}: {e}")
                 try:
                     conn.close()
-                except Exception:
+                except OSError:
                     pass
                 return
         with conn:
@@ -214,7 +214,7 @@ class HTTPServer:
                     # first read, so a reused connection waits less.
                     try:
                         conn.settimeout(self.KEEPALIVE_TIMEOUT_SECONDS)
-                    except Exception:
+                    except OSError:
                         pass
                 try:
                     keep_alive = self._serve_one_request(reader, conn, addr, tls_meta)
@@ -274,7 +274,7 @@ class HTTPServer:
         security = getattr(self.app, "security", None)
         try:
             conn.settimeout(self.REQUEST_READ_TIMEOUT_SECONDS)
-        except Exception:
+        except OSError:
             pass
         try:
             req = parse_http_request(

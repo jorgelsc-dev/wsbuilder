@@ -29,14 +29,14 @@ DEFAULT_MAX_TEMPORARY_BLOCKS = 20000
 def _safe_int(value, default):
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
 def _safe_float(value, default):
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -46,7 +46,7 @@ def _to_ip(value):
         return None
     try:
         return ipaddress.ip_address(text)
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -56,7 +56,7 @@ def _to_network(value):
         return None
     try:
         return ipaddress.ip_network(text, strict=False)
-    except Exception:
+    except ValueError:
         ip_obj = _to_ip(text)
         if ip_obj is None:
             return None

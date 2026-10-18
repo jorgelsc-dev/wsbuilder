@@ -39,14 +39,14 @@ _DROP_HEADERS = {
 def _safe_float(value, default):
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
 def _safe_int(value, default):
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 

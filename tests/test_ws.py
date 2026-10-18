@@ -8,6 +8,7 @@ from wsbuilder.ws import (
     WebSocketFrame,
     WebSocketProtocolError,
     WebSocketReadTimeoutError,
+    _is_valid_websocket_key,
     base64_encode,
     handshake_websocket_with_options,
     make_ws_frame_bytes,
@@ -332,6 +333,12 @@ if __name__ == "__main__":
 
 
 class TestWebSocketPrimitives(unittest.TestCase):
+    def test_websocket_key_must_be_sixteen_base64_octets(self):
+        self.assertTrue(_is_valid_websocket_key("dGhlIHNhbXBsZSBub25jZQ=="))
+        for key in (None, "", "not base64!", "ñandú", "dGhlIHNhbXBsZQ=="):
+            with self.subTest(key=key):
+                self.assertFalse(_is_valid_websocket_key(key))
+
     def test_unmask_payload_matches_the_per_byte_definition(self):
         mask = b"\x37\xfa\x21\x3d"
         for size in (0, 1, 2, 3, 4, 5, 7, 8, 1023, 4096):
