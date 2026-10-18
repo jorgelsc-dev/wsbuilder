@@ -778,6 +778,7 @@ class LocalDNSServer:
         self._executor = None
         self._executor_lock = threading.Lock()
         self._pending_upstream = 0
+        self._closed = False
         self._records = {}
         self._upstreams = []
 
@@ -1132,6 +1133,8 @@ class LocalDNSServer:
 
     def _get_executor(self):
         with self._executor_lock:
+            if self._closed:
+                raise RuntimeError("DNS server is closed")
             if self._executor is None:
                 self._executor = ThreadPoolExecutor(
                     max_workers=self.upstream_workers,
@@ -1186,6 +1189,8 @@ class LocalDNSServer:
 
     def serve_forever(self):
         self._open_socket()
+        with self._executor_lock:
+            self._closed = False
         self._running.set()
         try:
             while self._running.is_set():
@@ -1220,6 +1225,8 @@ class LocalDNSServer:
         if self._thread and self._thread.is_alive():
             return self._thread
         self._open_socket()
+        with self._executor_lock:
+            self._closed = False
         self._running.set()
         thread = threading.Thread(
             target=self.serve_forever,
@@ -1233,6 +1240,7 @@ class LocalDNSServer:
     def close(self):
         self._running.clear()
         with self._executor_lock:
+            self._closed = True
             executor, self._executor = self._executor, None
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)

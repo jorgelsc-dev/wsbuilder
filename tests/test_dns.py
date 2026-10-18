@@ -562,6 +562,15 @@ class TestDNSHardening(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             executor.submit(lambda: None)
 
+    def test_forward_after_close_does_not_create_executor(self):
+        dns = LocalDNSServer(host="127.0.0.1", port=0, fallback_to_upstream=True)
+        dns.close()
+        query = _build_query("remote.example", 1, 0x120E)
+        _response, forward = dns._prepare_response(query)
+        dns._forward_in_background(query, ("127.0.0.1", 53000), forward)
+        self.assertIsNone(dns._executor)
+        self.assertEqual(dns._pending_upstream, 0)
+
     def test_real_socket_keeps_answering_after_oversized_query(self):
         dns = LocalDNSServer(
             host="127.0.0.1", port=0, records={"a.test": {"TXT": _txt_values("abcde")}}
