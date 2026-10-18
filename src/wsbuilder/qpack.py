@@ -118,10 +118,13 @@ class DynamicTable:
     without depending on how much has been evicted since.
     """
 
-    def __init__(self, capacity=0):
+    def __init__(self, capacity=0, encoding="utf-8"):
         self._entries = []
         self._size = 0
         self._capacity = int(capacity)
+        #: How the entries' strings map to octets, which is what size counts.
+        #: A table fed by ``decode_encoder_stream`` holds ISO-8859-1 strings.
+        self.encoding = encoding
         #: Total insertions ever made, never reduced by eviction.
         self.insert_count = 0
 
@@ -141,17 +144,17 @@ class DynamicTable:
         self._evict()
 
     @staticmethod
-    def entry_size(name, value):
-        return len(name.encode("utf-8")) + len(value.encode("utf-8")) + ENTRY_OVERHEAD
+    def entry_size(name, value, encoding="utf-8"):
+        return len(name.encode(encoding)) + len(value.encode(encoding)) + ENTRY_OVERHEAD
 
     def _evict(self):
         while self._size > self._capacity and self._entries:
             name, value = self._entries.pop(0)
-            self._size -= self.entry_size(name, value)
+            self._size -= self.entry_size(name, value, self.encoding)
 
     def add(self, name, value):
         """Insert, returning the absolute index, or None if it does not fit."""
-        cost = self.entry_size(name, value)
+        cost = self.entry_size(name, value, self.encoding)
         if cost > self._capacity:
             return None
         self._entries.append((name, value))
@@ -281,7 +284,9 @@ def _decode_string(data, offset, prefix_bits):
             raw = huffman_decode(raw)
         except HPACKError as exc:
             raise QPACKError(str(exc)) from exc
-    return raw.decode("utf-8"), end
+    # Field values may carry obs-text (RFC 9110 section 5.5); ISO-8859-1 maps
+    # every octet, as the HTTP/1 parser does.
+    return raw.decode("iso-8859-1"), end
 
 
 def encode_field_section(headers, huffman=True):

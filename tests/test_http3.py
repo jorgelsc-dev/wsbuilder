@@ -297,6 +297,13 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestQpackObsText(unittest.TestCase):
+    def test_a_latin1_literal_value_is_decoded(self):
+        # Prefix (no dynamic table), then a literal with a literal name.
+        section = b"\x00\x00" + b"\x23x-a" + b"\x04caf\xe9"
+        self.assertEqual(decode_field_section(section), [("x-a", "caf\xe9")])
+
+
 class TestQpackDynamicTable(unittest.TestCase):
     """The table is what keeps repeated custom fields from costing full size."""
 
