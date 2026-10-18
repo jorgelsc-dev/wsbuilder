@@ -415,8 +415,10 @@ La demo expone `/`, `/monitor`, `/thread-demo`, `/api/health`, `/api/metrics`,
 
 La navegación del sitio vive en [mkdocs.yml](mkdocs.yml); la documentación de
 APIs generada por `App.enable_docs()` es independiente de ese sitio.
-Dependabot se configura en `.github/dependabot.yml`. Las acciones de terceros
-se fijan por SHA completo con la versión en un comentario.
+Dependabot se configura en `.github/dependabot.yml`. Las acciones de `actions/*`
+y `github/codeql-action/*` usan etiquetas de versión; `pypa/gh-action-pypi-publish`
+y `softprops/action-gh-release` se fijan por SHA completo con la versión en un
+comentario.
 
 ## Git, PRs y versiones
 
