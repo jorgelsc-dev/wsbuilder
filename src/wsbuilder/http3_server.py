@@ -12,6 +12,7 @@ QUIC has and TCP does not.
 
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -63,6 +64,9 @@ class Http3Server:
 
     #: Short enough that bytes queued by a handler thread leave promptly.
     ACCEPT_TIMEOUT_SECONDS = 0.02
+    #: Threads that run request handlers, so a slow one never holds up the
+    #: socket thread that every connection's packets go through.
+    MAX_DISPATCH_WORKERS = 32
 
     def __init__(self, host, port, app, tls, *, max_connections=DEFAULT_MAX_CONNECTIONS,
                  require_address_validation=False,
@@ -85,6 +89,9 @@ class Http3Server:
         self._sock = None
         self._stop = threading.Event()
         self._serving = threading.Event()
+        self._dispatch_pool = ThreadPoolExecutor(
+            max_workers=self.MAX_DISPATCH_WORKERS, thread_name_prefix="http3-dispatch"
+        )
 
     # -- lifecycle -----------------------------------------------------
 
@@ -136,6 +143,7 @@ class Http3Server:
             finally:
                 for connection in {id(c): c for c in self.connections.values()}.values():
                     self._drop(connection)
+                self._dispatch_pool.shutdown(wait=False, cancel_futures=True)
 
     def _tick(self, now=None):
         """Fire any due loss timer, send queued stream bytes, and send what both ask for."""
@@ -312,12 +320,28 @@ class Http3Server:
         tls_meta = {"enabled": True, "version": "TLSv1.3", "alpn": connection.alpn}
         try:
             request = http3.build_request(stream, connection.client_address, tls_meta)
-            response = self.app.dispatch(request)
         except http3.H3Error as e:
             get_log(self.app).warning("http3", f"malformed request on stream {stream_id}: {e}")
             return []
-        self._send_response(connection, stream_id, response, send_body=request.method != "HEAD")
+        # The response is queued from the worker; the socket loop sends it.
+        self._dispatch_pool.submit(self._dispatch, connection, stream_id, request)
         return []
+
+    def _dispatch(self, connection, stream_id, request):
+        """Run the app for one request on a worker thread and queue the answer."""
+        from .http import Response
+
+        try:
+            response = self.app.dispatch(request)
+        except Exception as e:
+            get_log(self.app).exception("http3", f"dispatch failed on stream {stream_id}: {e}", e)
+            response = Response.text("Internal Server Error", status=500)
+        if connection.closed:
+            return
+        try:
+            self._send_response(connection, stream_id, response, send_body=request.method != "HEAD")
+        except Exception as e:
+            get_log(self.app).exception("http3", f"response failed on stream {stream_id}: {e}", e)
 
     def _send_response(self, connection, stream_id, response, *, send_body):
         """Queue a response. A streamed body is sent chunk by chunk as it is produced."""

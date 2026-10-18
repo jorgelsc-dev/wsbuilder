@@ -171,6 +171,32 @@ class TestStreamingAndWebSocketOverUdp(QuicClientHarness):
         self.assertGreaterEqual(len(bodies), 3)
         self.assertEqual(b"".join(bodies), b"event 0\n\nevent 1\n\nevent 2\n\n")
 
+    def test_a_slow_handler_does_not_hold_up_other_requests(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        @self.app.api("/slow", methods=("GET",))
+        def slow(_request):
+            release.wait(5.0)
+            return {"slow": True}
+
+        @self.app.api("/quick", methods=("GET",))
+        def quick(_request):
+            return {"quick": True}
+
+        self._handshake()
+        self._send(0, http3.encode_headers_frame(self._request_fields("GET", "/slow")), fin=True)
+        self._send(4, http3.encode_headers_frame(self._request_fields("GET", "/quick")), fin=True)
+        status, bodies, ended = self._replies(4)
+        self.assertEqual(status, "200")
+        self.assertTrue(ended)
+        self.assertIn(b'"quick":true', b"".join(bodies))
+
+        release.set()
+        status, bodies, _ended = self._replies(0)
+        self.assertEqual(status, "200")
+        self.assertIn(b'"slow":true', b"".join(bodies))
+
     def test_a_websocket_runs_over_an_extended_connect(self):
         self._handshake()
         connect = http3.encode_frame(
