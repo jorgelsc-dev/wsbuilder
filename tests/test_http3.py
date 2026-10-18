@@ -3,7 +3,6 @@ import unittest
 from wsbuilder import App, Response
 from wsbuilder.http3 import (
     FRAME_DATA,
-    FRAME_GOAWAY,
     FRAME_HEADERS,
     FRAME_SETTINGS,
     H3Error,

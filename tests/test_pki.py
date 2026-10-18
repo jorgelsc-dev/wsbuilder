@@ -15,7 +15,7 @@ from wsbuilder.pki import (
 )
 from wsbuilder.server import HTTPServer
 
-UTC = datetime.timezone.utc
+UTC = datetime.UTC
 
 
 def _at(offset_seconds):
@@ -47,7 +47,7 @@ class TestCertificateAuthority(unittest.TestCase):
     def test_private_key_can_be_stored_encrypted(self):
         encrypted = self.ca.private_key_pem_encrypted("s3cret")
         self.assertIn(b"ENCRYPTED", encrypted)
-        with self.assertRaises(Exception):
+        with self.assertRaises(TypeError):
             CertificateAuthority.load(self.ca.certificate_pem, encrypted)
         reopened = CertificateAuthority.load(self.ca.certificate_pem, encrypted, password="s3cret")
         self.assertEqual(reopened.subject, self.ca.subject)
@@ -442,7 +442,7 @@ class TestOptionalDependency(unittest.TestCase):
         import wsbuilder
 
         with self.assertRaises(AttributeError):
-            wsbuilder.ThisDoesNotExist
+            wsbuilder.ThisDoesNotExist  # noqa: B018
 
 
 class TestMaterialValidation(unittest.TestCase):

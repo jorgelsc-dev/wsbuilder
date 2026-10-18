@@ -155,6 +155,7 @@ Validar el paquete:
 
 ```bash
 PYTHONPATH=src pytest -q
+ruff check src tests examples
 ```
 
 Validar la documentacion:

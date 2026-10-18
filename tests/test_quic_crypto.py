@@ -1,5 +1,7 @@
 import unittest
 
+from cryptography.exceptions import InvalidTag
+
 from wsbuilder.quic.crypto import (
     INITIAL_SALT_V1,
     PacketKeys,
@@ -173,12 +175,12 @@ class TestPacketProtection(unittest.TestCase):
         sealed = self.keys.seal(2, self.header, b"payload")
         tampered = bytearray(self.header)
         tampered[-1] ^= 1
-        with self.assertRaises(Exception):
+        with self.assertRaises(InvalidTag):
             self.keys.open(2, bytes(tampered), sealed)
 
     def test_a_different_packet_number_will_not_open_it(self):
         sealed = self.keys.seal(2, self.header, b"payload")
-        with self.assertRaises(Exception):
+        with self.assertRaises(InvalidTag):
             self.keys.open(3, self.header, sealed)
 
     def test_header_protection_round_trip(self):

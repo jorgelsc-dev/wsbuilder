@@ -10,10 +10,10 @@ transport guarantee: bytes arrive with offsets and may repeat or arrive out
 of order, and only once a stream is contiguous does the layer above see it.
 """
 
-import os
 import threading
 
 from . import frames as qframes
+from .address import AmplificationLimit, PathValidator
 from .crypto import (
     AEAD_TAG_SIZE,
     PacketKeys,
@@ -22,10 +22,7 @@ from .crypto import (
     initial_secrets,
     remove_header_protection,
 )
-from .address import AmplificationLimit, PathValidator
-from .recovery import LossRecovery, SentPacket
 from .packet import (
-    FIXED_BIT,
     MIN_INITIAL_DATAGRAM,
     PACKET_HANDSHAKE,
     PACKET_INITIAL,
@@ -36,6 +33,7 @@ from .packet import (
     new_connection_id,
     parse_long_header,
 )
+from .recovery import LossRecovery, SentPacket
 from .tls import ServerHandshake, TLSError
 from .varint import decode_varint, encode_varint
 
@@ -229,7 +227,6 @@ class QuicConnection:
         if level is None or level not in self.keys:
             return  # 0-RTT and Retry are not served.
 
-        packet = data[header.payload_offset - 0 :]
         start = header.payload_offset - (header.packet_length - header.length)
         whole = data[start : start + header.packet_length]
         pn_offset = header.payload_offset - start

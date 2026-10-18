@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import math
 
-
 _RANK_TOLERANCE = 1e-12
 
 

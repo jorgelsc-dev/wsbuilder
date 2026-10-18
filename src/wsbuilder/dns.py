@@ -2,7 +2,6 @@ import base64
 import socket
 import threading
 
-
 QTYPE_A = 1
 QTYPE_NS = 2
 QTYPE_CNAME = 5
@@ -1028,7 +1027,7 @@ class LocalDNSServer:
             while self._running.is_set():
                 try:
                     data, addr = self._sock.recvfrom(4096)
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 except OSError:
                     if self._running.is_set():

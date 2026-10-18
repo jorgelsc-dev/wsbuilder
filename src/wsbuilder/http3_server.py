@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from . import http3
 from .http3_websocket import Http3WebSocketStream
 from .quic.address import AddressValidator
-from .quic.connection import MAX_DATAGRAM_SIZE, QuicConnection
+from .quic.connection import QuicConnection
 from .quic.crypto import retry_integrity_tag
 from .quic.packet import (
     PACKET_INITIAL,
@@ -28,7 +28,6 @@ from .quic.packet import (
     new_connection_id,
     parse_long_header,
 )
-from .quic.varint import decode_varint
 
 DEFAULT_MAX_CONNECTIONS = 256
 
@@ -106,7 +105,7 @@ class Http3Server:
             while not self._stop.is_set():
                 try:
                     datagram, address = sock.recvfrom(65535)
-                except socket.timeout:
+                except TimeoutError:
                     # The idle gap is where loss timers get a chance to fire;
                     # without this a probe would wait for the next datagram,
                     # which on a lossy path may never come.

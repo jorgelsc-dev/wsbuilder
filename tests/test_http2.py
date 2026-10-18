@@ -5,7 +5,6 @@ from wsbuilder import App, Response
 from wsbuilder.hpack import Decoder, Encoder
 from wsbuilder.http2 import (
     CONNECTION_PREFACE,
-    DEFAULT_INITIAL_WINDOW_SIZE,
     ERROR_FLOW_CONTROL_ERROR,
     ERROR_FRAME_SIZE_ERROR,
     ERROR_PROTOCOL_ERROR,

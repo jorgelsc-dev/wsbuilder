@@ -8,7 +8,6 @@ those. Bytes the peer sends are pushed in by the thread that owns the UDP
 socket; bytes this side sends are queued for that same thread to packetize.
 """
 
-import socket
 import threading
 import time
 
@@ -60,7 +59,7 @@ class Http3WebSocketStream:
                 if deadline is not None:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise socket.timeout("timed out")
+                        raise TimeoutError("timed out")
                 self._cond.wait(remaining)
             if self._buffer:
                 chunk = bytes(self._buffer[:n])

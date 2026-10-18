@@ -1,7 +1,16 @@
 import json
 import unittest
 
-from wsbuilder import App, Request, Response, SecurityPolicy, SQLiteMemoryCache, install_cache, install_metrics, install_security
+from wsbuilder import (
+    App,
+    Request,
+    Response,
+    SecurityPolicy,
+    SQLiteMemoryCache,
+    install_cache,
+    install_metrics,
+    install_security,
+)
 
 
 def _req(path, method="GET", client=("127.0.0.1", 1234)):

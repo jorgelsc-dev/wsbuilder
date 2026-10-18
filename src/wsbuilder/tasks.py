@@ -4,7 +4,6 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 
-
 TASK_PENDING = "pending"
 TASK_RUNNING = "running"
 TASK_COMPLETED = "completed"

@@ -44,7 +44,7 @@ class AddressValidator:
     @staticmethod
     def _address_bytes(address):
         host, port = address
-        return f"{host}|{int(port)}".encode("utf-8")
+        return f"{host}|{int(port)}".encode()
 
     def issue(self, address, original_destination_cid):
         """Mint a token tied to this address and the client's first id."""

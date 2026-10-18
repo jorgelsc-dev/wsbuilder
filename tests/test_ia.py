@@ -1,7 +1,14 @@
 import unittest
 from statistics import NormalDist
 
-from wsbuilder import DataSet, NeuralNetwork, TaskManager, describe_data, evaluate_errors, submit_training_task
+from wsbuilder import (
+    DataSet,
+    NeuralNetwork,
+    TaskManager,
+    describe_data,
+    evaluate_errors,
+    submit_training_task,
+)
 from wsbuilder.ia import DenseLayer
 
 

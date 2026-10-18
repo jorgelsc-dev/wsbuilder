@@ -3,20 +3,20 @@
 import os
 import tempfile
 import threading
-import time
+
 from wsbuilder.db_replicas import (
     DatabaseReplica,
     DatabaseReplicaPool,
     OptimizedDatabase,
     SQLite3OptimizationConfig,
 )
-from wsbuilder.orm import Database, Model, TextField, IntegerField
+from wsbuilder.orm import Database, IntegerField, Model, TextField
 
 
 class ReplicaUser(Model):
     """Test model for replica tests."""
     __tablename__ = "test_users"
-    
+
     id = IntegerField(primary_key=True, auto_increment=True)
     name = TextField()
     email = TextField()
@@ -59,14 +59,14 @@ def test_database_replica_read_only():
     """Test that read-only replica works."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     try:
         # Create and populate database
         db = Database(db_path, enable_wal=True)
         ReplicaUser.create_table(db)
-        user = ReplicaUser.create(db, name="Alice", email="alice@example.com")
+        ReplicaUser.create(db, name="Alice", email="alice@example.com")
         db.close()
-        
+
         # Read from replica
         replica = DatabaseReplica(db_path)
         rows = replica.fetchall("SELECT * FROM test_users")
@@ -88,7 +88,7 @@ def test_database_replica_pool():
     """Test replica pool with round-robin distribution."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     try:
         # Create and populate database
         db = Database(db_path, enable_wal=True)
@@ -96,25 +96,25 @@ def test_database_replica_pool():
         for i in range(5):
             ReplicaUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
         db.close()
-        
+
         # Test pool
         pool = DatabaseReplicaPool(db_path, replica_count=3)
-        
+
         # Get replicas in round-robin
         replicas_used = []
         for _ in range(6):
             replica = pool.get_replica()
             replicas_used.append(id(replica))
-        
+
         # Should cycle through replicas
         assert replicas_used[0] == replicas_used[3]  # Same replica at position 0 and 3
         assert replicas_used[1] == replicas_used[4]
         assert replicas_used[2] == replicas_used[5]
-        
+
         # Test query on pool
         count = pool.scalar("SELECT COUNT(*) FROM test_users")
         assert count == 5
-        
+
         pool.close_all()
     finally:
         if os.path.exists(db_path):
@@ -140,21 +140,21 @@ def test_database_with_wal_enabled():
     """Test Database with WAL enabled."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     try:
         db = Database(db_path, enable_wal=True, enable_replicas=False)
-        
+
         # Check WAL is enabled
         journal_mode = db.get_pragma("journal_mode")
         assert journal_mode.upper() == "WAL"
-        
+
         ReplicaUser.create_table(db)
         user = ReplicaUser.create(db, name="Bob", email="bob@example.com")
-        
+
         # Verify data was written
         found = ReplicaUser.get(db, id=user.id)
         assert found.name == "Bob"
-        
+
         db.close()
     finally:
         if os.path.exists(db_path):
@@ -171,15 +171,15 @@ def test_database_with_replicas():
     """Test Database with replicas enabled."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     try:
         # Create with replicas
         db = Database(db_path, enable_wal=True, enable_replicas=True, replica_count=2)
 
         ReplicaUser.create_table(db)
         user1 = ReplicaUser.create(db, name="Charlie", email="charlie@example.com")
-        user2 = ReplicaUser.create(db, name="Diana", email="diana@example.com")
-        
+        ReplicaUser.create(db, name="Diana", email="diana@example.com")
+
         # Read from main connection
         all_users = ReplicaUser.objects(db).all()
         assert len(all_users) == 2
@@ -216,10 +216,10 @@ def test_database_with_replicas():
         # Read from replica
         count = db.read_replica_scalar("SELECT COUNT(*) FROM test_users")
         assert count == 2
-        
+
         rows = db.read_replica_fetchall("SELECT * FROM test_users")
         assert len(rows) == 2
-        
+
         db.close()
     finally:
         if os.path.exists(db_path):
@@ -236,22 +236,22 @@ def test_database_checkpoint():
     """Test WAL checkpoint functionality."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     try:
         db = Database(db_path, enable_wal=True)
         ReplicaUser.create_table(db)
-        
+
         # Insert some data
         for i in range(100):
             ReplicaUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
-        
+
         # Checkpoint should not raise
         db.checkpoint("RESTART")
-        
+
         # Verify data still there
         count = db.scalar("SELECT COUNT(*) FROM test_users")
         assert count == 100
-        
+
         db.close()
     finally:
         if os.path.exists(db_path):
@@ -268,28 +268,28 @@ def test_database_optimize():
     """Test database optimization."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     try:
         db = Database(db_path)
         ReplicaUser.create_table(db)
-        
+
         # Insert and delete data
         user_ids = []
         for i in range(50):
             user = ReplicaUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
             user_ids.append(user.id)
-        
+
         # Delete half
         for uid in user_ids[:25]:
             ReplicaUser.objects(db).filter(id=uid).delete()
-        
+
         # Optimize should not raise
         db.optimize()
-        
+
         # Verify remaining data
         count = db.scalar("SELECT COUNT(*) FROM test_users")
         assert count == 25
-        
+
         db.close()
     finally:
         if os.path.exists(db_path):
@@ -306,15 +306,15 @@ def test_concurrent_reads_with_replicas():
     """Test concurrent reads using replicas."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     try:
         # Setup
         db = Database(db_path, enable_wal=True, enable_replicas=True, replica_count=3)
         ReplicaUser.create_table(db)
-        
+
         for i in range(20):
             ReplicaUser.create(db, name=f"User{i}", email=f"user{i}@example.com")
-        
+
         for _ in range(5):
             results = []
             lock = threading.Lock()
@@ -335,7 +335,7 @@ def test_concurrent_reads_with_replicas():
             # All should have read 20 users
             assert len(results) == 10
             assert all(r == 20 for r in results)
-        
+
         db.close()
     finally:
         if os.path.exists(db_path):
@@ -358,26 +358,26 @@ if __name__ == "__main__":
 
     test_optimized_database_cache_size_uses_kib_budget()
     print("✓ test_optimized_database_cache_size_uses_kib_budget passed")
-    
+
     test_database_replica_read_only()
     print("✓ test_database_replica_read_only passed")
-    
+
     test_database_replica_pool()
     print("✓ test_database_replica_pool passed")
-    
+
     test_database_with_wal_enabled()
     print("✓ test_database_with_wal_enabled passed")
-    
+
     test_database_with_replicas()
     print("✓ test_database_with_replicas passed")
-    
+
     test_database_checkpoint()
     print("✓ test_database_checkpoint passed")
-    
+
     test_database_optimize()
     print("✓ test_database_optimize passed")
-    
+
     test_concurrent_reads_with_replicas()
     print("✓ test_concurrent_reads_with_replicas passed")
-    
+
     print("\nAll tests passed! ✓")
