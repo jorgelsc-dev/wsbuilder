@@ -419,6 +419,7 @@ class TestProxyHardening(unittest.TestCase):
             "/public/%2e%2e%2fadmin",
             "/public%2f..%2fadmin",
             "/public/..%5cadmin",
+            "/public/..;jsessionid=1/admin",
         ):
             with self.subTest(path=path):
                 self.assertTrue(_has_dot_segments(path))

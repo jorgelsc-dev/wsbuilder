@@ -226,6 +226,23 @@ def parse_http_request(conn, max_header_bytes=65536):
 
 
 def send_http_response(conn, response, *, send_body=True, keep_alive=False, version=None):
+    try:
+        _send_http_response(
+            conn, response, send_body=send_body, keep_alive=keep_alive, version=version
+        )
+    finally:
+        if getattr(response, "is_stream", False):
+            # Release what the stream holds (an upstream connection, a file)
+            # even when the body was skipped or the client went away.
+            close = getattr(response.stream, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    get_log().warning("http", f"stream close error: {exc}")
+
+
+def _send_http_response(conn, response, *, send_body=True, keep_alive=False, version=None):
     status_code = int(response.status)
     if not 100 <= status_code <= 599:
         raise ValueError("HTTP response status must be between 100 and 599")

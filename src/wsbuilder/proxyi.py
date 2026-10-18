@@ -272,13 +272,16 @@ def _path_has_prefix(path, prefix):
 def _has_dot_segments(path):
     """True when ``path`` has a ``.`` or ``..`` segment, literal or percent-encoded.
 
+    Segment parameters are ignored (``..;x`` is ``..``).
+
     Encoded dots (``%2e``) and separators (``%2f``, ``%5c``) are decoded first,
     so ``/a/%2e%2e%2fadmin`` counts as traversal too.
     """
     text = _normalize_text(path)
     decoded = _ENCODED_SEPARATOR_RE.sub("/", _ENCODED_DOT_SEGMENT_RE.sub(".", text))
     decoded = decoded.replace("\\", "/")
-    return any(segment in {".", ".."} for segment in decoded.split("/"))
+    # Some servers drop ";params" from a segment, so "..;x" counts as "..".
+    return any(segment.split(";", 1)[0] in {".", ".."} for segment in decoded.split("/"))
 
 
 class _UpstreamResponseTooLarge(Exception):
