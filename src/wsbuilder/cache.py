@@ -834,8 +834,10 @@ class SQLiteMemoryCache:
         sql = "SELECT key, expires_at FROM cache_entries WHERE namespace = ?"
         params = [ns]
         if prefix:
-            sql += " AND key LIKE ?"
-            params.append(f"{str(prefix)}%")
+            # LIKE treats % and _ as wildcards and ignores ASCII case.
+            prefix = str(prefix)
+            sql += " AND substr(key, 1, ?) = ?"
+            params.extend((len(prefix), prefix))
         if not include_expired:
             sql += " AND (expires_at IS NULL OR expires_at > ?)"
             params.append(time.time())
