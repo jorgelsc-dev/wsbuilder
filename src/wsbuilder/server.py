@@ -386,6 +386,41 @@ class HTTPServer:
             if metrics:
                 metrics.error("http2", e)
 
+    #: Upper bound on the time spent draining an unread body before closing.
+    LINGER_TIMEOUT_SECONDS = 2.0
+
+    def _linger_close(self, conn, reader):
+        """Drain what the client still sends before the socket is closed.
+
+        Closing with unread request bytes makes the kernel answer with RST,
+        which can destroy a response the client has not read yet. The write
+        side is shut first, then incoming bytes are discarded until EOF, the
+        linger timeout, or about one maximum body has been read.
+        """
+        reader.set_deadline(None)
+        shutdown = getattr(conn, "shutdown", None)
+        if not callable(shutdown):
+            return  # Not a socket (a test double, for instance): nothing to drain.
+        try:
+            shutdown(socket.SHUT_WR)
+        except (OSError, ValueError):
+            pass
+        deadline = time.monotonic() + self.LINGER_TIMEOUT_SECONDS
+        budget = self.MAX_REQUEST_BODY_BYTES + self.MAX_REQUEST_HEADER_BYTES
+        drained = 0
+        while drained <= budget:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            try:
+                conn.settimeout(remaining)
+                chunk = conn.recv(65536)
+            except (OSError, ValueError):
+                return
+            if not chunk:
+                return
+            drained += len(chunk)
+
     def _send_early_response(self, request, response, started, metrics, security, conn):
         """Answer before the body is read; the connection is not reused."""
         send_body = request.method != "HEAD"
@@ -522,6 +557,8 @@ class HTTPServer:
             denied = security_check(request)
             if denied is not None:
                 self._send_early_response(request, denied, started, metrics, security, conn)
+                if chunked_request or (content_length not in (None, "") and content_length.strip("0")):
+                    self._linger_close(conn, reader)
                 return False
 
         trailers = {}
@@ -548,6 +585,8 @@ class HTTPServer:
             except ValueError as e:
                 status = 413 if "Too Large" in str(e) else 400
                 send_http_response(conn, Response.text(str(e), status=status))
+                if status == 413:
+                    self._linger_close(conn, reader)
                 return False
         elif content_length is not None:
             if not content_length or any(
@@ -564,6 +603,7 @@ class HTTPServer:
                     conn,
                     Response.text("Payload Too Large", status=413),
                 )
+                self._linger_close(conn, reader)
                 return False
             cl = int(significant or "0")
             if cl < 0:
@@ -574,6 +614,7 @@ class HTTPServer:
                     conn,
                     Response.text("Payload Too Large", status=413),
                 )
+                self._linger_close(conn, reader)
                 return False
             if expectation == "100-continue" and cl > 0:
                 try:

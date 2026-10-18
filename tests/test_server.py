@@ -522,6 +522,37 @@ class TestRequestDeadlineAndEarlySecurity(unittest.TestCase):
         self.assertNotIn(b"100 Continue", received)
         self.assertEqual(self.reads, [])
 
+    def test_denied_request_with_a_large_unread_body_still_gets_its_status(self):
+        app = self._app()
+        app.enable_security().add_blacklist("127.0.0.1")
+        server = HTTPServer("127.0.0.1", 0, app)
+        self._serve(server)
+        body = b"x" * (2 * 1024 * 1024)
+        for _ in range(10):
+            with socket.create_connection(server.server_address, timeout=5.0) as sock:
+                head = (
+                    b"POST /upload HTTP/1.1\r\nHost: localhost\r\n"
+                    b"Content-Length: %d\r\n\r\n" % len(body)
+                )
+
+                def send_all(sock=sock, head=head):
+                    try:
+                        sock.sendall(head + body)
+                    except OSError:
+                        pass
+
+                sender = threading.Thread(target=send_all, daemon=True)
+                sender.start()
+                received = b""
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    received += chunk
+                sender.join(timeout=5)
+            self.assertTrue(received.startswith(b"HTTP/1.1 403 "), received[:40])
+        self.assertEqual(self.reads, [])
+
     def test_allowed_expect_continue_still_reads_the_body(self):
         app = self._app()
         app.enable_security()
