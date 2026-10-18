@@ -5,6 +5,8 @@ import threading
 import time
 from datetime import UTC, datetime
 
+from ._coerce import safe_float as _safe_float
+from ._coerce import safe_int as _safe_int
 from .http import Response
 
 DEFAULT_STREAM_POINTS = 5
@@ -14,20 +16,6 @@ OVERFLOW_LABEL = "<other>"
 
 def _iso_utc(ts):
     return datetime.fromtimestamp(ts, UTC).isoformat()
-
-
-def _safe_int(value, default):
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
-
-
-def _safe_float(value, default):
-    try:
-        return float(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
 
 
 def _is_truthy(value):

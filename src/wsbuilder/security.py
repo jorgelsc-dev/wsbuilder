@@ -9,6 +9,8 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
+from ._coerce import safe_float as _safe_float
+from ._coerce import safe_int as _safe_int
 from .headers import get_header
 from .http import Response
 
@@ -24,20 +26,6 @@ DEFAULT_BLOCK_DURATION_SECONDS = 300.0
 # very wide source range would otherwise grow them until the process dies.
 DEFAULT_MAX_TRACKED_CLIENTS = 20000
 DEFAULT_MAX_TEMPORARY_BLOCKS = 20000
-
-
-def _safe_int(value, default):
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
-
-
-def _safe_float(value, default):
-    try:
-        return float(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
 
 
 def _to_ip(value):
