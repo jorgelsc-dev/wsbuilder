@@ -815,7 +815,14 @@ class QuerySet:
             out.append(item)
         return out
 
+    def _is_sliced(self) -> bool:
+        return self.limit_value is not None or self.offset_value is not None
+
     def count(self) -> int:
+        if self._is_sliced():
+            # A slice limits which rows exist, so count what it selects.
+            sql, params = self._build_select(columns=["1"])
+            return int(self._read_scalar(f"SELECT COUNT(*) FROM ({sql})", params, default=0))
         table = quote_identifier(self.model._meta["table"])
         sql = f"SELECT COUNT(*) FROM {table}"
         params = list(self.params)
@@ -824,7 +831,12 @@ class QuerySet:
         return int(self._read_scalar(sql, params, default=0))
 
     def exists(self) -> bool:
-        return self.limit(1).count() > 0
+        sql, params = self._build_select(columns=["1"])
+        if self._is_sliced():
+            sql = f"SELECT 1 FROM ({sql}) LIMIT 1"
+        else:
+            sql += " LIMIT 1"
+        return self._read_fetchone(sql, params) is not None
 
     def update(self, **kwargs) -> int:
         self._assert_writable()
