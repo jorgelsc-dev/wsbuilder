@@ -321,6 +321,10 @@ class Http2Connection:
     exercised in tests without a socket.
     """
 
+    #: Ids of streams closed by RST_STREAM remembered so that a HEADERS frame
+    #: still in flight on one is decoded and ignored, not a protocol error.
+    RECENTLY_RESET_STREAMS = 256
+
     def __init__(
         self,
         conn,
@@ -341,6 +345,7 @@ class Http2Connection:
         self.tls = tls or {}
         self.client_address = client_address
         self.streams = {}
+        self._recently_reset = {}
         self.decoder = Decoder()
         self.encoder = Encoder()
         self.inbound = FlowControlWindow()
@@ -463,6 +468,22 @@ class Http2Connection:
                 stream.state = CLOSED
                 stream.reset_code = exc.code
             self.send_rst_stream(exc.stream_id, exc.code)
+        self._release_closed_streams()
+
+    def _release_closed_streams(self):
+        """Forget closed streams so their bodies and headers can be freed.
+
+        Nothing more is sent on a closed stream, and frames that may still
+        arrive for one are handled without its state.
+        """
+        for stream_id, stream in list(self.streams.items()):
+            if not stream.closed:
+                continue
+            del self.streams[stream_id]
+            if stream.reset_code is not None:
+                self._recently_reset[stream_id] = None
+                while len(self._recently_reset) > self.RECENTLY_RESET_STREAMS:
+                    del self._recently_reset[next(iter(self._recently_reset))]
 
     def _require_stream_id(self, frame, expected_zero):
         if expected_zero and frame.stream_id != 0:
@@ -546,8 +567,14 @@ class Http2Connection:
         self._require_stream_id(frame, False)
         if frame.stream_id % 2 == 0:
             raise ConnectionError_("clients open odd-numbered streams only")
-        if frame.stream_id <= self.last_stream_id and frame.stream_id not in self.streams:
-            raise ConnectionError_("stream identifiers must increase")
+        stream = self.streams.get(frame.stream_id)
+        if stream is None and frame.stream_id <= self.last_stream_id:
+            if frame.stream_id not in self._recently_reset:
+                raise ConnectionError_("stream identifiers must increase")
+            # Section 5.4.2: frames on a stream we reset are ignored, but the
+            # block is still decoded to keep the shared HPACK table in step.
+            stream = Stream(frame.stream_id)
+            stream.state = CLOSED
 
         payload = strip_padding(frame.payload, frame.flags, frame.stream_id)
         if frame.has(FLAG_PRIORITY):
@@ -555,7 +582,6 @@ class Http2Connection:
                 raise ConnectionError_("HEADERS priority block truncated", ERROR_FRAME_SIZE_ERROR)
             payload = payload[5:]
 
-        stream = self.streams.get(frame.stream_id)
         if stream is None:
             limit = self.local_settings[SETTINGS_MAX_CONCURRENT_STREAMS]
             live = sum(1 for s in self.streams.values() if not s.closed)
