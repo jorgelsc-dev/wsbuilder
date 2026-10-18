@@ -13,7 +13,7 @@ it would desynchronise the decoder for every later stream.
 
 import struct
 
-from .hpack import Decoder, Encoder, HPACKError
+from .hpack import Decoder, Encoder, HeaderListTooLarge, HPACKError
 from .http import Response
 from .logs import get_log
 
@@ -322,11 +322,21 @@ class Http2Connection:
     """
 
     def __init__(
-        self, conn, app, *, tls=None, client_address=("", 0), max_streams=100, max_body_bytes=None
+        self,
+        conn,
+        app,
+        *,
+        tls=None,
+        client_address=("", 0),
+        max_streams=100,
+        max_body_bytes=None,
+        max_header_bytes=None,
     ):
         self.conn = conn
         #: Largest request body buffered per stream; None leaves it unbounded.
         self.max_body_bytes = None if max_body_bytes is None else int(max_body_bytes)
+        #: Ceiling for a header block and its decoded list; None is unbounded.
+        self.max_header_bytes = None if max_header_bytes is None else int(max_header_bytes)
         self.app = app
         self.tls = tls or {}
         self.client_address = client_address
@@ -341,6 +351,8 @@ class Http2Connection:
             SETTINGS_INITIAL_WINDOW_SIZE: DEFAULT_INITIAL_WINDOW_SIZE,
             SETTINGS_MAX_FRAME_SIZE: DEFAULT_MAX_FRAME_SIZE,
         }
+        if self.max_header_bytes is not None:
+            self.local_settings[SETTINGS_MAX_HEADER_LIST_SIZE] = self.max_header_bytes
         self.peer_settings = {
             SETTINGS_INITIAL_WINDOW_SIZE: DEFAULT_INITIAL_WINDOW_SIZE,
             SETTINGS_MAX_FRAME_SIZE: DEFAULT_MAX_FRAME_SIZE,
@@ -555,6 +567,7 @@ class Http2Connection:
             self.last_stream_id = max(self.last_stream_id, frame.stream_id)
 
         self._pending_headers = (stream, bytearray(payload), frame.has(FLAG_END_STREAM))
+        self._check_header_block_size(self._pending_headers[1])
         if frame.has(FLAG_END_HEADERS):
             self._finish_header_block()
 
@@ -565,15 +578,35 @@ class Http2Connection:
         if frame.stream_id != stream.id:
             raise ConnectionError_("CONTINUATION on a different stream")
         buffer.extend(frame.payload)
+        self._check_header_block_size(buffer)
         if frame.has(FLAG_END_HEADERS):
             self._finish_header_block()
+
+    def _check_header_block_size(self, buffer):
+        # A block cut short cannot be decoded, and the HPACK table is shared,
+        # so an oversized block can only end the connection.
+        if self.max_header_bytes is not None and len(buffer) > self.max_header_bytes:
+            raise ConnectionError_(
+                f"header block over the {self.max_header_bytes} octet limit",
+                ERROR_ENHANCE_YOUR_CALM,
+            )
 
     def _finish_header_block(self):
         stream, buffer, end_stream = self._pending_headers
         self._pending_headers = None
         # Decoded even when the stream is doomed: the HPACK table is shared,
         # so skipping a block would desync every stream that follows.
-        headers = self.decoder.decode(bytes(buffer))
+        try:
+            headers = self.decoder.decode(bytes(buffer), max_list_size=self.max_header_bytes)
+        except HeaderListTooLarge:
+            if stream.closed:
+                return
+            if not stream.headers:
+                stream.open_remote(end_stream)
+            self._refuse_early(
+                stream, Response.text("Request Header Fields Too Large", status=431)
+            )
+            return
         if stream.closed:
             return
         if stream.headers:
@@ -637,14 +670,20 @@ class Http2Connection:
         return False
 
     def _reject_body(self, stream):
-        """Answer 413 before the body is complete, then stop the upload.
+        """Answer 413 before the body is complete, then stop the upload."""
+        self._refuse_early(stream, Response.text("Payload Too Large", status=413))
+
+    def _refuse_early(self, stream, response):
+        """Answer ``response`` without dispatching, then stop the upload.
 
         RFC 9113 section 8.1 lets a server respond early and reset the
         request stream with NO_ERROR so the client stops sending.
         """
         stream.body_rejected = True
         stream.body = bytearray()
-        self.send_response(stream, Response.text("Payload Too Large", status=413))
+        self.send_response(stream, response)
+        if stream.closed:
+            return  # The request had already ended; nothing left to stop.
         if not stream.pending_output:
             stream.state = CLOSED
             stream.reset_code = ERROR_NO_ERROR

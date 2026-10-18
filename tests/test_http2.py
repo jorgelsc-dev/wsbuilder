@@ -5,6 +5,7 @@ from wsbuilder import App, Response
 from wsbuilder.hpack import Decoder, Encoder
 from wsbuilder.http2 import (
     CONNECTION_PREFACE,
+    ERROR_ENHANCE_YOUR_CALM,
     ERROR_FLOW_CONTROL_ERROR,
     ERROR_FRAME_SIZE_ERROR,
     ERROR_NO_ERROR,
@@ -25,6 +26,7 @@ from wsbuilder.http2 import (
     MAX_WINDOW_SIZE,
     SETTINGS_INITIAL_WINDOW_SIZE,
     SETTINGS_MAX_FRAME_SIZE,
+    SETTINGS_MAX_HEADER_LIST_SIZE,
     FlowControlWindow,
     Frame,
     Http2Connection,
@@ -368,6 +370,43 @@ class TestConnectionFlow(ConnectionHarness):
             Frame(FRAME_CONTINUATION, FLAG_END_HEADERS, 1, rest).serialize(),
         )
         self.assertIn(b'"n":"9"', self.responses(frames)[1]["body"])
+
+    def test_a_continuation_flood_past_the_header_limit_is_fatal(self):
+        block = self.encoder.encode(self.request("/hello"))
+        filler = Frame(FRAME_CONTINUATION, 0, 1, b"\x00" * 1024).serialize()
+        frames = self.run_connection(
+            Frame(FRAME_HEADERS, FLAG_END_STREAM, 1, block).serialize(),
+            *([filler] * 8),
+            max_header_bytes=4096,
+        )
+        goaway = [f for f in frames if f.type == FRAME_GOAWAY][0]
+        self.assertEqual(struct.unpack(">II", goaway.payload[:8])[1], ERROR_ENHANCE_YOUR_CALM)
+
+    def test_the_header_limit_is_advertised(self):
+        frames = self.run_connection(max_header_bytes=4096)
+        settings = [f for f in frames if f.type == FRAME_SETTINGS and not f.flags & FLAG_ACK][0]
+        self.assertIn(
+            struct.pack(">HI", SETTINGS_MAX_HEADER_LIST_SIZE, 4096), settings.payload
+        )
+
+    def test_a_header_list_that_expands_past_the_limit_is_answered_431(self):
+        # One literal indexed into the table, then many one-octet references.
+        fields = self.request("/hello") + [("x-big", "v" * 200)]
+        block = self.encoder.encode(fields)
+        reference = self.encoder.encode([("x-big", "v" * 200)])
+        self.assertEqual(len(reference), 1)
+        frames = self.run_connection(
+            Frame(FRAME_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 1, block + reference * 40)
+            .serialize(),
+            self.headers_frame(3, self.request("/hello?n=3")),
+            max_header_bytes=4096,
+        )
+        answers = self.responses(frames)
+        self.assertEqual(answers[1]["headers"][":status"], "431")
+        self.assertFalse(any(f.type == FRAME_GOAWAY and struct.unpack(">II", f.payload[:8])[1]
+                             for f in frames))
+        # The shared HPACK table stayed in step, so the next stream works.
+        self.assertIn(b'"n":"3"', answers[3]["body"])
 
     def test_a_frame_between_headers_and_continuation_is_fatal(self):
         block = self.encoder.encode(self.request("/hello"))
