@@ -332,6 +332,34 @@ class TestConnectionFlow(ConnectionHarness):
         self.assertEqual(self.responses(frames)[3]["headers"][":status"], "413")
         self.assertEqual(self._rst_codes(frames, 3), [ERROR_NO_ERROR])
 
+    def test_finished_streams_are_released(self):
+        chunks = [CONNECTION_PREFACE, Frame(FRAME_SETTINGS, 0, 0, b"").serialize()]
+        for stream_id in range(1, 41, 2):
+            chunks.append(self.headers_frame(stream_id, self.request("/echo", "POST"), False))
+            chunks.append(Frame(FRAME_DATA, FLAG_END_STREAM, stream_id, b"x" * 64).serialize())
+        pipe = Pipe(b"".join(chunks))
+        connection = Http2Connection(pipe, self.app, client_address=("127.0.0.1", 1234))
+        connection.serve()
+
+        answers = self.responses(frames_in(pipe.sent))
+        self.assertEqual(len(answers), 20)
+        self.assertEqual(connection.streams, {})
+
+    def test_headers_on_a_released_reset_stream_are_ignored(self):
+        trailers = [("x-checksum", "abc")]
+        frames = self.run_connection(
+            self.headers_frame(3, self.request("/echo", "POST"), end_stream=False),
+            Frame(FRAME_DATA, 0, 3, b"x" * 20).serialize(),
+            self.headers_frame(3, trailers),
+            self.headers_frame(5, self.request("/hello?n=5")),
+            max_body_bytes=10,
+        )
+        answers = self.responses(frames)
+        self.assertEqual(answers[3]["headers"][":status"], "413")
+        self.assertFalse(any(f.type == FRAME_GOAWAY and struct.unpack(">II", f.payload[:8])[1]
+                             for f in frames))
+        self.assertIn(b'"n":"5"', answers[5]["body"])
+
     def test_a_body_within_the_limit_is_served(self):
         frames = self.run_connection(
             self.headers_frame(3, self.request("/echo", "POST"), end_stream=False),
