@@ -862,6 +862,35 @@ class TestConcurrentHandlers(ConnectionHarness):
         self.assertEqual(resets, [ERROR_INTERNAL_ERROR])
         self.assertIn(b'"n":"3"', self.responses(frames)[3]["body"])
 
+    def test_a_response_that_cannot_be_sent_resets_its_stream(self):
+        class Unsendable(Http2Connection):
+            def send_response(self, stream, response, *, send_body=True):
+                if stream.id == 1:
+                    raise UnicodeEncodeError("ascii", "\u00e9", 0, 1, "unencodable")
+                return super().send_response(stream, response, send_body=send_body)
+
+        pipe = Pipe(
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + self.headers_frame(1, self.request("/hello?n=1"))
+            + self.headers_frame(3, self.request("/hello?n=3"))
+        )
+        connection = Unsendable(pipe, self.app, client_address=("127.0.0.1", 1))
+        connection.serve()
+        frames = frames_in(pipe.sent)
+        resets = [
+            struct.unpack(">I", f.payload)[0]
+            for f in frames
+            if f.type == FRAME_RST_STREAM and f.stream_id == 1
+        ]
+        self.assertEqual(resets, [ERROR_INTERNAL_ERROR])
+        self.assertNotIn(1, connection.streams)
+        self.assertIn(b'"n":"3"', self.responses(frames)[3]["body"])
+
+    def test_handler_threads_are_capped_per_connection(self):
+        connection = Http2Connection(Pipe(), self.app, max_streams=500)
+        self.assertEqual(connection._max_handlers, Http2Connection.MAX_HANDLER_THREADS)
+
     def test_content_length_must_match_the_data(self):
         request = self.request("/echo", "POST") + [("content-length", "10")]
         frames = self.run_connection(

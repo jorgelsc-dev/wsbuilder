@@ -360,6 +360,9 @@ class Http2Connection:
     MAX_PENDING_STREAM_BYTES = 64 * 1024
     #: How long a closing connection waits for producers to finish their bodies.
     PRODUCER_GRACE_SECONDS = 5.0
+    #: Handler threads per connection; streams beyond it wait in the pool's
+    #: queue, so many connections cannot multiply into thousands of threads.
+    MAX_HANDLER_THREADS = 16
 
     def __init__(
         self,
@@ -410,7 +413,7 @@ class Http2Connection:
         self._reading = True
         #: Set when producers must stop at once (connection error or timeout).
         self._abandoned = False
-        self._max_handlers = max(1, int(max_streams))
+        self._max_handlers = max(1, min(int(max_streams), int(self.MAX_HANDLER_THREADS)))
         self._handler_pool = None
         self._handlers = set()
 
@@ -874,6 +877,18 @@ class Http2Connection:
                 self.send_response(stream, response, send_body=request.method != "HEAD")
                 self._release_closed_streams()
         except OSError:
+            self._close_unsent(response)
+        except Exception as exc:  # noqa: BLE001 - reported on the stream
+            # An unencodable response must not leave the stream open for ever.
+            get_log(self.app).exception(
+                "http2", f"response failed on stream {stream.id}: {exc}", exc
+            )
+            with self._lock:
+                if not stream.closed and not self._abandoned:
+                    stream.state = CLOSED
+                    stream.reset_code = ERROR_INTERNAL_ERROR
+                    self.send_rst_stream(stream.id, ERROR_INTERNAL_ERROR)
+                self._release_closed_streams()
             self._close_unsent(response)
 
     @staticmethod
