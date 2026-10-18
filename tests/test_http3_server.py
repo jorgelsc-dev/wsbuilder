@@ -433,6 +433,63 @@ class TestServerHelpers(unittest.TestCase):
         self.assertEqual(server.handle_datagram(b"", ("127.0.0.1", 1)), [])
 
 
+
+def _client_initial(dcid, scid, garbage=False):
+    """One client Initial datagram; ``garbage`` leaves it unopenable."""
+    client_secret, _server = initial_secrets(dcid)
+    keys = PacketKeys(client_secret)
+    payload = qf.pad_to(qf.serialize_frames([qf.CryptoFrame(0, openssl_client_hello())]), 1162)
+    header = build_long_header(
+        PACKET_INITIAL, 1, dcid, scid, packet_number=0,
+        payload_length=len(payload) + AEAD_TAG_SIZE,
+    )
+    if garbage:
+        return header + b"\x00" * (len(payload) + AEAD_TAG_SIZE)
+    return apply_header_protection(keys, header + keys.seal(0, header, payload), len(header) - 4, 4)
+
+
+class TestConnectionTable(unittest.TestCase):
+    def setUp(self):
+        self.app = App()
+        self.addCleanup(self.app.close)
+        ca = CertificateAuthority.create("Table CA")
+        self.manager = CertificateManager(ca=ca, common_name="localhost")
+
+    def _server(self, **options):
+        return Http3Server("127.0.0.1", 0, self.app, self.manager, **options)
+
+    def _initial(self, server, port, garbage=False):
+        datagram = _client_initial(new_connection_id(8), new_connection_id(8), garbage)
+        return server.handle_datagram(datagram, ("127.0.0.1", port))
+
+    def test_an_initial_that_does_not_open_takes_no_slot(self):
+        server = self._server(max_connections=2)
+        for port in range(1000, 1010):
+            self.assertEqual(self._initial(server, port, garbage=True), [])
+        self.assertEqual(server.connection_count(), 0)
+        self.assertNotEqual(self._initial(server, 2000), [])
+        self.assertEqual(server.connection_count(), 1)
+
+    def test_the_limit_counts_connections_not_their_ids(self):
+        server = self._server(max_connections=2)
+        self.assertNotEqual(self._initial(server, 1000), [])
+        self.assertNotEqual(self._initial(server, 1001), [])
+        self.assertEqual(server.connection_count(), 2)
+        self.assertEqual(self._initial(server, 1002), [])
+        self.assertEqual(server.connection_count(), 2)
+
+    def test_idle_connections_are_expired(self):
+        server = self._server(max_connections=1)
+        self.assertNotEqual(self._initial(server, 1000), [])
+        (stale,) = {id(c): c for c in server.connections.values()}.values()
+        self.assertEqual(server._expire_idle(), 0)
+
+        # A full table makes room by dropping connections past the timeout.
+        stale.last_activity -= server.IDLE_TIMEOUT_SECONDS + 1
+        self.assertNotEqual(self._initial(server, 1001), [])
+        self.assertTrue(stale.closed)
+        self.assertEqual(server.connection_count(), 1)
+
 if __name__ == "__main__":
     unittest.main()
 
