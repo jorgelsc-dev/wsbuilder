@@ -1350,6 +1350,11 @@ class App:
             if thread_info.port > 0:
                 resp.headers.setdefault(THREAD_RESPONSE_PORT_HEADER, str(thread_info.port))
             resp.headers.setdefault(THREAD_RESPONSE_MODE_HEADER, "worker")
+        # Headers hold one value per name, so a cookie the handler set wins
+        # over the affinity cookie instead of being replaced by it.
+        if thread_info is not None and not any(
+            str(name).lower() == "set-cookie" for name in resp.headers
+        ):
             signed_cookie = self._sign_thread_cookie(route.path, thread_info.thread_id)
             resp.headers["Set-Cookie"] = build_set_cookie(
                 self.thread_cookie_name,
