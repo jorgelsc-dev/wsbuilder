@@ -370,6 +370,95 @@ class TestConnectionFlow(ConnectionHarness):
         )
         self.assertIn(b'"length":10', self.responses(frames)[3]["body"])
 
+    def test_a_streamed_body_is_sent_as_it_is_produced(self):
+        @self.app.api("/chunks", methods=("GET",))
+        def chunks(_request):
+            return Response.stream(iter([b"one ", b"two ", b"three"]))
+
+        frames = self.run_connection(self.headers_frame(1, self.request("/chunks")))
+        data = [f for f in frames if f.type == FRAME_DATA and f.stream_id == 1]
+        self.assertGreaterEqual(len(data), 3)
+        self.assertEqual(b"".join(f.payload for f in data), b"one two three")
+        self.assertTrue(data[-1].flags & FLAG_END_STREAM)
+        self.assertNotIn("content-length", self.responses(frames)[1]["headers"])
+
+    def test_an_endless_stream_is_held_to_the_window_and_others_are_served(self):
+        produced = []
+
+        def endless():
+            for _ in range(10_000):
+                produced.append(1)
+                yield b"x" * 1024
+
+        @self.app.api("/endless", methods=("GET",))
+        def endless_route(_request):
+            return Response.stream(endless())
+
+        class QuickConnection(Http2Connection):
+            PRODUCER_GRACE_SECONDS = 0.5
+
+        payload = (
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + self.headers_frame(1, self.request("/endless"))
+            + self.headers_frame(3, self.request("/hello?n=3"))
+        )
+        pipe = Pipe(payload)
+        QuickConnection(pipe, self.app, client_address=("127.0.0.1", 1234)).serve()
+        frames = frames_in(pipe.sent)
+
+        sent = sum(len(f.payload) for f in frames if f.type == FRAME_DATA and f.stream_id == 1)
+        # Only the peer's window was sent; the rest was never produced.
+        self.assertLessEqual(sent, 65535)
+        self.assertLess(len(produced), 10_000)
+        self.assertIn(b'"n":"3"', self.responses(frames)[3]["body"])
+
+    def test_a_long_stream_continues_as_the_client_grants_window(self):
+        import socket
+        import threading
+
+        total = 200 * 1024
+
+        @self.app.api("/big", methods=("GET",))
+        def big(_request):
+            return Response.stream(b"y" * 1024 for _ in range(total // 1024))
+
+        server_side, client = socket.socketpair()
+        self.addCleanup(client.close)
+        server_side.settimeout(5.0)
+        client.settimeout(5.0)
+        connection = Http2Connection(server_side, self.app, client_address=("127.0.0.1", 1))
+        thread = threading.Thread(target=connection.serve, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5.0)
+        self.addCleanup(server_side.close)
+
+        client.sendall(
+            CONNECTION_PREFACE
+            + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+            + self.headers_frame(1, self.request("/big"))
+        )
+        received, ended, buffer = 0, False, b""
+        while not ended:
+            buffer += client.recv(65536)
+            while len(buffer) >= 9:
+                length = int.from_bytes(buffer[:3], "big")
+                if len(buffer) < 9 + length:
+                    break
+                frame_type, flags, stream_id = buffer[3], buffer[4], buffer[5:9]
+                body, buffer = buffer[9 : 9 + length], buffer[9 + length :]
+                if frame_type == FRAME_DATA and int.from_bytes(stream_id, "big") == 1:
+                    received += len(body)
+                    ended = bool(flags & FLAG_END_STREAM)
+                    if body:
+                        grant = struct.pack(">I", len(body))
+                        client.sendall(
+                            Frame(FRAME_WINDOW_UPDATE, 0, 0, grant).serialize()
+                            + Frame(FRAME_WINDOW_UPDATE, 0, 1, grant).serialize()
+                        )
+        self.assertEqual(received, total)
+        client.close()
+
     def test_streams_are_multiplexed(self):
         frames = self.run_connection(
             self.headers_frame(1, self.request("/hello?n=1")),
