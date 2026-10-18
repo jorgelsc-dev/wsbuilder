@@ -6,23 +6,23 @@ on:
     branches:
       - main
 
+# Read-only by default; only the release job gets write access.
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: release-from-main-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  create-release:
+  test:
     runs-on: ubuntu-latest
+    # Installs dependencies and runs the suite without any write permission.
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v7
@@ -37,6 +37,27 @@ jobs:
 
       - name: Run tests before release
         run: PYTHONPATH=src pytest -q
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: test
+    # Pushes the release branch and tag, creates the GitHub Release, triggers
+    # the publish workflow and opens the next-version pull request. Nothing
+    # here installs packages; the inline scripts use the standard library.
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
 
       - name: Calculate semantic version from main history
         id: semver

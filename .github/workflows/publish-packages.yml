@@ -6,13 +6,16 @@ on:
     tags:
       - "v*"
 
+# Read-only by default; each job asks only for what it uses.
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Runs pip and the test suite, so it gets no OIDC token and no write access.
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -79,7 +82,7 @@ jobs:
 
       - name: Publish to PyPI (API token)
         if: env.PYPI_TOKEN != ''
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           user: __token__
           password: ${{ env.PYPI_TOKEN }}
@@ -87,7 +90,7 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing fallback)
         if: env.PYPI_TOKEN == ''
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           skip-existing: true
 
@@ -105,6 +108,6 @@ jobs:
           path: dist
 
       - name: Publish release assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
