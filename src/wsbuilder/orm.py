@@ -8,6 +8,8 @@ import sqlite3
 import threading
 from datetime import date, datetime
 
+from .logs import get_log
+
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _WRITE_PREFIXES = {
     "INSERT",
@@ -364,7 +366,7 @@ class Database:
 
     def _log(self, *parts):
         if self.debug:
-            print("[ORM]", *parts)
+            get_log().info("orm", " ".join(str(part) for part in parts))
 
     def set_pragma(self, name: str, value):
         validate_identifier(name)

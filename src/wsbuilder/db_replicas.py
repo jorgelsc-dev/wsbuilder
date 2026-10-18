@@ -6,6 +6,8 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 
+from .logs import get_log
+
 
 @dataclass
 class SQLite3OptimizationConfig:
@@ -267,7 +269,7 @@ class OptimizedDatabase:
 
     def _log(self, *parts):
         if self.debug:
-            print("[DB]", *parts)
+            get_log().info("db", " ".join(str(part) for part in parts))
 
     def _get_tx_depth(self) -> int:
         return getattr(self._tx_depth, "value", 0)

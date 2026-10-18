@@ -9,6 +9,7 @@ from html import escape as html_escape
 from .constants import DEFAULT_CORS_ALLOW_ORIGIN
 from .cookies import build_set_cookie, get_cookie
 from .http import Response
+from .logs import get_log
 from .tasks import TaskManager
 from .ws import _normalize_protocols
 
@@ -711,7 +712,13 @@ class App:
             **kwargs,
         )
 
-    def enable_logs(self, path="logs/wsbuilder.ndjson", attr_name="logs", ensure_parent=True):
+    def enable_logs(
+        self,
+        path="logs/wsbuilder.ndjson",
+        attr_name="logs",
+        ensure_parent=True,
+        console_level="warning",
+    ):
         from .logs import install_logs
 
         return install_logs(
@@ -719,6 +726,7 @@ class App:
             path=path,
             attr_name=attr_name,
             ensure_parent=ensure_parent,
+            console_level=console_level,
         )
 
     def describe(self):
@@ -1302,7 +1310,9 @@ class App:
         except _RouteExecutionError as e:
             return Response.text(e.message, status=e.status)
         except Exception as e:
-            print(f"[http] handler error {request.method} {request.path}: {e}")
+            get_log(self).exception(
+                "http", f"handler error {request.method} {request.path}: {e}", e
+            )
             if route.kind == "api":
                 headers = {}
                 if cors_allow_origin:

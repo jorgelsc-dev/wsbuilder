@@ -4,6 +4,7 @@ from urllib.parse import parse_qsl
 
 from .constants import STATUS_MESSAGES
 from .headers import validate_header_name, validate_header_value
+from .logs import get_log
 
 MAX_QUERY_FIELDS = 1024
 HTTP_0_9 = "HTTP/0.9"
@@ -231,7 +232,7 @@ def send_http_response(conn, response, *, send_body=True, keep_alive=False, vers
             else:
                 conn.sendall(response.body)
         except Exception as e:
-            print(f"[http] send error {status_code}: {e}")
+            get_log().warning("http", f"send error {status_code}: {e}")
         return
     reason = validate_header_value(
         response.reason or STATUS_MESSAGES.get(status_code, "Unknown")
@@ -290,7 +291,7 @@ def send_http_response(conn, response, *, send_body=True, keep_alive=False, vers
         else:
             conn.sendall(response.body)
     except Exception as e:
-        print(f"[http] send error {status_code}: {e}")
+        get_log().warning("http", f"send error {status_code}: {e}")
 
 
 def _iter_stream_chunks(source):

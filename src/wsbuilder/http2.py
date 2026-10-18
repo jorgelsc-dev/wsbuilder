@@ -14,6 +14,7 @@ it would desynchronise the decoder for every later stream.
 import struct
 
 from .hpack import Decoder, Encoder, HPACKError
+from .logs import get_log
 
 #: RFC 9113 section 3.4. A client opens with this exact octet sequence.
 CONNECTION_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -632,7 +633,7 @@ class Http2Connection:
         try:
             response = self.app.dispatch(request)
         except Exception as exc:  # noqa: BLE001 - reported on the stream
-            print(f"[http2] handler error on stream {stream.id}: {exc}")
+            get_log(self.app).exception("http2", f"handler error on stream {stream.id}: {exc}", exc)
             raise StreamError("handler failed", stream.id, ERROR_INTERNAL_ERROR) from exc
         self.send_response(stream, response, send_body=request.method != "HEAD")
 

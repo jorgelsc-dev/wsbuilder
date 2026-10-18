@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from .constants import MAGIC_WS
 from .http import Response, send_http_response
+from .logs import get_log
 
 MAX_WS_FRAME_PAYLOAD_BYTES = 2 * 1024 * 1024
 MAX_WS_MESSAGE_PAYLOAD_BYTES = 2 * 1024 * 1024
@@ -261,7 +262,7 @@ class WebSocket:
         try:
             callback(*args)
         except Exception as exc:
-            print(f"[ws] callback error: {exc}")
+            get_log().exception("ws", f"callback error: {exc}", exc)
 
     def _mark_rx(self):
         self._last_rx_at = self._now()
