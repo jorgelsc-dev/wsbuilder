@@ -313,6 +313,7 @@ def _sending_connection(parameters=None):
     connection._peer_stream_max = {}
     connection._sent_data_total = 0
     connection._blocked_reported = {}
+    connection._reset_streams = set()
     connection.recovery = LossRecovery(levels=(LEVEL_APPLICATION,), time_source=Clock())
     connection.peer_transport_parameters = {
         key: qf.encode_varint(value) for key, value in (parameters or {}).items()
@@ -451,6 +452,28 @@ class TestSendCongestionControl(unittest.TestCase):
         self.assertEqual(b"".join(f.data for f in frames), payload)
         self.assertTrue(frames[-1].fin)
         self.assertEqual(len(frames), -(-len(payload) // STREAM_CHUNK_SIZE))
+
+
+class TestResetStream(unittest.TestCase):
+    def test_reset_drops_queued_data_and_sends_reset_stream(self):
+        connection = _sending_connection(
+            {TP_INITIAL_MAX_DATA: 1 << 20, TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL: 1500}
+        )
+        connection.queue_stream_data(0, b"x" * 4000)
+        connection.queue_stream_data(4, b"y" * 10)
+        connection.drain_outbound()
+        self.assertEqual(connection.queued_stream_bytes(0), 2500)
+
+        connection.reset_stream(0, 0x0102)
+        connection.queue_stream_data(0, b"late", fin=True)
+        connection.drain_outbound()
+
+        (reset,) = [f for f in connection.sent_frames if isinstance(f, qf.ResetStreamFrame)]
+        self.assertEqual((reset.stream_id, reset.error_code, reset.final_size), (0, 0x0102, 1500))
+        self.assertEqual(_stream_bytes(connection, 0), 1500)
+        self.assertEqual(connection.queued_stream_bytes(0), 0)
+        # A well-formed frame: a parser skips it cleanly.
+        self.assertEqual(qf.parse_frames(reset.serialize()), [])
 
 
 class TestSendBackpressure(unittest.TestCase):

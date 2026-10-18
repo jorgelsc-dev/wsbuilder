@@ -402,6 +402,7 @@ class Http3Server:
         wait_for_room = getattr(connection, "wait_for_send_room", None)
 
         def pump():
+            completed = False
             try:
                 for chunk in _iter_stream_chunks(response.stream):
                     if connection.closed:
@@ -419,6 +420,8 @@ class Http3Server:
                         )
                         break
                     connection.queue_stream_data(stream_id, http3.encode_frame(http3.FRAME_DATA, chunk))
+                else:
+                    completed = True
             except Exception as e:
                 get_log(self.app).exception("http3", f"streaming response on stream {stream_id} failed: {e}", e)
             finally:
@@ -431,7 +434,12 @@ class Http3Server:
                 except Exception as e:
                     get_log(self.app).exception("http3", f"streaming cleanup on stream {stream_id} failed: {e}", e)
                 finally:
-                    connection.queue_stream_data(stream_id, b"", fin=True)
+                    reset = getattr(connection, "reset_stream", None)
+                    if completed or not callable(reset):
+                        connection.queue_stream_data(stream_id, b"", fin=True)
+                    else:
+                        # A FIN would present the truncated body as complete.
+                        reset(stream_id, http3.H3_INTERNAL_ERROR)
 
         threading.Thread(target=pump, name=f"http3-stream-{stream_id}", daemon=True).start()
 

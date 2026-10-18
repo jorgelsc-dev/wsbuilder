@@ -177,6 +177,28 @@ class MaxStreamDataFrame:
         )
 
 
+class ResetStreamFrame:
+    """Abandons the sending part of a stream (RFC 9000 section 19.4)."""
+
+    __slots__ = ("stream_id", "error_code", "final_size")
+
+    def __init__(self, stream_id, error_code, final_size):
+        self.stream_id = int(stream_id)
+        self.error_code = int(error_code)
+        self.final_size = int(final_size)
+
+    def serialize(self):
+        return (
+            encode_varint(FRAME_RESET_STREAM)
+            + encode_varint(self.stream_id)
+            + encode_varint(self.error_code)
+            + encode_varint(self.final_size)
+        )
+
+    def __repr__(self):
+        return f"<RESET_STREAM {self.stream_id} code=0x{self.error_code:x}>"
+
+
 class DataBlockedFrame:
     """The connection has data to send but the peer's MAX_DATA stops it."""
 
@@ -465,6 +487,7 @@ __all__ = [
     "PROTOCOL_VIOLATION",
     "PathFrame",
     "QuicFrameError",
+    "ResetStreamFrame",
     "STREAM_FIN",
     "SimpleFrame",
     "StreamDataBlockedFrame",

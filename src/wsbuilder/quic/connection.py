@@ -201,6 +201,7 @@ class QuicConnection:
         self._peer_stream_max = {}
         self._sent_data_total = 0
         self._blocked_reported = {}
+        self._reset_streams = set()
         self.handshake_complete = False
         self.closed = False
         self.alpn = None
@@ -589,6 +590,19 @@ class QuicConnection:
                 self._outbound_room.wait(wait_for)
             return not self.closed
 
+    def reset_stream(self, stream_id, error_code):
+        """Abandon our side of ``stream_id``: drop what is queued, send RESET_STREAM.
+
+        Lets a producer that fails or stalls tell the peer the response is
+        incomplete instead of ending it with a FIN. Safe from any thread.
+        """
+        stream_id = int(stream_id)
+        with self._outbound_room:
+            self._outbound = [entry for entry in self._outbound if entry[0] != stream_id]
+            self._outbound.append((stream_id, None, int(error_code)))
+            self._queued_bytes.pop(stream_id, None)
+            self._outbound_room.notify_all()
+
     # -- sending -------------------------------------------------------
 
     def send_stream_data(self, stream_id, payload, fin=True, offset=0):
@@ -629,6 +643,15 @@ class QuicConnection:
         control = []
         stopped = False
         for stream_id, piece, fin in pending:
+            if piece is None:
+                # A reset: its final size is what the peer was already sent.
+                final_size = self._send_offsets.get(stream_id, 0)
+                control.append(qframes.ResetStreamFrame(stream_id, fin, final_size))
+                self._reset_streams.add(stream_id)
+                keep = [entry for entry in keep if entry[0] != stream_id]
+                continue
+            if stream_id in self._reset_streams:
+                continue  # Nothing more goes out on a stream we reset.
             if stopped or stream_id in blocked_streams:
                 keep.append((stream_id, piece, fin))
                 continue
@@ -671,7 +694,8 @@ class QuicConnection:
             self._outbound[:0] = keep
             queued = {}
             for stream_id, piece, _fin in self._outbound:
-                queued[stream_id] = queued.get(stream_id, 0) + len(piece)
+                if piece is not None:
+                    queued[stream_id] = queued.get(stream_id, 0) + len(piece)
             self._queued_bytes = queued
             self._outbound_room.notify_all()
         return datagrams
