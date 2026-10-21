@@ -63,13 +63,18 @@ from .framework import (
 )
 from .headers import add_header, get_header, has_header, normalize_header_name, set_header
 from .ia import (
+    AudioData,
+    ByteTokenizer,
     DataSet,
     DataSummary,
     DenseLayer,
     ErrorSummary,
+    HashingTextVectorizer,
     NeuralNetwork,
+    audio_features,
     describe_data,
     evaluate_errors,
+    load_wav,
     submit_training_task,
 )
 from .logs import NDJSONLog, install_logs
@@ -250,6 +255,11 @@ __all__ = [
     "OptimizedDatabase",
     "SQLite3OptimizationConfig",
     "DataSet",
+    "AudioData",
+    "ByteTokenizer",
+    "HashingTextVectorizer",
+    "audio_features",
+    "load_wav",
     "DataSummary",
     "ErrorSummary",
     "DenseLayer",

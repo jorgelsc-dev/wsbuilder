@@ -13,6 +13,21 @@ WSBuilder incluye herramientas sencillas de data science y redes neuronales hech
 - `describe_data`
 - `evaluate_errors`
 - `submit_training_task`
+- `ByteTokenizer`
+- `HashingTextVectorizer`
+- `AudioData`, `load_wav`, `audio_features`
+
+## Texto, tokens y audio
+
+La IA acepta texto Unicode, incluidos idiomas sin espacios, emoji y codigo,
+mediante tokens UTF-8 reversibles y vectores numericos de caracteres. Tambien
+convierte audio WAV PCM en muestras mono y caracteristicas numericas para
+entrenar o ejecutar las redes existentes. Todo funciona con la biblioteca
+estandar, sin descargar modelos ni enviar datos a servicios externos.
+
+Consulta los [ejemplos de texto y audio](ai-predict.md#texto-unicode-y-tokens).
+Estos adaptadores preparan datos: no incorporan un modelo de conversacion,
+traduccion, reconocimiento de voz, generacion de audio, imagen o video.
 
 ## Datos
 
