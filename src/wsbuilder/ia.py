@@ -20,7 +20,15 @@ import random
 from dataclasses import dataclass
 from statistics import NormalDist
 
+from .ia_audio import AudioData, audio_features, load_wav
+from .ia_text import ByteTokenizer, HashingTextVectorizer
+
 __all__ = [
+    "AudioData",
+    "ByteTokenizer",
+    "HashingTextVectorizer",
+    "audio_features",
+    "load_wav",
     "DataSet",
     "DataSummary",
     "DenseLayer",

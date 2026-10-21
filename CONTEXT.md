@@ -71,6 +71,7 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   proxyi.py             reverse proxy y balanceo
   pki.py                CA, certificados y material TLS (extra tls)
   ia.py predicts.py     redes neuronales y predicción
+  ia_text.py ia_audio.py tokens UTF-8, vectores de texto y audio WAV PCM
 tests/                  suite unittest ejecutada con pytest (test_*.py)
 docs/ + mkdocs.yml      sitio MkDocs (docs/reference, docs/help, stylesheets, assets)
 examples/full-project/  proyecto de ejemplo
@@ -104,7 +105,7 @@ tests, a `tests/`; los de docs, a `docs/`.
 | DNS, mDNS y descubrimiento | `dns.py`, `mdns.py` | `test_dns.py`, `test_mdns.py` | `dns.md`, `mdns.md`, `network-edge.md` |
 | Reverse proxy y balanceo | `proxyi.py` | `test_proxyi.py`, `test_proxyi_routing.py` | `proxy.md` |
 | Certificados y material TLS | `pki.py`, `__init__.py` (exportación diferida) | `test_pki.py`, `test_optional_extras.py` | `tls-certificates.md` |
-| Redes neuronales y predicción | `ia.py`, `predicts.py` | `test_ia.py`, `test_predicts.py` | `ia.md`, `ai-predict.md` |
+| Redes neuronales, texto, audio y predicción | `ia.py`, `ia_text.py`, `ia_audio.py`, `predicts.py` | `test_ia.py`, `test_ia_text_audio.py`, `test_predicts.py` | `ia.md`, `ai-predict.md` |
 | Demo, documentación y políticas de contribución | `__main__.py`, `docs/`, `.github/workflows/`, `CONTRIBUTING.md` | `test_demo_monitor.py`, `test_docs.py`, `test_documentation_files.py`, `test_contributing_policy.py`, `test_pr_identity_policy.py`, `test_example_full_project.py` | `index.md`, `architecture.md`, `api-map.md` |
 
 Otros documentos de `docs/`: `install.md`, `getting-started.md`,
@@ -301,6 +302,12 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   pump de streaming HTTP/3, que termina con `RESET_STREAM` si falla o se atasca.
 - IA: `NeuralNetwork`, `DenseLayer`, `DataSet`, `DataSummary`, `ErrorSummary`,
   `describe_data`, `evaluate_errors`, `submit_training_task`; `Predictor`.
+  Adaptadores de biblioteca estándar exportados desde `wsbuilder` y
+  `wsbuilder.ia`: `ByteTokenizer` (UTF-8 reversible), `HashingTextVectorizer`
+  (ngramas Unicode de dimensión fija), `AudioData`, `load_wav` (PCM entero
+  8/16/24/32 bits, mezcla mono) y `audio_features` (cinco características).
+  Los vectores se usan con `DataSet` y `NeuralNetwork`; no incluyen modelos
+  preentrenados ni traducción, transcripción o generación multimodal.
 
 ## Flujo y contratos que deben conservarse
 
