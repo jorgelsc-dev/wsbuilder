@@ -206,32 +206,12 @@ def _zeros_matrix(rows, cols):
     return [[0.0 for _ in range(cols)] for _ in range(rows)]
 
 
-def _transpose(matrix):
-    return [list(column) for column in zip(*matrix)]
-
-
 def _dot(a, b):
     return sum(x * y for x, y in zip(a, b))
 
 
-def _matvec(matrix, vector):
-    return [sum(value * vector[index] for index, value in enumerate(row)) for row in matrix]
-
-
 def _outer(a, b):
     return [[x * y for y in b] for x in a]
-
-
-def _add_inplace_vector(total, update):
-    for index, value in enumerate(update):
-        total[index] += value
-
-
-def _add_inplace_matrix(total, update):
-    for row_index, row in enumerate(update):
-        target_row = total[row_index]
-        for col_index, value in enumerate(row):
-            target_row[col_index] += value
 
 
 def _hadamard(a, b):
@@ -588,8 +568,12 @@ class DenseLayer:
         ]
         self.biases = [0.0 for _ in range(self.output_size)]
         self._cache_input = None
+        self._cache_nonzero = None
+        self._cache_input_finite = False
         self._cache_z = None
         self._cache_output = None
+        # Lo fija NeuralNetwork.fit mientras los pesos no cambian; None = calcular.
+        self._weights_finite = None
 
     def __repr__(self):
         return (
@@ -597,16 +581,82 @@ class DenseLayer:
             f"activation={self.activation!r})"
         )
 
+    def _compute_weights_finite(self):
+        # Una suma no finita delata cualquier inf/nan; un desbordamiento entre
+        # valores finitos solo provoca usar la ruta densa, que es exacta.
+        return all(math.isfinite(sum(row)) for row in self.weights)
+
+    def _weights_are_finite(self):
+        if self._weights_finite is not None:
+            return self._weights_finite
+        return self._compute_weights_finite()
+
     def forward(self, inputs):
         vector = _vector_from_iterable(inputs, label="inputs", expected_length=self.input_size)
         self._cache_input = vector
-        z_values = [
-            _dot(row, vector) + bias for row, bias in zip(self.weights, self.biases)
-        ]
+        # Omitir terminos exactamente 0.0 no altera las sumas siempre que los
+        # factores sean finitos (0 * inf produciria nan), asi que solo se usan
+        # las rutas dispersas con entradas y pesos finitos.
+        input_finite = math.isfinite(sum(vector))
+        self._cache_input_finite = input_finite
+        nonzero = [(index, value) for index, value in enumerate(vector) if value != 0.0]
+        self._cache_nonzero = nonzero
+        if input_finite and 2 * len(nonzero) < len(vector) and self._weights_are_finite():
+            z_values = [
+                sum(row[index] * value for index, value in nonzero) + bias
+                for row, bias in zip(self.weights, self.biases)
+            ]
+        else:
+            z_values = [
+                _dot(row, vector) + bias for row, bias in zip(self.weights, self.biases)
+            ]
         self._cache_z = z_values
         outputs = _activate_vector(z_values, self.activation)
         self._cache_output = outputs
         return outputs[:]
+
+    def _grad_input(self, grad_vector):
+        """Calcula W^T @ grad sin transponer la matriz de pesos."""
+        if self._weights_are_finite():
+            active_rows = [
+                (self.weights[row_index], grad)
+                for row_index, grad in enumerate(grad_vector)
+                if grad != 0.0
+            ]
+        else:
+            active_rows = list(zip(self.weights, grad_vector))
+        return [
+            float(sum(row[col_index] * grad for row, grad in active_rows))
+            for col_index in range(self.input_size)
+        ]
+
+    def _accumulate_gradients(self, grad_z, batch_weights, batch_biases, need_input):
+        """Suma grad_z (x) entrada en los acumuladores del lote.
+
+        Con valores finitos solo recorre las entradas no nulas y las filas con
+        gradiente distinto de cero; si no, usa el producto exterior completo.
+        Devuelve el gradiente respecto a la entrada si ``need_input`` es
+        verdadero; en caso contrario devuelve ``None``.
+        """
+        nonzero = self._cache_nonzero
+        inputs = self._cache_input
+        skip_zeros = self._cache_input_finite and all(math.isfinite(grad) for grad in grad_z)
+        dense = not skip_zeros or 2 * len(nonzero) >= self.input_size
+        for row_index, grad in enumerate(grad_z):
+            if grad == 0.0 and skip_zeros:
+                continue
+            batch_biases[row_index] += grad
+            target_row = batch_weights[row_index]
+            if dense:
+                batch_weights[row_index] = [
+                    total + grad * value for total, value in zip(target_row, inputs)
+                ]
+            else:
+                for col_index, value in nonzero:
+                    target_row[col_index] += grad * value
+        if not need_input:
+            return None
+        return self._grad_input(grad_z)
 
     def gradients(self, grad_z):
         if self._cache_input is None or self._cache_z is None:
@@ -614,7 +664,7 @@ class DenseLayer:
         grad_vector = _vector_from_iterable(grad_z, label="grad_z", expected_length=self.output_size)
         grad_weights = _outer(grad_vector, self._cache_input)
         grad_biases = grad_vector[:]
-        grad_input = _matvec(_transpose(self.weights), grad_vector)
+        grad_input = self._grad_input(grad_vector)
         return grad_input, grad_weights, grad_biases
 
     def apply_gradients(self, grad_weights, grad_biases, scale):
@@ -795,59 +845,72 @@ class NeuralNetwork:
         history = {"loss": []}
         indices = list(range(sample_count))
 
-        for _epoch in range(epochs):
-            _check_task_cancelled(task_handle)
-            if shuffle and sample_count > 1:
-                self._rng.shuffle(indices)
-            epoch_loss = 0.0
-
-            for batch_start in range(0, sample_count, batch_size):
+        try:
+            for _epoch in range(epochs):
                 _check_task_cancelled(task_handle)
-                batch_indices = indices[batch_start : batch_start + batch_size]
-                batch_weights = [
-                    _zeros_matrix(layer.output_size, layer.input_size) for layer in self.layers
-                ]
-                batch_biases = [_zeros_vector(layer.output_size) for layer in self.layers]
+                if shuffle and sample_count > 1:
+                    self._rng.shuffle(indices)
+                epoch_loss = 0.0
 
-                for sample_index in batch_indices:
-                    prediction = self.forward(X_rows[sample_index])
-                    target = Y_rows[sample_index]
-                    epoch_loss += _loss_value(prediction, target, self.loss)
-                    grad = self._output_gradient(prediction, target)
-                    if self.loss == "mse":
-                        output_layer = self.layers[-1]
-                        grad = _activation_backward(
-                            output_layer.activation,
-                            output_layer._cache_z,
-                            output_layer._cache_output,
-                            grad,
-                        )
+                for batch_start in range(0, sample_count, batch_size):
+                    _check_task_cancelled(task_handle)
+                    batch_indices = indices[batch_start : batch_start + batch_size]
+                    batch_weights = [
+                        _zeros_matrix(layer.output_size, layer.input_size) for layer in self.layers
+                    ]
+                    batch_biases = [_zeros_vector(layer.output_size) for layer in self.layers]
+                    # Los pesos no cambian dentro del lote: se comprueba una vez si
+                    # son finitos para decidir si las rutas dispersas son exactas.
+                    for layer in self.layers:
+                        layer._weights_finite = layer._compute_weights_finite()
 
-                    for layer_index in range(len(self.layers) - 1, -1, -1):
-                        layer = self.layers[layer_index]
-                        grad_input, grad_weights, grad_biases = layer.gradients(grad)
-                        _add_inplace_matrix(batch_weights[layer_index], grad_weights)
-                        _add_inplace_vector(batch_biases[layer_index], grad_biases)
-                        if layer_index > 0:
-                            previous = self.layers[layer_index - 1]
-                            grad = _hadamard(
-                                grad_input,
-                                _activation_derivative(
-                                    previous.activation,
-                                    previous._cache_z,
-                                    previous._cache_output,
-                                ),
+                    for sample_index in batch_indices:
+                        prediction = self.forward(X_rows[sample_index])
+                        target = Y_rows[sample_index]
+                        epoch_loss += _loss_value(prediction, target, self.loss)
+                        grad = self._output_gradient(prediction, target)
+                        if self.loss == "mse":
+                            output_layer = self.layers[-1]
+                            grad = _activation_backward(
+                                output_layer.activation,
+                                output_layer._cache_z,
+                                output_layer._cache_output,
+                                grad,
                             )
 
-                scale = learning_rate / len(batch_indices)
-                for layer_index, layer in enumerate(self.layers):
-                    layer.apply_gradients(batch_weights[layer_index], batch_biases[layer_index], scale)
+                        for layer_index in range(len(self.layers) - 1, -1, -1):
+                            layer = self.layers[layer_index]
+                            grad_input = layer._accumulate_gradients(
+                                grad,
+                                batch_weights[layer_index],
+                                batch_biases[layer_index],
+                                need_input=layer_index > 0,
+                            )
+                            if layer_index > 0:
+                                previous = self.layers[layer_index - 1]
+                                grad = _hadamard(
+                                    grad_input,
+                                    _activation_derivative(
+                                        previous.activation,
+                                        previous._cache_z,
+                                        previous._cache_output,
+                                    ),
+                                )
 
-                _check_task_cancelled(task_handle)
+                    scale = learning_rate / len(batch_indices)
+                    for layer_index, layer in enumerate(self.layers):
+                        layer.apply_gradients(batch_weights[layer_index], batch_biases[layer_index], scale)
 
-            history["loss"].append(epoch_loss / sample_count)
+                    _check_task_cancelled(task_handle)
 
-        self._update_calibration(X_rows, Y_rows)
+                history["loss"].append(epoch_loss / sample_count)
+
+            for layer in self.layers:
+                layer._weights_finite = layer._compute_weights_finite()
+            self._update_calibration(X_rows, Y_rows)
+        finally:
+            for layer in self.layers:
+                layer._weights_finite = None
         return history
 
     def fit_classification(self, X, labels, *, classes=None, epochs=1000, learning_rate=None, batch_size=None, shuffle=True, task_handle=None):
