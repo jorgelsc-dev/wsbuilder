@@ -963,9 +963,10 @@ class NeuralNetwork:
 
     def _update_calibration(self, X_rows, Y_rows):
         self._calibration = []
+        predictions = [self.predict(row) for row in X_rows]
         for output_index in range(self.output_size):
             actual = [row[output_index] for row in Y_rows]
-            predicted = [self.predict(row)[output_index] for row in X_rows]
+            predicted = [prediction[output_index] for prediction in predictions]
             self._calibration.append(evaluate_errors(actual, predicted))
 
     def calibration(self):
