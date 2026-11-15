@@ -76,7 +76,11 @@ class _HubHandler(http.server.BaseHTTPRequestHandler):
             ).encode()
             return self._send(200, body, "application/json")
         if self.path.startswith("/owner/repo/resolve/main/"):
-            name = self.path.rsplit("/", 1)[-1]
+            # Only known files are redirected, and the name written into the
+            # Location header is ours, not the one the request carried.
+            name = {known: known for known in self.files}.get(self.path.rsplit("/", 1)[-1])
+            if name is None:
+                return self._send(404, b"missing", "text/plain")
             # The Hub redirects weights to a CDN on another host.
             self.send_response(302)
             self.send_header("Location", f"http://localhost:{self.server.server_port}/cdn/{name}")
