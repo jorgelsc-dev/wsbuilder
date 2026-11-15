@@ -430,7 +430,7 @@ class Http3Server:
         stream.answered = True
 
         tls_meta = {"enabled": True, "version": "TLSv1.3", "alpn": connection.alpn}
-        peer = connection.peer_certificate
+        peer = getattr(connection, "peer_certificate", None)
         if peer is not None:
             from .quic.tls import describe_certificate
 
@@ -552,7 +552,7 @@ class Http3Server:
     def _open_websocket(self, connection, stream):
         """Answer an extended CONNECT: accept it onto a route, or refuse it."""
         tls_meta = {"enabled": True, "version": "TLSv1.3", "alpn": connection.alpn}
-        peer = connection.peer_certificate
+        peer = getattr(connection, "peer_certificate", None)
         if peer is not None:
             from .quic.tls import describe_certificate
 

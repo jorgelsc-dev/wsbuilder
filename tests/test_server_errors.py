@@ -271,7 +271,7 @@ class TestDispatchFailures(QuietConsole):
         conn = ScriptedConn([
             b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n"
             b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n"
-        ], fail_send=lambda data: data.startswith(b'{"ok"'))
+        ], fail_send=lambda data: b'{"ok"' in data)  # the write carrying the body
         HTTPServer("127.0.0.1", 0, app).handle_conn(conn, ("127.0.0.1", 1))
         self.assertEqual(len(app.calls), 1)
         self.assertTrue(conn.closed)
