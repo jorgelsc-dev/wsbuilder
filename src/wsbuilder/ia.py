@@ -739,6 +739,94 @@ class NeuralNetwork:
         self.layers.append(layer)
         return layer
 
+    # -- persistence (GGUF) ---------------------------------------------
+
+    GGUF_ARCHITECTURE = "wsbuilder.dense"
+
+    def to_gguf(self, *, dtype="F64", name=None):
+        """A :class:`~wsbuilder.gguf.GGUFWriter` holding this network.
+
+        Weights are stored as ``blk.N.weight`` (shape ``[inputs, outputs]``)
+        and ``blk.N.bias``; ``dtype`` is ``"F64"`` (exact), ``"F32"`` or
+        ``"F16"`` (smaller files, rounded weights).
+        """
+        import json as _json
+
+        from .gguf import GGMLType, GGUFValueType, GGUFWriter
+
+        if not self.layers:
+            raise ValueError("the network has no layers to save")
+        ggml_type = GGMLType.from_name(dtype)
+        arch = self.GGUF_ARCHITECTURE
+        writer = GGUFWriter(architecture=arch)
+        if name:
+            writer.add_metadata("general.name", str(name))
+        writer.add_metadata(f"{arch}.loss", self.loss)
+        writer.add_metadata(f"{arch}.task", self.task)
+        writer.add_metadata(f"{arch}.learning_rate", self.learning_rate, GGUFValueType.FLOAT64)
+        writer.add_metadata(
+            f"{arch}.classification_threshold", self.classification_threshold, GGUFValueType.FLOAT64
+        )
+        writer.add_metadata(f"{arch}.layer_count", len(self.layers))
+        writer.add_metadata(
+            f"{arch}.activations", [layer.activation for layer in self.layers],
+            item_type=GGUFValueType.STRING,
+        )
+        if self._class_labels is not None:
+            writer.add_metadata(f"{arch}.class_labels_json", _json.dumps(list(self._class_labels)))
+        for index, layer in enumerate(self.layers):
+            flat = [value for row in layer.weights for value in row]
+            writer.add_tensor(
+                f"blk.{index}.weight", flat, shape=(layer.input_size, layer.output_size),
+                ggml_type=ggml_type,
+            )
+            writer.add_tensor(f"blk.{index}.bias", layer.biases, shape=(layer.output_size,),
+                              ggml_type=ggml_type)
+        return writer
+
+    def save(self, path, *, dtype="F64", name=None):
+        """Write the network to a GGUF file (atomically)."""
+        self.to_gguf(dtype=dtype, name=name).write(path)
+        return path
+
+    @classmethod
+    def load(cls, path, *, seed=None):
+        """Read a network written by :meth:`save`."""
+        import json as _json
+
+        from .gguf import GGUFReader
+
+        arch = cls.GGUF_ARCHITECTURE
+        with GGUFReader(path) as reader:
+            if reader.architecture != arch:
+                raise ValueError(f"not a wsbuilder network (architecture {reader.architecture!r})")
+            meta = reader.metadata
+            network = cls(
+                seed=seed,
+                learning_rate=meta.get(f"{arch}.learning_rate", 0.1),
+                loss=meta.get(f"{arch}.loss", "mse"),
+                task=meta.get(f"{arch}.task", "regression"),
+                classification_threshold=meta.get(f"{arch}.classification_threshold", 0.5),
+            )
+            activations = meta.get(f"{arch}.activations") or []
+            count = int(meta.get(f"{arch}.layer_count", len(activations)))
+            if len(activations) != count:
+                raise ValueError("layer_count does not match the activations")
+            for index in range(count):
+                weight = reader.tensor(f"blk.{index}.weight")
+                bias = reader.tensor(f"blk.{index}.bias")
+                if len(weight.shape) != 2 or bias.shape != (weight.shape[1],):
+                    raise ValueError(f"layer {index} has inconsistent shapes")
+                inputs, outputs = weight.shape
+                layer = network.add_dense(outputs, input_size=inputs, activation=activations[index])
+                values = [float(v) for v in weight.values()]
+                layer.weights = [values[row * inputs:(row + 1) * inputs] for row in range(outputs)]
+                layer.biases = [float(v) for v in bias.values()]
+            labels = meta.get(f"{arch}.class_labels_json")
+            if labels:
+                network._class_labels = _json.loads(labels)
+        return network
+
     def _coerce_dataset(self, X, Y=None):
         if Y is None and isinstance(X, DataSet):
             if X.Y is None:
