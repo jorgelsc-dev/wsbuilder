@@ -434,6 +434,24 @@ class TestRequestDeadlineAndEarlySecurity(unittest.TestCase):
 
         return app
 
+    def test_kept_alive_responses_are_not_delayed(self):
+        # Head and body written separately stall each kept-alive response by
+        # the client's delayed-ACK timer (~40 ms); 25 requests would take 1 s.
+        import http.client
+
+        server = HTTPServer("127.0.0.1", 0, self._app())
+        self._serve(server)
+        connection = http.client.HTTPConnection(*server.server_address, timeout=5.0)
+        self.addCleanup(connection.close)
+        connection.request("GET", "/ping")
+        connection.getresponse().read()
+        started = time.monotonic()
+        for _ in range(25):
+            connection.request("GET", "/ping")
+            response = connection.getresponse()
+            self.assertEqual(response.read(), b'{"pong":true}')
+        self.assertLess(time.monotonic() - started, 0.75)
+
     def test_trickled_headers_hit_the_total_deadline(self):
         server = HTTPServer("127.0.0.1", 0, self._app(), request_read_timeout=0.4)
         self._serve(server)
@@ -633,6 +651,41 @@ class _FlakyServer(HTTPServer):
     def _create_listening_socket(self):
         self.listener = _FlakyListener(super()._create_listening_socket())
         return self.listener
+
+
+class _ExhaustedListener:
+    """Listening socket that keeps failing with EMFILE, as when out of descriptors."""
+
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+        self.calls = 0
+
+    def accept(self):
+        self.calls += 1
+        raise OSError(24, "Too many open files")
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+
+class _ExhaustedServer(HTTPServer):
+    def _create_listening_socket(self):
+        self.listener = _ExhaustedListener(super()._create_listening_socket())
+        return self.listener
+
+
+class TestAcceptBackoff(unittest.TestCase):
+    def test_running_out_of_descriptors_does_not_spin(self):
+        server = _ExhaustedServer("127.0.0.1", 0, App())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.assertTrue(server.wait_until_serving(timeout=5.0))
+        time.sleep(0.5)
+        server.stop()
+        thread.join(5.0)
+        # Without the pause this loop runs tens of thousands of times.
+        self.assertLessEqual(server.listener.calls, 10)
+        self.assertFalse(thread.is_alive())
 
 
 class TestHTTPServerLifecycle(unittest.TestCase):

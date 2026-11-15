@@ -21,6 +21,20 @@ class BufferSocket:
 
 
 class TestHTTPCore(unittest.TestCase):
+    def test_a_whole_response_leaves_in_one_write(self):
+        # Head and body in separate small writes meet Nagle's algorithm here
+        # and delayed ACKs at the client: ~40 ms per kept-alive response.
+        sock = BufferSocket()
+        send_http_response(sock, Response.json({"ok": True}), keep_alive=True)
+        self.assertEqual(len(sock.sent), 1)
+        self.assertTrue(sock.sent[0].endswith(b'{"ok":true}'))
+
+    def test_a_head_response_is_one_write_without_the_body(self):
+        sock = BufferSocket()
+        send_http_response(sock, Response.text("hidden"), send_body=False)
+        self.assertEqual(len(sock.sent), 1)
+        self.assertNotIn(b"hidden", sock.sent[0])
+
     def _closing_stream(self, flags):
         def chunks():
             try:

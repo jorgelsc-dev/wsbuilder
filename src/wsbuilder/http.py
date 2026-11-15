@@ -318,9 +318,17 @@ def _send_http_response(conn, response, *, send_body=True, keep_alive=False, ver
     hdrs = "".join(f"{k}: {v}\r\n" for k, v in iter_header_fields(headers))
     resp = status_line + hdrs + "\r\n"
     try:
-        conn.sendall(resp.encode("utf-8"))
+        head = resp.encode("utf-8")
         if not should_send_body:
+            conn.sendall(head)
             return True
+        if not getattr(response, "is_stream", False):
+            # One write for head and body. Two small writes on a kept-alive
+            # connection meet Nagle's algorithm on this side and delayed ACKs
+            # on the client's, which stalls every response by ~40 ms.
+            conn.sendall(head + response.body)
+            return True
+        conn.sendall(head)
         if getattr(response, "is_stream", False):
             use_chunked = "chunked" in lowermap.get("transfer-encoding", "").lower()
             for chunk in _iter_stream_chunks(response.stream):
