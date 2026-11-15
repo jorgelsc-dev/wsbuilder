@@ -75,6 +75,7 @@ TP_INITIAL_MAX_STREAM_DATA_UNI = 0x07
 TP_INITIAL_MAX_STREAMS_BIDI = 0x08
 TP_INITIAL_MAX_STREAMS_UNI = 0x09
 TP_INITIAL_SOURCE_CONNECTION_ID = 0x0F
+TP_RETRY_SOURCE_CONNECTION_ID = 0x10
 
 
 def encode_transport_parameters(values):
@@ -98,6 +99,9 @@ def decode_transport_parameters(data):
         values[key] = data[offset:end]
         offset = end
     return values
+
+
+_NON_ACK_ELICITING = (qframes.AckFrame, qframes.ConnectionCloseFrame)
 
 
 class StreamBuffer:
@@ -171,6 +175,8 @@ class QuicConnection:
         alpn_protocols=("h3",),
         client_address=("", 0),
         on_stream_data=None,
+        client_trust=None,
+        require_client_certificate=False,
     ):
         self.client_address = client_address
         self.on_stream_data = on_stream_data
@@ -192,6 +198,10 @@ class QuicConnection:
         #: Notified whenever queued bytes leave, so producers can wait for room.
         self._outbound_room = threading.Condition(self._outbound_lock)
         self._outbound = []
+        #: Called (from the producing thread) whenever bytes are queued, so the
+        #: thread that owns the socket can send them at once instead of on
+        #: its next poll.
+        self.on_outbound = None
         self._queued_bytes = {}
         self._send_offsets = {}
         # Send-side flow control (RFC 9000 section 4): what the peer allows.
@@ -212,12 +222,21 @@ class QuicConnection:
         )
         self.amplification = AmplificationLimit()
         self.paths = PathValidator()
+        #: Address validation token echoed in our Initial packets (client only).
+        self._initial_token = b""
         self._tls = ServerHandshake(
             certificate_chain_der,
             private_key,
             alpn_protocols=alpn_protocols,
             transport_parameters=b"",
+            client_trust=client_trust,
+            require_client_certificate=require_client_certificate,
         )
+
+    @property
+    def peer_certificate(self):
+        """The peer's verified leaf certificate, or None."""
+        return getattr(self._tls, "peer_certificate", None)
 
     # -- keys ----------------------------------------------------------
 
@@ -248,6 +267,13 @@ class QuicConnection:
         }
         if self.original_dcid:
             values[TP_ORIGINAL_DESTINATION_CONNECTION_ID] = self.original_dcid
+        retry = getattr(self, "retry_context", None)
+        if retry:
+            # RFC 9000 section 7.3: after a Retry the server names both the
+            # client's first destination id and the id its Retry chose, so
+            # the client can tell nobody tampered with either.
+            values[TP_ORIGINAL_DESTINATION_CONNECTION_ID] = retry[0]
+            values[TP_RETRY_SOURCE_CONNECTION_ID] = retry[1]
         return encode_transport_parameters(values)
 
     # -- receiving -----------------------------------------------------
@@ -292,12 +318,35 @@ class QuicConnection:
         pn_offset = header.payload_offset - start
         self._open_packet(level, whole, pn_offset, outgoing)
 
+    #: 1-RTT packets held while the handshake finishes (RFC 9001 section 5.7).
+    MAX_EARLY_SHORT_PACKETS = 16
+
     def _receive_short(self, packet, outgoing):
         if LEVEL_APPLICATION not in self.keys:
+            return 0
+        if not self.handshake_complete and self._defers_early_application_data():
+            # A server has the 1-RTT keys before the client has proved itself
+            # (its Finished, and its certificate under mutual TLS). Acting on
+            # application data before then would serve an unauthenticated
+            # peer, so the packet waits, unopened, until the handshake ends.
+            early = self.__dict__.setdefault("_early_short", [])
+            if len(early) < self.MAX_EARLY_SHORT_PACKETS:
+                early.append(bytes(packet))
             return 0
         pn_offset = 1 + len(self.host_cid)
         self._open_packet(LEVEL_APPLICATION, packet, pn_offset, outgoing)
         return 0
+
+    def _defers_early_application_data(self):
+        return True
+
+    def _release_early_short(self, outgoing):
+        early = self.__dict__.pop("_early_short", None) or []
+        pn_offset = 1 + len(self.host_cid)
+        for packet in early:
+            if self.closed:
+                break
+            self._open_packet(LEVEL_APPLICATION, packet, pn_offset, outgoing)
 
     def _open_packet(self, level, packet, pn_offset, outgoing):
         keys = self.keys[level]["recv"]
@@ -315,8 +364,13 @@ class QuicConnection:
             # injection, or a packet for keys we have since replaced.
             return
         self.largest_received[level] = max(self.largest_received[level], number)
-        self._pending_acks[level].append(number)
-        self._handle_frames(level, qframes.parse_frames(payload), outgoing)
+        parsed = qframes.parse_frames(payload)
+        # RFC 9000 section 13.2.1: only ack-eliciting packets are acknowledged
+        # on their own. Acknowledging an ACK-only packet would have the peer
+        # acknowledge that in turn, and the two would trade ACKs for ever.
+        if any(not isinstance(frame, _NON_ACK_ELICITING) for frame in parsed):
+            self._pending_acks[level].append(number)
+        self._handle_frames(level, parsed, outgoing)
 
     def _handle_frames(self, level, parsed, outgoing):
         for frame in parsed:
@@ -447,19 +501,21 @@ class QuicConnection:
             outgoing.append((LEVEL_INITIAL, [qframes.CryptoFrame(0, server_hello)]))
             outgoing.append((LEVEL_HANDSHAKE, [qframes.CryptoFrame(0, flight)]))
         elif level == LEVEL_HANDSHAKE:
-            message = bytes(buffer.data)
-            if len(message) >= 4 and len(message) >= 4 + int.from_bytes(message[1:4], "big"):
-                try:
-                    self._tls.verify_client_finished(message)
-                except TLSError:
-                    self.closed = True
-                    return
+            try:
+                finished = self._tls.handle_client_flight(bytes(buffer.data))
+            except TLSError as exc:
+                # RFC 9001 section 4.8: a TLS alert becomes CRYPTO_ERROR 0x100+alert.
+                alert = int(getattr(exc, "alert", 40))
+                self._close_with_error(level, 0x100 + alert, str(exc), outgoing)
+                return
+            if finished and not self.handshake_complete:
                 self.handshake_complete = True
                 # Finishing the handshake proves the peer is where it claims.
                 self.amplification.validate()
                 outgoing.append(
                     (LEVEL_APPLICATION, [qframes.SimpleFrame(qframes.FRAME_HANDSHAKE_DONE)])
                 )
+                self._release_early_short(outgoing)
 
     def _on_stream_frame(self, frame, outgoing):
         buffer = self.streams.get(frame.stream_id)
@@ -602,6 +658,15 @@ class QuicConnection:
             self._outbound.append((stream_id, None, int(error_code)))
             self._queued_bytes.pop(stream_id, None)
             self._outbound_room.notify_all()
+        self._notify_outbound()
+
+    def _notify_outbound(self):
+        callback = getattr(self, "on_outbound", None)
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                pass
 
     # -- sending -------------------------------------------------------
 
@@ -624,6 +689,7 @@ class QuicConnection:
                 last = index == len(pieces) - 1
                 self._outbound.append((stream_id, piece, bool(fin) and last))
             self._queued_bytes[stream_id] = self._queued_bytes.get(stream_id, 0) + len(data)
+        self._notify_outbound()
 
     def drain_outbound(self):
         """Packetize queued stream bytes. Call from the thread that owns the socket.
@@ -797,6 +863,7 @@ class QuicConnection:
                 self.host_cid,
                 packet_number=number,
                 payload_length=len(payload) + AEAD_TAG_SIZE,
+                token=self._initial_token if level == LEVEL_INITIAL else b"",
             )
         sealed = keys.seal(number, header, payload)
         pn_offset = len(header) - 4

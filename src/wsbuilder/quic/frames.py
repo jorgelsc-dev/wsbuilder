@@ -361,7 +361,13 @@ def parse_frames(payload):
         if frame_type == FRAME_RETIRE_CONNECTION_ID:
             _value, offset = decode_varint(data, offset)
             continue
-        if frame_type in (FRAME_RESET_STREAM, FRAME_STOP_SENDING):
+        if frame_type == FRAME_RESET_STREAM:
+            stream_id, offset = decode_varint(data, offset)
+            code, offset = decode_varint(data, offset)
+            final_size, offset = decode_varint(data, offset)
+            frames.append(ResetStreamFrame(stream_id, code, final_size))
+            continue
+        if frame_type == FRAME_STOP_SENDING:
             offset = _skip_stream_control(data, offset, frame_type)
             continue
         if frame_type == FRAME_DATA_BLOCKED:

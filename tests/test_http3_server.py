@@ -272,6 +272,11 @@ class QuicClientHarness(unittest.TestCase):
             # the suite does not wait out a full timeout each handshake.
             self.sock.settimeout(0.3)
         self.sock.settimeout(5.0)
+        # This harness never sends a client Finished (it borrows the server's
+        # keys instead). A server holds 1-RTT data until the handshake ends,
+        # so mark it ended, as a verified Finished would.
+        for connection in self.server.connections.values():
+            connection.handshake_complete = True
         return replies
 
     def _connection(self):
