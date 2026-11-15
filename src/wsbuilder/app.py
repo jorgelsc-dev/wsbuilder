@@ -567,6 +567,12 @@ class App:
     def api(self, path, methods=("GET",)):
         return self.route(path, methods=methods, kind="api")
 
+    def enable_llm(self, store=None, **options):
+        """Serve a model store and its language models; see :func:`wsbuilder.llm.install_llm`."""
+        from .llm import install_llm
+
+        return install_llm(self, store, **options)
+
     def rpc(self, path, methods=("POST",), *, codec="cbor", **route_options):
         """Register ``handler(request, payload)`` as a service-to-service endpoint.
 

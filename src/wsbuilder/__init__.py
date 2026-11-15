@@ -62,6 +62,7 @@ from .framework import (
     parse_query_string,
     proxyi,
 )
+from .gguf import GGMLType, GGUFError, GGUFReader, GGUFWriter, read_gguf_metadata
 from .headers import add_header, get_header, has_header, normalize_header_name, set_header
 from .ia import (
     AudioData,
@@ -77,6 +78,18 @@ from .ia import (
     evaluate_errors,
     load_wav,
     submit_training_task,
+)
+from .llm import (
+    DownloadError,
+    LanguageModel,
+    LlamaCppBackend,
+    ModelRecord,
+    ModelStore,
+    OpenAICompatibleBackend,
+    download_file,
+    huggingface_files,
+    huggingface_url,
+    install_llm,
 )
 from .logs import NDJSONLog, install_logs
 from .mdns import LocalMDNSServer, MDNSService, discover_mdns_services
@@ -283,6 +296,21 @@ __all__ = [
     "CBORTag",
     "cbor_dumps",
     "cbor_loads",
+    "GGMLType",
+    "GGUFError",
+    "GGUFReader",
+    "GGUFWriter",
+    "read_gguf_metadata",
+    "DownloadError",
+    "LanguageModel",
+    "LlamaCppBackend",
+    "ModelRecord",
+    "ModelStore",
+    "OpenAICompatibleBackend",
+    "download_file",
+    "huggingface_files",
+    "huggingface_url",
+    "install_llm",
 ]
 if _TLS_EXTRA_AVAILABLE:
     # Only advertised when importable, so ``from wsbuilder import *`` works
