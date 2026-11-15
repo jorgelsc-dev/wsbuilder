@@ -30,10 +30,32 @@ result = task.get(timeout=5)
 ```python
 from wsbuilder import TaskManager
 
-manager = TaskManager(max_concurrent=2)
+manager = TaskManager(max_concurrent=2, max_pending_tasks=512)
 ```
 
-Si `max_concurrent` es mayor que cero, el manager usa un semaforo para limitar tareas simultaneas.
+Con `max_concurrent > 0`, solo las tareas en ejecución tienen un hilo. El manager
+mantiene hasta ese número de hilos de trabajo y una cola con hasta
+`max_pending_tasks` tareas adicionales (512 por defecto). Cuando se agota la
+capacidad, `spawn()` lanza `TaskRejectedError` sin crear otro hilo. El valor cero
+de `max_pending_tasks` permite solo las plazas de ejecución.
+
+`timeout_seconds` limita la espera en la cola; una tarea cuyo plazo vence termina
+con estado `rejected`. Cancelar una tarea pendiente la retira y libera su
+capacidad inmediatamente. El plazo no interrumpe una tarea que ya está ejecutándose.
+
+El manager usa un único hilo de coordinación daemon mientras hay trabajo y,
+si hay tareas pendientes con `daemon=False`, un único guardián no daemon para
+mantener vivo el proceso hasta que puedan empezar. Estos dos auxiliares están
+acotados y terminan al dejar de ser necesarios. Cada tarea conserva su opción
+`daemon` cuando empieza.
+
+`max_concurrent=0` conserva el modo sin límite: cada `spawn()` inicia su propio
+hilo y `max_pending_tasks` no se aplica. Usa un límite positivo para acotar recursos.
+
+`close(wait=True, timeout=None)` cancela el trabajo pendiente y solicita la
+cancelación del trabajo en ejecución. Desde fuera de una tarea espera su cierre,
+respetando el plazo global indicado. Cuando una tarea llama a `close()`, solicita
+la cancelación y retorna sin esperar a otras tareas para evitar ciclos de espera.
 
 ## Cancelacion
 

@@ -16,6 +16,8 @@ WSBuilder incluye herramientas sencillas de data science y redes neuronales hech
 - `ByteTokenizer`
 - `HashingTextVectorizer`
 - `AudioData`, `load_wav`, `audio_features`
+- `NeuralNetwork.save`, `NeuralNetwork.load` (GGUF)
+- [Modelos de lenguaje](llm.md): `ModelStore`, `LanguageModel`, `GGUFReader`, `GGUFWriter`
 
 ## Texto, tokens y audio
 
@@ -28,6 +30,21 @@ estandar, sin descargar modelos ni enviar datos a servicios externos.
 Consulta los [ejemplos de texto y audio](ai-predict.md#texto-unicode-y-tokens).
 Estos adaptadores preparan datos: no incorporan un modelo de conversacion,
 traduccion, reconocimiento de voz, generacion de audio, imagen o video.
+
+## Modelos de lenguaje y archivos GGUF
+
+Para modelos de lenguaje (LLM) existe [`wsbuilder.llm`](llm.md). Permite
+importar, guardar, exportar y descargar modelos GGUF y safetensors (por ejemplo
+desde Hugging Face, con verificacion SHA-256), ejecutarlos con llama.cpp
+(extra `wsbuilder[llm]`) o mediante un servidor compatible con OpenAI como
+Ollama, y servirlos por HTTP.
+
+Las redes propias tambien se guardan y cargan en GGUF:
+
+```python
+network.save("modelo.gguf", name="mi-red")
+network = NeuralNetwork.load("modelo.gguf")
+```
 
 ## Datos
 

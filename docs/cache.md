@@ -81,6 +81,10 @@ install_metrics(app, app_name="cache-demo")
 ```
 
 Cuando la cache esta activa, `App.dispatch()` puede responder con `X-WSBuilder-Cache: HIT`.
+Las claves de respuestas distinguen el `Host` y el esquema del transporte
+(`http` o `https`); las cabeceras reenviadas no cambian ese esquema.
+`App.close()` cierra las caches instaladas, también cuando usan un `attr_name`
+personalizado, y evita cerrar dos veces un store compartido.
 
 ## Lo que conviene recordar
 

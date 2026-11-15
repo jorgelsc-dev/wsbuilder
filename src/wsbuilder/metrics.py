@@ -109,6 +109,12 @@ class AppMetrics:
             if duration_ms > self.http_max_duration_ms:
                 self.http_max_duration_ms = duration_ms
 
+    def http_request_aborted(self):
+        """Finish an interrupted request without recording a delivered response."""
+        with self._lock:
+            if self.active_http_requests > 0:
+                self.active_http_requests -= 1
+
     def ws_opened(self, path):
         path = path or "/ws/"
         with self._lock:

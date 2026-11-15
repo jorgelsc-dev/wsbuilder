@@ -472,8 +472,12 @@ class TestResetStream(unittest.TestCase):
         self.assertEqual((reset.stream_id, reset.error_code, reset.final_size), (0, 0x0102, 1500))
         self.assertEqual(_stream_bytes(connection, 0), 1500)
         self.assertEqual(connection.queued_stream_bytes(0), 0)
-        # A well-formed frame: a parser skips it cleanly.
-        self.assertEqual(qf.parse_frames(reset.serialize()), [])
+        # A well-formed frame: the parser reads it back field for field.
+        (parsed,) = qf.parse_frames(reset.serialize())
+        self.assertIsInstance(parsed, qf.ResetStreamFrame)
+        self.assertEqual(
+            (parsed.stream_id, parsed.error_code, parsed.final_size), (0, 0x0102, 1500)
+        )
 
 
 class TestSendBackpressure(unittest.TestCase):

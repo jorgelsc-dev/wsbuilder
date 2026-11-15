@@ -299,6 +299,7 @@ class Database:
         self._lock = threading.RLock()
         self._tx_depth = threading.local()
         self._replicas = None
+        self._closed = False
         self._savepoint_sequence = 0
 
         if shared_cache:
@@ -361,9 +362,16 @@ class Database:
 
     def close(self):
         with self._lock:
-            if self._replicas:
-                self._replicas.close_all()
+            if self._closed:
+                return
+            self._closed = True
             self._conn.close()
+        if self._replicas:
+            self._replicas.close_all()
+
+    def _require_open(self):
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
 
     def _log(self, *parts):
         if self.debug:
@@ -419,10 +427,17 @@ class Database:
         if commit is None:
             commit = _is_write_statement(sql)
         with self._lock:
+            self._require_open()
             self._log("SQL:", sql.strip(), "params=", params)
-            cur = self._conn.execute(sql, tuple(params))
-            if commit and not self.in_transaction():
-                self._conn.commit()
+            auto_commit = bool(commit) and not self.in_transaction()
+            try:
+                cur = self._conn.execute(sql, tuple(params))
+                if auto_commit:
+                    self._conn.commit()
+            except BaseException:
+                if auto_commit:
+                    self._conn.rollback()
+                raise
             return cur
 
     def executemany(
@@ -435,9 +450,11 @@ class Database:
         if commit is None:
             commit = _is_write_statement(sql)
         with self._lock:
+            self._require_open()
             self._log("SQL many:", sql.strip())
             params = [tuple(p) for p in seq_of_params]
             atomic = bool(commit) or self.in_transaction()
+            auto_commit = bool(commit) and not self.in_transaction()
             savepoint = None
             if atomic:
                 self._savepoint_sequence += 1
@@ -445,22 +462,26 @@ class Database:
                 self._conn.execute(f"SAVEPOINT {savepoint}")
             try:
                 cur = self._conn.executemany(sql, params)
-            except BaseException:
                 if savepoint is not None:
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                if auto_commit:
+                    self._conn.commit()
+            except BaseException:
+                if auto_commit:
+                    self._conn.rollback()
+                elif savepoint is not None and self._conn.in_transaction:
                     self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                     self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 raise
-            if savepoint is not None:
-                self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-            if commit and not self.in_transaction():
-                self._conn.commit()
             return cur.rowcount
 
     def fetchone(self, sql: str, params=None):
-        return self.execute(sql, params).fetchone()
+        with self._lock:
+            return self.execute(sql, params).fetchone()
 
     def fetchall(self, sql: str, params=None):
-        return self.execute(sql, params).fetchall()
+        with self._lock:
+            return self.execute(sql, params).fetchall()
 
     def scalar(self, sql: str, params=None, default=None):
         row = self.fetchone(sql, params)
@@ -470,27 +491,35 @@ class Database:
 
     def read_replica_execute(self, sql: str, params=None):
         """Execute a read-only query on a replica if available."""
-        if self._replicas is None:
+        self._require_open()
+        replicas = self._replicas
+        if replicas is None:
             return self.execute(sql, params)
-        return self._replicas.execute(sql, params)
+        return replicas.execute(sql, params)
 
     def read_replica_fetchone(self, sql: str, params=None):
         """Fetch one row from a replica if available."""
-        if self._replicas is None:
+        self._require_open()
+        replicas = self._replicas
+        if replicas is None:
             return self.fetchone(sql, params)
-        return self._replicas.fetchone(sql, params)
+        return replicas.fetchone(sql, params)
 
     def read_replica_fetchall(self, sql: str, params=None):
         """Fetch all rows from a replica if available."""
-        if self._replicas is None:
+        self._require_open()
+        replicas = self._replicas
+        if replicas is None:
             return self.fetchall(sql, params)
-        return self._replicas.fetchall(sql, params)
+        return replicas.fetchall(sql, params)
 
     def read_replica_scalar(self, sql: str, params=None, default=None):
         """Fetch a scalar value from a replica if available."""
-        if self._replicas is None:
+        self._require_open()
+        replicas = self._replicas
+        if replicas is None:
             return self.scalar(sql, params, default)
-        return self._replicas.scalar(sql, params, default)
+        return replicas.scalar(sql, params, default)
 
     def transaction(self):
         return Transaction(self)

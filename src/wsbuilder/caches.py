@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from ._coerce import safe_float as _safe_float
 from ._coerce import safe_int as _safe_int
-from .cache import SQLiteMemoryCache
+from .cache import SQLiteMemoryCache, _register_cache_resource
 from .headers import header_value_text
 from .http import Response
 
@@ -327,6 +327,8 @@ class ViewResponseCache:
 
         key_data = {
             "method": method,
+            "authority": headers.get("host", "").strip().lower(),
+            "scheme": "https" if (getattr(request, "tls", {}) or {}).get("enabled") else "http",
             "path": path,
             "route": getattr(route, "path", path),
         }
@@ -562,6 +564,7 @@ class ViewResponseCache:
 def install_caches(app, caches=None, attr_name="caches"):
     resolved = caches or ViewResponseCache()
     setattr(app, str(attr_name or "caches"), resolved)
+    _register_cache_resource(app, resolved)
     return resolved
 
 

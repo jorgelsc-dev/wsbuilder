@@ -203,36 +203,85 @@ def huffman_encode(data):
     return bytes(out)
 
 
+def _build_huffman_nibble_table():
+    """A 4-bit-at-a-time decoding table over the trie's internal nodes.
+
+    Decoding one bit per step costs a Python loop iteration per bit; walking
+    four bits per lookup does the same work in a quarter of the steps. Each
+    entry gives the state reached, the symbols emitted on the way, how many
+    bits were read since the last symbol (for the padding check), and
+    whether the nibble hit an invalid code or EOS.
+    """
+    states = [_HUFFMAN_TREE]
+    index = {id(_HUFFMAN_TREE): 0}
+    table = []
+    position = 0
+    while position < len(states):
+        node_at_start = states[position]
+        row = []
+        for nibble in range(16):
+            node = node_at_start
+            emitted = []
+            since_symbol = None
+            failure = None
+            for shift in (3, 2, 1, 0):
+                node = node[(nibble >> shift) & 1]
+                if node is None:
+                    failure = "invalid Huffman code"
+                    break
+                if isinstance(node, int):
+                    if node == EOS_SYMBOL:
+                        failure = "EOS must not appear in a Huffman string"
+                        break
+                    emitted.append(node)
+                    node = _HUFFMAN_TREE
+                    since_symbol = 0
+                elif since_symbol is not None:
+                    since_symbol += 1
+            if failure is not None:
+                row.append((None, b"", None, failure))
+                continue
+            key = id(node)
+            if key not in index:
+                index[key] = len(states)
+                states.append(node)
+            row.append((index[key], bytes(emitted), since_symbol, None))
+        table.append(tuple(row))
+        position += 1
+
+    # A tail that stops inside the trie must be a prefix of EOS (all ones).
+    valid_tail = []
+    for node in states:
+        probe = node
+        while not isinstance(probe, int) and probe is not None:
+            probe = probe[1]
+        valid_tail.append(node is _HUFFMAN_TREE or probe == EOS_SYMBOL)
+    return tuple(table), tuple(valid_tail)
+
+
+_HUFFMAN_NIBBLES, _HUFFMAN_VALID_TAIL = _build_huffman_nibble_table()
+
+
 def huffman_decode(data):
     """Decode Huffman-coded ``data``, rejecting the paddings RFC 7541 forbids."""
-    node = _HUFFMAN_TREE
+    table = _HUFFMAN_NIBBLES
+    state = 0
     out = bytearray()
     padding = 0
     for byte in bytes(data):
-        for shift in range(7, -1, -1):
-            bit = (byte >> shift) & 1
-            node = node[bit]
-            if node is None:
-                raise HPACKError("invalid Huffman code")
-            if isinstance(node, int):
-                if node == EOS_SYMBOL:
-                    raise HPACKError("EOS must not appear in a Huffman string")
-                out.append(node)
-                node = _HUFFMAN_TREE
-                padding = 0
+        for nibble in (byte >> 4, byte & 0x0F):
+            state, emitted, since_symbol, failure = table[state][nibble]
+            if failure is not None:
+                raise HPACKError(failure)
+            if since_symbol is None:
+                padding += 4
             else:
-                padding += 1
+                out += emitted
+                padding = since_symbol
     if padding > 7:
         raise HPACKError("Huffman padding longer than 7 bits")
-    if node is not _HUFFMAN_TREE:
-        # Any incomplete tail must be the all-ones EOS prefix.
-        probe = node
-        while not isinstance(probe, int):
-            if probe[1] is None:
-                raise HPACKError("Huffman padding is not the EOS prefix")
-            probe = probe[1]
-        if probe != EOS_SYMBOL:
-            raise HPACKError("Huffman padding is not the EOS prefix")
+    if not _HUFFMAN_VALID_TAIL[state]:
+        raise HPACKError("Huffman padding is not the EOS prefix")
     return bytes(out)
 
 

@@ -35,7 +35,10 @@ Response.stream(iter(["a", "b", "c"]), content_type="text/plain")
 
 `Response.stream` devuelve una respuesta en streaming con soporte para generadores, iterables y objetos con `read()`.
 Al terminar el envio (o si el cliente se desconecta) el servidor llama a
-`close()` sobre el origen del stream cuando existe.
+`close()` sobre el origen del stream cuando existe. Tambien lo cierra sin
+consumirlo para `HEAD` y para los estados sin cuerpo (`1xx`, `204`, `304`).
+Esto se aplica a HTTP/1, HTTP/2 y HTTP/3. Un `Content-Length` explicito en `HEAD`
+o `304` describe la representacion; los estados `1xx` y `204` lo omiten.
 
 `Response.headers` es un diccionario con un valor por nombre. Un valor puede ser
 una lista o tupla para enviar el campo repetido, que es lo que necesita
@@ -127,3 +130,8 @@ def sum_view(request):
 - `parse_http_request` para parseo de requests en bruto.
 - `send_http_response` si necesitas escribir respuestas manualmente.
 - `parse_query_string` para utilidades ligeras de query strings.
+
+`send_http_response` devuelve `True` al completar el envio y `False` si falla
+la escritura o el productor. En HTTP/1, una respuesta incompleta obliga a cerrar
+la conexion antes de procesar otra peticion. Los errores de validacion de
+cabeceras anteriores al envio siguen lanzando `ValueError`.

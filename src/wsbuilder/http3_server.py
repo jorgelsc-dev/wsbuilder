@@ -10,6 +10,7 @@ which is what lets a connection survive a change of address -- the property
 QUIC has and TCP does not.
 """
 
+import select
 import socket
 import threading
 import time
@@ -19,6 +20,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
 from . import http3
+from .http import _close_response_stream, _status_allows_body
 from .http3_websocket import Http3WebSocketStream
 from .logs import get_log
 from .quic.address import AddressValidator
@@ -105,6 +107,24 @@ class Http3Server:
 
     def stop(self):
         self._stop.set()
+        self._wake()
+
+    def _wake(self):
+        """Ask the socket thread to send what handler threads have queued."""
+        pipe = getattr(self, "_wake_w", None)
+        if pipe is None:
+            return
+        try:
+            pipe.send(b"\x00")
+        except OSError:
+            pass  # Full (a wakeup is already pending) or closed.
+
+    def _drain_wakeups(self):
+        try:
+            while self._wake_r.recv(4096):
+                pass
+        except OSError:
+            pass
 
     def wait_until_serving(self, timeout=None):
         return self._serving.wait(timeout)
@@ -119,12 +139,31 @@ class Http3Server:
         sock.bind((self.host, self.port))
         sock.settimeout(self.ACCEPT_TIMEOUT_SECONDS)
         self._sock = sock
+        # Handler threads queue responses; this pair wakes the socket thread
+        # so they leave at once rather than at the next receive timeout.
+        self._wake_r, self._wake_w = socket.socketpair()
+        self._wake_r.setblocking(False)
+        self._wake_w.setblocking(False)
         self.server_address = sock.getsockname()[:2]
         host, port = self.server_address
         get_log(self.app).info("http3", f"listening on udp://{host}:{port}/")
         self._serving.set()
         try:
             while not self._stop.is_set():
+                try:
+                    readable, _, _ = select.select(
+                        [sock, self._wake_r], [], [], self.ACCEPT_TIMEOUT_SECONDS
+                    )
+                except (OSError, ValueError):
+                    if self._stop.is_set():
+                        break
+                    raise
+                if self._wake_r in readable:
+                    self._drain_wakeups()
+                    self._send_outbound()
+                if sock not in readable:
+                    self._tick()
+                    continue
                 try:
                     datagram, address = sock.recvfrom(65535)
                 except TimeoutError:
@@ -146,6 +185,11 @@ class Http3Server:
                 self._send_outbound()
         finally:
             self._serving.clear()
+            for pipe in (self._wake_r, self._wake_w):
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
             try:
                 sock.close()
             finally:
@@ -227,6 +271,9 @@ class Http3Server:
             if retry is not None:
                 return [retry]
             connection = self._new_connection(address)
+            retry_context = self.__dict__.pop("_retry_context", None)
+            if retry_context is not None:
+                connection.retry_context = retry_context
             replies = list(connection.receive_datagram(datagram, address=address))
             if connection.largest_received[LEVEL_INITIAL] < 0:
                 # Nothing in the datagram opened with the Initial keys, so
@@ -255,8 +302,13 @@ class Http3Server:
             return None
         if header.packet_type != PACKET_INITIAL:
             return None
-        if header.token and self.addresses.validate(header.token, address) is not None:
-            return None  # Already proved; let the handshake run.
+        if header.token:
+            original = self.addresses.validate(header.token, address)
+            if original is not None:
+                # Already proved; let the handshake run, and remember which
+                # ids the transport parameters must vouch for.
+                self._retry_context = (bytes(original), bytes(header.destination_cid))
+                return None
 
         token = self.addresses.issue(address, header.destination_cid)
         new_cid = new_connection_id(8)
@@ -276,11 +328,33 @@ class Http3Server:
             alpn_protocols=("h3",),
             client_address=address,
             on_stream_data=self._on_stream_data,
+            client_trust=self._client_trust(),
+            require_client_certificate=bool(getattr(self.tls, "require_client_cert", False)),
         )
+        connection.on_outbound = self._wake
         # RFC 9114 section 6.2.1: the server opens a control stream carrying
         # SETTINGS, which is where a client learns CONNECT is allowed.
         connection.queue_stream_data(CONTROL_STREAM_ID, http3.build_control_stream(), fin=False)
         return connection
+
+    def _client_trust(self):
+        """Mutual TLS: the CAs client certificates must chain to, or None.
+
+        Taken from the TLS provider's ``client_ca_pem`` (a
+        :class:`~wsbuilder.CertificateManager` built with ``client_ca_pem``),
+        the same setting that turns on client certificates over TCP.
+        """
+        pem = getattr(self.tls, "client_ca_pem", None)
+        if not pem:
+            return None
+        cached = getattr(self, "_client_trust_cache", None)
+        if cached is not None and cached[0] == pem:
+            return cached[1]
+        from .quic.tls import CertificateTrust
+
+        trust = CertificateTrust.from_pem(pem)
+        self._client_trust_cache = (pem, trust)
+        return trust
 
     def _drop(self, connection):
         connection.closed = True
@@ -308,6 +382,8 @@ class Http3Server:
         if stream is None:
             stream = http3.RequestStream(stream_id, max_body_bytes=self.max_request_body_bytes)
             streams[stream_id] = stream
+        if stream.answered and stream.websocket is None:
+            return []
 
         try:
             ready = stream.feed(data, fin=complete)
@@ -315,6 +391,7 @@ class Http3Server:
             get_log(self.app).warning("http3", f"stream {stream_id}: {e}")
             if stream.websocket is not None:
                 stream.websocket.push_eof()
+            self._reject_request_stream(connection, stream, e)
             return []
 
         if stream.body_rejected:
@@ -339,6 +416,7 @@ class Http3Server:
                 extended = http3.is_extended_connect(stream)
             except http3.H3Error as e:
                 get_log(self.app).warning("http3", f"malformed request on stream {stream_id}: {e}")
+                self._reject_request_stream(connection, stream, e)
                 return []
             if extended:
                 # RFC 9220: a WebSocket request is answered at once and its
@@ -352,14 +430,30 @@ class Http3Server:
         stream.answered = True
 
         tls_meta = {"enabled": True, "version": "TLSv1.3", "alpn": connection.alpn}
+        peer = getattr(connection, "peer_certificate", None)
+        if peer is not None:
+            from .quic.tls import describe_certificate
+
+            # Verified against client_ca_pem during the handshake.
+            tls_meta["peer_cert"] = describe_certificate(peer)
         try:
             request = http3.build_request(stream, connection.client_address, tls_meta)
         except http3.H3Error as e:
             get_log(self.app).warning("http3", f"malformed request on stream {stream_id}: {e}")
+            self._reject_request_stream(connection, stream, e)
             return []
         # The response is queued from the worker; the socket loop sends it.
         self._dispatch_pool.submit(self._dispatch, connection, stream_id, request)
         return []
+
+    @staticmethod
+    def _reject_request_stream(connection, stream, error):
+        stream.answered = True
+        stream.buffer.clear()
+        stream.body.clear()
+        reset = getattr(connection, "reset_stream", None)
+        if callable(reset):
+            reset(stream.id, error.code)
 
     def _dispatch(self, connection, stream_id, request):
         """Run the app for one request on a worker thread and queue the answer."""
@@ -386,18 +480,26 @@ class Http3Server:
 
     def _send_response(self, connection, stream_id, response, *, send_body):
         """Queue a response. A streamed body is sent chunk by chunk as it is produced."""
-        if not getattr(response, "is_stream", False) or not send_body:
+        if (
+            not getattr(response, "is_stream", False)
+            or not send_body
+            or not _status_allows_body(response.status)
+        ):
             payload = http3.build_response_frames(response, send_body=send_body)
             connection.queue_stream_data(stream_id, payload, fin=True)
             return
 
         from .http import _iter_stream_chunks
 
-        connection.queue_stream_data(
-            stream_id,
-            http3.encode_headers_frame(http3.build_response_head(response.status, response.headers)),
-            fin=False,
-        )
+        try:
+            connection.queue_stream_data(
+                stream_id,
+                http3.encode_headers_frame(http3.build_response_head(response.status, response.headers)),
+                fin=False,
+            )
+        except BaseException:
+            _close_response_stream(response)
+            raise
 
         wait_for_room = getattr(connection, "wait_for_send_room", None)
 
@@ -441,11 +543,21 @@ class Http3Server:
                         # A FIN would present the truncated body as complete.
                         reset(stream_id, http3.H3_INTERNAL_ERROR)
 
-        threading.Thread(target=pump, name=f"http3-stream-{stream_id}", daemon=True).start()
+        try:
+            threading.Thread(target=pump, name=f"http3-stream-{stream_id}", daemon=True).start()
+        except BaseException:
+            _close_response_stream(response)
+            raise
 
     def _open_websocket(self, connection, stream):
         """Answer an extended CONNECT: accept it onto a route, or refuse it."""
         tls_meta = {"enabled": True, "version": "TLSv1.3", "alpn": connection.alpn}
+        peer = getattr(connection, "peer_certificate", None)
+        if peer is not None:
+            from .quic.tls import describe_certificate
+
+            # Verified against client_ca_pem during the handshake.
+            tls_meta["peer_cert"] = describe_certificate(peer)
         try:
             request = http3.build_request(stream, connection.client_address, tls_meta)
         except http3.H3Error as e:

@@ -4,6 +4,7 @@ import importlib.util
 
 from .cache import Cache, SQLiteMemoryCache, install_cache
 from .caches import GlobalCacheRule, ViewResponseCache, install_caches
+from .codec import CBORDecodeError, CBOREncodeError, CBORSimple, CBORTag, cbor_dumps, cbor_loads
 from .cookies import build_set_cookie, get_cookie, parse_cookie_header
 from .db_replicas import (
     DatabaseReplica,
@@ -61,6 +62,7 @@ from .framework import (
     parse_query_string,
     proxyi,
 )
+from .gguf import GGMLType, GGUFError, GGUFReader, GGUFWriter, read_gguf_metadata
 from .headers import add_header, get_header, has_header, normalize_header_name, set_header
 from .ia import (
     AudioData,
@@ -76,6 +78,18 @@ from .ia import (
     evaluate_errors,
     load_wav,
     submit_training_task,
+)
+from .llm import (
+    DownloadError,
+    LanguageModel,
+    LlamaCppBackend,
+    ModelRecord,
+    ModelStore,
+    OpenAICompatibleBackend,
+    download_file,
+    huggingface_files,
+    huggingface_url,
+    install_llm,
 )
 from .logs import NDJSONLog, install_logs
 from .mdns import LocalMDNSServer, MDNSService, discover_mdns_services
@@ -100,18 +114,21 @@ from .orm import (
     validate_identifier,
 )
 from .predicts import Predictor
+from .rpc import RpcClient, RpcCodec, RpcError, RpcTransportError, rpc_endpoint
 from .security import ACLRule, SecurityDecision, SecurityPolicy, install_security
 
-#: Names served from wsbuilder.pki, which needs the optional `tls` extra.
-_PKI_EXPORTS = frozenset(
-    {
-        "CertificateAuthority",
-        "CertificateManager",
-        "MaterializedFiles",
-        "TLSMaterial",
-        "install_tls",
-    }
-)
+#: Names that need the optional `tls` extra, and the module serving each.
+_TLS_EXPORT_MODULES = {
+    "CertificateAuthority": "pki",
+    "CertificateManager": "pki",
+    "MaterializedFiles": "pki",
+    "TLSMaterial": "pki",
+    "install_tls": "pki",
+    "Http3Client": "http3_client",
+    "Http3Error": "http3_client",
+    "Http3Response": "http3_client",
+}
+_PKI_EXPORTS = frozenset(_TLS_EXPORT_MODULES)
 
 
 def _tls_extra_available():
@@ -133,7 +150,7 @@ def __getattr__(name):
     """
     if name in _PKI_EXPORTS:
         try:
-            from . import pki
+            module = importlib.import_module(f".{_TLS_EXPORT_MODULES[name]}", __name__)
         except ImportError as exc:
             # Installed but unusable (too old, broken binding): stop
             # advertising the names so later star imports and dir() work.
@@ -145,7 +162,7 @@ def __getattr__(name):
                 "Install it with: pip install wsbuilder[tls]",
                 name=name,
             ) from exc
-        value = getattr(pki, name)
+        value = getattr(module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -157,7 +174,7 @@ def __dir__():
         names |= _PKI_EXPORTS
     return sorted(names)
 
-__version__ = "1.2.14.dev0"
+__version__ = "1.3.1.dev0"
 
 __all__ = [
     "App",
@@ -268,6 +285,32 @@ __all__ = [
     "evaluate_errors",
     "submit_training_task",
     "Predictor",
+    "RpcClient",
+    "RpcCodec",
+    "RpcError",
+    "RpcTransportError",
+    "rpc_endpoint",
+    "CBORDecodeError",
+    "CBOREncodeError",
+    "CBORSimple",
+    "CBORTag",
+    "cbor_dumps",
+    "cbor_loads",
+    "GGMLType",
+    "GGUFError",
+    "GGUFReader",
+    "GGUFWriter",
+    "read_gguf_metadata",
+    "DownloadError",
+    "LanguageModel",
+    "LlamaCppBackend",
+    "ModelRecord",
+    "ModelStore",
+    "OpenAICompatibleBackend",
+    "download_file",
+    "huggingface_files",
+    "huggingface_url",
+    "install_llm",
 ]
 if _TLS_EXTRA_AVAILABLE:
     # Only advertised when importable, so ``from wsbuilder import *`` works

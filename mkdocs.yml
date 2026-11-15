@@ -19,9 +19,11 @@ nav:
       - Observabilidad: observability.md
       - Tareas: tasks.md
       - Proxy: proxy.md
+      - RPC entre servicios: rpc.md
       - DNS: dns.md
       - mDNS: mdns.md
       - IA: ia.md
+      - Modelos de lenguaje: llm.md
   - Referencia: reference/index.md
   - Ayuda: help/index.md
 

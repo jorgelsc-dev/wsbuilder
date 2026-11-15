@@ -57,7 +57,10 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   http.py               Request, Response, parse_query_string
   http1.py http2.py     protocolos HTTP/1.x y HTTP/2 (+ hpack.py)
   http3.py http3_server.py http3_websocket.py qpack.py   HTTP/3 sobre QUIC
-  quic/                 address, connection, crypto, frames, packet, recovery, tls, varint
+  http3_client.py       cliente HTTP/3 (Http3Client) con conexión QUIC reutilizada
+  quic/                 address, client, connection, crypto, frames, packet, recovery, tls, varint
+  rpc.py codec.py       RPC entre servicios (App.rpc, RpcClient) y codec CBOR (RFC 8949)
+  gguf.py llm.py        lector/escritor GGUF; LLM: ModelStore, descargas, backends, install_llm
   server.py             HTTPServer (TCP, TLS/ALPN, límites, keep-alive, apagado)
   ws.py                 WebSocket, frames, handshake, errores WebSocket*
   headers.py cookies.py helpers de cabeceras y cookies
@@ -93,10 +96,13 @@ tests, a `tests/`; los de docs, a `docs/`.
 | Área | Módulos principales | Tests de referencia | Docs |
 | --- | --- | --- | --- |
 | Rutas, despacho, CORS y workers por vista | `app.py`, `headers.py`, `cookies.py` | `test_app_threads.py`, `test_headers_cookies.py`, `test_http.py` | `app-http.md` |
-| Request, Response y HTTP/1 | `http.py`, `http1.py`, `server.py` | `test_http.py`, `test_http1.py`, `test_server.py`, `test_server_errors.py` | `http.md` |
+| Request, Response y HTTP/1 | `http.py`, `http1.py`, `server.py` | `test_http.py`, `test_http1.py`, `test_server.py`, `test_server_errors.py`, `test_response_lifecycle.py` | `http.md` |
 | HTTP/2 y HPACK | `http2.py`, `hpack.py` | `test_http2.py`, `test_hpack.py` | `http-versions.md` |
 | HTTP/3 y WebSocket sobre HTTP/3 | `http3.py`, `http3_server.py`, `http3_websocket.py`, `qpack.py` | `test_http3.py`, `test_http3_server.py`, `test_http3_streaming.py`, `test_http3_streaming_udp.py` | `http-versions.md` |
 | Transporte QUIC | `quic/` | `test_quic_protocol.py`, `test_quic_crypto.py`, `test_quic_tls.py`, `test_quic_recovery.py`, `test_quic_address.py` | `http-versions.md` |
+| Cliente QUIC/HTTP/3 y mTLS en QUIC | `quic/client.py`, `quic/tls.py`, `http3_client.py` | `test_quic_client.py` | `rpc.md` |
+| Modelos de lenguaje y GGUF | `llm.py`, `gguf.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_gguf.py` | `llm.md`, `ia.md` |
+| RPC entre servicios y codec CBOR | `rpc.py`, `codec.py`, `app.py` (`App.rpc`) | `test_rpc.py`, `test_codec.py`, `test_optional_extras.py` | `rpc.md` |
 | WebSocket y frames | `ws.py` | `test_ws.py`, `test_server.py` | `websocket.md` |
 | SQLite, ORM y réplicas | `orm.py`, `db_replicas.py` | `test_orm.py`, `test_orm_replicas.py` | `data-orm.md`, `persistence.md` |
 | Cache clave-valor y cache de vistas | `cache.py`, `caches.py` | `test_cache.py`, `test_caches.py` | `cache.md`, `cache-security.md` |
@@ -162,7 +168,11 @@ Los atributos opcionales valen `None` hasta llamar al `enable_*` o `install_*`.
   estado debe estar en 100–599. `headers` es un dict con un valor por nombre; un
   valor lista/tupla se envía como campos repetidos (varios `Set-Cookie`), una
   línea por valor en HTTP/1 y un campo por valor en HTTP/2/3. El servidor cierra
-  el origen de un `stream` al terminar o si el cliente se va. Constructores: `Response.json(data)`,
+  el origen de un `stream` al terminar o si el cliente se va, y sin consumirlo en
+  `HEAD` o estados sin cuerpo (`1xx`, `204`, `304`) en los tres transportes.
+  `Content-Length` explicito se conserva en `HEAD`/`304` y se omite en `1xx`/`204`.
+  `send_http_response` devuelve `False` si falla el envio y el servidor HTTP/1
+  cierra la conexion; devuelve `True` si se completa. Constructores: `Response.json(data)`,
   `Response.text(text)`, `Response.html(html)`,
   `Response.stream(chunks, content_type=None)`; todos aceptan `status` y
   `headers`.
@@ -196,9 +206,9 @@ cada petición (`BufferedReader.set_deadline`), no un timeout por `recv`; un
 cliente lento recibe `408`. Con seguridad activa, `App.security_response()`
 evalúa ACL/lista negra/rate limit con las cabeceras antes de `100 Continue` y
 de leer el cuerpo; la petición queda marcada (`security_evaluated`) y
-`dispatch()` no la cuenta otra vez. Tras una respuesta temprana con cuerpo sin
-leer, `_linger_close` drena hasta `LINGER_TIMEOUT_SECONDS` (2 s) para no
-provocar un RST.
+`dispatch()` no la cuenta otra vez. Tras un `408`, un `413` por tamaño del cuerpo
+o un rechazo de seguridad con cuerpo sin leer, `_linger_close` cierra el envio
+y drena hasta `LINGER_TIMEOUT_SECONDS` (2 s) para no provocar un RST.
 
 Otros atributos: `ENABLE_HTTP2 = True` (ALPN y preface en claro),
 `HANDLE_SIGTERM = True`, `ACCEPT_TIMEOUT_SECONDS = 0.5`,
@@ -206,6 +216,13 @@ Otros atributos: `ENABLE_HTTP2 = True` (ALPN y preface en claro),
 tienen prioridad sobre los del servidor. HTTP/3: `Http3Server` e
 `install_http3(app, tls, host="0.0.0.0", port=0, attr_name="http3")` en
 `http3_server.py`; `alt_svc_header(port, max_age=86400)` anuncia HTTP/3.
+`Http3Server` toma `client_ca_pem`/`require_client_cert` del proveedor TLS
+(`CertificateManager`) para exigir certificados de cliente también en QUIC, y
+expone el certificado verificado en `request.tls["peer_cert"]`
+(`describe_certificate`). Un `socketpair` despierta el hilo del socket cuando un
+handler encola bytes (`QuicConnection.on_outbound`), sin esperar al timeout.
+HTTP/1 escribe cabecera y cuerpo en un solo `sendall` y activa `TCP_NODELAY`
+para no sufrir Nagle más ACK retardado (~40 ms) en keep-alive.
 `Http2Connection` ejecuta los handlers en un pool por conexión
 (`MAX_HANDLER_THREADS = 16`) fuera del bucle de frames y sin el lock.
 
@@ -254,7 +271,10 @@ conserva los bytes leídos (`_FrameReader`) y el frame se completa después.
   `istartswith`, `endswith`, `iendswith`, `in`, `not_in`.
 - Identificadores: `validate_identifier` y `quote_identifier`.
 - Réplicas: `DatabaseReplica`, `DatabaseReplicaPool`, `OptimizedDatabase`,
-  `SQLite3OptimizationConfig`.
+  `SQLite3OptimizationConfig`. `close()` es idempotente y definitivo, tambien
+  para replicas/pools; las lecturas posteriores lanzan `sqlite3.ProgrammingError`.
+  `execute`/`executemany` revierten los fallos de confirmacion automatica fuera
+  de transacciones explicitas.
 
 ### Logs (`logs.py`)
 
@@ -270,22 +290,37 @@ console_level="warning")` con `log(level, event, message="", exc=None,
 
 - Cache: `SQLiteMemoryCache` / `Cache`, `install_cache(app, cache=None,
   attr_name="cache")`; cache de vistas `ViewResponseCache`, `GlobalCacheRule`,
-  `install_caches(app, caches=None, attr_name="caches")`.
+  `install_caches(app, caches=None, attr_name="caches")`. Las claves de respuesta
+  incluyen `Host` y el esquema del transporte (`request.tls.enabled`). Los
+  instaladores registran recursos para `App.close()`, tambien con `attr_name`
+  personalizado, evitando cerrar dos veces un store compartido.
 - Seguridad: `SecurityPolicy`, `ACLRule`, `SecurityDecision`,
   `install_security(app, policy=None)`.
 - Métricas: `AppMetrics`, `install_metrics(...)`; el snapshot incluye threads,
   cache, caches, security, tls y proxyi cuando están habilitados.
-- Tareas: `TaskManager.spawn(...)`, `get`, `list(group=, status=)`, `cancel`,
+  `http_request_aborted()` finaliza una peticion interrumpida sin contar una
+  respuesta entregada; el servidor lo usa si falla la escritura HTTP/1.
+- Tareas: `TaskManager(app=None, max_concurrent=0, max_finished_tasks=512,
+  max_pending_tasks=512)`; `max_pending_tasks` es keyword-only. Con
+  `max_concurrent > 0` admite hasta ese limite mas la cola pendiente; una
+  admision sin capacidad lanza `TaskRejectedError`. Las tareas pendientes no
+  crean hilos activos; un dispatcher gestiona hasta `max_concurrent` workers y
+  un guardian conserva `daemon=False` mientras espera. `max_pending_tasks=0`
+  admite solo las plazas de ejecucion, sin esperas adicionales.
+  `max_concurrent=0` conserva un hilo por tarea sin este limite de admision.
+  `TaskManager.spawn(...)`, `get`, `list(group=, status=)`, `cancel`,
   `cancel_group`, `cancel_all`, `wait`, `result`, `snapshot`,
   `close(wait=True, timeout=None)`; `TaskHandle` (`status`, `result`,
   `exception`, `cancel`, `wait`, `join`, `get`, `snapshot`); estados
-  `TASK_PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/REJECTED`.
+  `TASK_PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/REJECTED`. Cancelar una tarea
+  en cola la finaliza sin ejecutarla; el timeout de espera la rechaza. El cierre
+  desde un worker cancela sin esperar a otros workers para evitar ciclos.
 - Proxy: `ProxyI`, `proxyi`, `ProxyRule`, `ProxyRouteBuilder`, `ProxyTarget`,
   `install_proxyi`, `normalize_balance_mode`, `normalize_target`; estrategias
   `BALANCING_*` listadas en `SUPPORTED_BALANCING_STRATEGIES`. `ProxyI` rechaza
   con `400` paths con segmentos `.`/`..` (también codificados), limita las
   respuestas con buffer (`max_response_bytes` 16 MiB → 502,
-  `response_timeout_seconds` 30 → 504), retransmite en streaming las respuestas
+  `response_timeout_seconds` 30 → 504, cuerpo truncado → 502), retransmite en streaming las respuestas
   sin longitud, chunked o SSE, conserva todos los `Set-Cookie` y solo envía
   `X-ProxyI-Upstream` con `expose_upstream_header=True`.
 - DNS/mDNS: `LocalDNSServer`, `LocalMDNSServer`, `MDNSService`,
@@ -293,9 +328,60 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   `qdcount != 1`, trunca a 512 B (o al payload EDNS, tope `max_udp_payload`)
   con TC, sigue ante `OSError` por datagrama y reenvía a upstreams en un pool
   acotado (`upstream_workers`, `max_pending_upstream`). Sin listener TCP.
-- PKI: `CertificateAuthority`, `CertificateManager`, `TLSMaterial`,
-  `MaterializedFiles`, `install_tls`. Sin el extra `tls` estos nombres no están
+- PKI y cliente HTTP/3: `CertificateAuthority`, `CertificateManager`,
+  `TLSMaterial`, `MaterializedFiles`, `install_tls`, `Http3Client`,
+  `Http3Response`, `Http3Error` (`_TLS_EXPORT_MODULES` en `__init__.py` indica
+  el módulo de cada uno). Sin el extra `tls` estos nombres no están
   en `__all__` y su acceso lanza `AttributeError` con la pista de instalación.
+- RPC: `App.rpc(path, methods=("POST",), *, codec="cbor")` registra
+  `handler(request, payload)` como ruta `api`; `rpc_endpoint` decodifica según
+  `Content-Type` (CBOR/JSON), responde según `Accept` y convierte `RpcError` en
+  `{"error": {"code", "message", "details"}}` (415, 400 y 500 propios).
+  `RpcClient(base_url, transport=None, codec="cbor", trust=None, ca_pem=None,
+  client_material=None, server_name=None, timeout=10.0, headers=None,
+  max_response_bytes=64 MiB)`: `https://` usa HTTP/3 (extra `tls`), `http://` o
+  `transport="http1"` usan `http.client` con keep-alive por hilo y un reintento
+  solo si una conexión reutilizada estaba cerrada. `call()` lanza `RpcError`
+  (respuesta de error) o `RpcTransportError` (sin respuesta).
+- LLM (`llm.py`): `ModelStore(root=None)` (por defecto `$WSBUILDER_MODELS` o
+  `~/.cache/wsbuilder/models`) guarda cada modelo en `<raíz>/<id>/` con
+  `manifest.json` (sin índice compartido; escrituras atómicas). Métodos:
+  `import_file`, `download`, `download_huggingface` (SHA-256 del listado del Hub),
+  `list`, `get`, `export`, `verify`, `rename`, `remove`, `load` (cachea un
+  `LanguageModel` por id). `download_file` solo acepta `https://` (salvo
+  `allow_http`), reanuda con `Range` desde `.part` solo si hay SHA-256, limita
+  `max_bytes` y no reenvía `Authorization` en redirecciones a otro host.
+  `LanguageModel` (`generate`, `chat`, `chat_completion`, `stream_*`) usa
+  `LlamaCppBackend` (extra `llm`, `llama-cpp-python`, importado en diferido) u
+  `OpenAICompatibleBackend` (stdlib). `install_llm`/`App.enable_llm` sirven
+  `GET models|model`, `POST chat|generate` (NDJSON al hacer streaming) y
+  `/v1/models`, `/v1/chat/completions` (SSE); `download`/`import`/`delete`
+  solo con `allow_*=True`.
+- GGUF (`gguf.py`): `GGUFReader` lee cabecera y tablas sin cargar tensores,
+  valida conteos/longitudes contra el tamaño del archivo, deja arrays largos
+  como `GGUFArray` (`max_array_items`, 1024) y `summary()` resume arquitectura,
+  cuantización, contexto y vocabulario. `GGUFWriter` escribe GGUF v3 alineado
+  (atómico a ruta). Decodifica F32/F16/BF16/F64/I8-I64/Q8_0/Q4_0. Interoperable
+  con `gguf-py` de llama.cpp en ambos sentidos; llama.cpp ejecuta modelos
+  escritos con `GGUFWriter` (`TestRealLlamaCpp`, se omite sin el extra).
+  `NeuralNetwork.save`/`load` usan la arquitectura `wsbuilder.dense`.
+- CBOR (`codec.py`): `cbor_dumps`/`cbor_loads`, forma preferida (más corta),
+  bignums con tags 2/3, `CBORTag`, `CBORSimple`; el decoder comprueba longitudes
+  antes de reservar, limita `max_depth` (256) y rechaza bytes sobrantes. Es
+  Python puro: ~30 % menos bytes que JSON compacto pero 3-5x más CPU que `json`.
+- Cliente QUIC: `QuicClientConnection` (`quic/client.py`) reutiliza
+  `QuicConnection` invirtiendo claves y roles; sigue un Retry y valida
+  `original_destination_connection_id`, `initial_source_connection_id` y
+  `retry_source_connection_id`. `ClientHandshake` (`quic/tls.py`) exige un
+  `CertificateTrust` (verificador WebPKI de `cryptography`), ofrece solo
+  `TLS_AES_128_GCM_SHA256`, rechaza HelloRetryRequest y responde a
+  `CertificateRequest`. `Http3Client` mantiene una sesión (hilo de E/S y socket
+  UDP conectado), un stream bidireccional por petición y rota de conexión al
+  agotar `initial_max_streams_bidi`, al quedar inactiva 20 s o al fallar.
+- QUIC: el servidor no procesa paquetes 1-RTT antes de completar el handshake
+  (RFC 9001 §5.7): los retiene (`MAX_EARLY_SHORT_PACKETS = 16`) hasta verificar
+  el Finished y, con mTLS, el certificado del cliente. Solo se confirman
+  (ACK) paquetes que exigen confirmación (RFC 9000 §13.2.1).
 - QUIC: el emisor respeta el control de flujo del par (`initial_max_*`,
   `MAX_DATA`, `MAX_STREAM_DATA`, con `DATA_BLOCKED`/`STREAM_DATA_BLOCKED`) y la
   ventana NewReno de `quic/recovery.py`; `wait_for_send_room` da backpressure al
@@ -333,6 +419,9 @@ HTTP/1 (`cookie` con `"; "`). WebSocket debe consumir los bytes ya leídos por e
 HTTP/1.0 no usa codificación chunked. HPACK/QPACK decodifican las cadenas de
 campos como ISO-8859-1; los límites y tablas deben contar los octetos recibidos.
 HTTP/3 ejecuta los handlers fuera del hilo que recibe los datagramas.
+Las peticiones HTTP/3 validan `Content-Length` como decimal ASCII y lo comparan
+con los DATA recibidos al terminar; un fallo resetea solo ese stream con
+`H3_MESSAGE_ERROR` antes de despachar.
 
 Al tocar persistencia, conserva las búsquedas literales del ORM y los prefijos
 literales del cache, incluidos `%`, `_` y barras invertidas. `QuerySet.count()`,
@@ -341,9 +430,11 @@ literales del cache, incluidos `%`, `_` y barras invertidas. `QuerySet.count()`,
 ## Restricciones técnicas
 
 - Núcleo: biblioteca estándar de Python. No añadir dependencias de runtime.
-- Extra `tls`: `cryptography>=42`, utilizado únicamente por `pki.py`, `quic/` y
-  `http3_server.py`. Los helpers PKI de la API pública se cargan de forma diferida
+- Extra `tls`: `cryptography>=43`, utilizado únicamente por `pki.py`, `quic/`,
+  `http3_server.py` y `http3_client.py` (`rpc.py` lo importa solo para HTTP/3). Los helpers PKI de la API pública se cargan de forma diferida
   para que importar el núcleo no requiera este extra.
+- Extra `llm`: `llama-cpp-python>=0.3`, importado solo por `LlamaCppBackend`
+  en `llm.py`; almacenar, descargar y leer/escribir GGUF no lo necesitan.
 - Extra `mdns`: `zeroconf>=0.131`, utilizado únicamente por `mdns.py`; su backend
   sigue siendo opcional al importar el paquete.
 - Herramientas permitidas: `setuptools`, `wheel`, `build`, `twine`, `pytest`,

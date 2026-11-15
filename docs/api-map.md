@@ -16,7 +16,7 @@ Para ejemplos completos por nivel, lee [Principiantes](beginners.md),
 
 Metodos habituales:
 
-- `App.view`, `App.api`, `App.route`, `App.ws`
+- `App.view`, `App.api`, `App.rpc`, `App.route`, `App.ws`
 - `App.enable_metrics`, `App.enable_security`, `App.enable_caches`,
   `App.enable_logs`, `App.enable_docs`
 - `App.dispatch`, `App.describe`, `App.run`, `App.close`
@@ -68,6 +68,17 @@ Filtros `QuerySet` documentados:
 | Cabeceras | `normalize_header_name`, `get_header`, `has_header`, `set_header`, `add_header` |
 | Cookies | `parse_cookie_header`, `get_cookie`, `build_set_cookie` |
 
+## Comunicacion entre servicios
+
+| Grupo | Exportaciones |
+| --- | --- |
+| RPC | `RpcClient`, `RpcError`, `RpcTransportError`, `RpcCodec`, `rpc_endpoint` |
+| Codec CBOR | `cbor_dumps`, `cbor_loads`, `CBORTag`, `CBORSimple`, `CBORDecodeError`, `CBOREncodeError` |
+| HTTP/3 cliente (extra `tls`) | `Http3Client`, `Http3Response`, `Http3Error` |
+
+Metodo de la app: `App.rpc(path, methods=("POST",), *, codec="cbor")`. Guia
+completa en [RPC entre servicios](rpc.md).
+
 ## DNS y proxy
 
 | Grupo | Exportaciones |
@@ -101,6 +112,19 @@ Filtros `QuerySet` documentados:
 | Redes | `DenseLayer`, `NeuralNetwork`, `submit_training_task` |
 | Analisis | `describe_data`, `evaluate_errors` |
 | Prediccion | `Predictor` |
+| Persistencia de redes | `NeuralNetwork.save`, `NeuralNetwork.load` (GGUF) |
+
+## Modelos de lenguaje
+
+| Grupo | Exportaciones |
+| --- | --- |
+| Almacen | `ModelStore`, `ModelRecord` |
+| Descargas | `download_file`, `huggingface_files`, `huggingface_url`, `DownloadError` |
+| Ejecucion | `LanguageModel`, `LlamaCppBackend` (extra `llm`), `OpenAICompatibleBackend` |
+| HTTP | `install_llm`, `App.enable_llm` |
+| GGUF | `GGUFReader`, `GGUFWriter`, `GGMLType`, `GGUFError`, `read_gguf_metadata` |
+
+Guia completa en [Modelos de lenguaje](llm.md).
 
 ## Modulos directos utiles
 

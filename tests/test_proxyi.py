@@ -484,6 +484,14 @@ class TestProxyHardening(unittest.TestCase):
         proxy = self._proxy(trickle, response_timeout_seconds=0.2)
         self.assertEqual(self._get(proxy).status, 504)
 
+    def test_truncated_buffered_body_is_502(self):
+        def truncated(conn, _stop):
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc")
+
+        response = self._get(self._proxy(truncated))
+        self.assertEqual(response.status, 502)
+        self.assertNotIn("Content-Length", response.headers)
+
     def test_event_stream_is_relayed_without_buffering(self):
         release = threading.Event()
 

@@ -22,7 +22,7 @@ from .headers import (
     iter_header_fields,
 )
 from .hpack import Decoder, Encoder, HeaderListTooLarge, HPACKError
-from .http import Response
+from .http import Response, _status_allows_body
 from .logs import get_log
 
 #: RFC 9113 section 3.4. A client opens with this exact octet sequence.
@@ -877,7 +877,7 @@ class Http2Connection:
                 self.send_response(stream, response, send_body=request.method != "HEAD")
                 self._release_closed_streams()
         except OSError:
-            self._close_unsent(response)
+            pass  # send_response owns the response's producer from here on.
         except Exception as exc:  # noqa: BLE001 - reported on the stream
             # An unencodable response must not leave the stream open for ever.
             get_log(self.app).exception(
@@ -889,7 +889,6 @@ class Http2Connection:
                     stream.reset_code = ERROR_INTERNAL_ERROR
                     self.send_rst_stream(stream.id, ERROR_INTERNAL_ERROR)
                 self._release_closed_streams()
-            self._close_unsent(response)
 
     @staticmethod
     def _close_unsent(response):
@@ -902,11 +901,29 @@ class Http2Connection:
                     pass
 
     def send_response(self, stream, response, *, send_body=True):
+        producer_started = False
+        try:
+            producer_started = self._send_response(stream, response, send_body=send_body)
+        finally:
+            if not producer_started:
+                self._close_unsent(response)
+
+    def _send_response(self, stream, response, *, send_body):
+        status = int(response.status)
+        status_allows_body = _status_allows_body(status)
+        send_body = bool(send_body and status_allows_body)
         fields = [(":status", str(int(response.status)))]
+        has_content_length = False
         for name, value in iter_header_fields(response.headers):
             lowered = str(name).lower()
             if lowered in FORBIDDEN_HEADERS:
                 continue  # Section 8.2.2: these have no meaning in HTTP/2.
+            if lowered == "content-length":
+                if 100 <= status < 200 or status == 204:
+                    continue
+                if send_body and not response.is_stream:
+                    continue  # Buffered DATA determines its actual length.
+                has_content_length = True
             fields.append((lowered, value))
 
         if send_body and response.is_stream:
@@ -919,13 +936,14 @@ class Http2Connection:
                 name=f"http2-stream-{stream.id}",
                 daemon=True,
             )
-            self._producers.append(producer)
             producer.start()
-            return
+            self._producers.append(producer)
+            return True
 
         body = bytes(response.body) if send_body else b""
-        if send_body:
-            fields.append(("content-length", str(len(body))))
+        if status_allows_body and not response.is_stream and not has_content_length:
+            # HEAD describes the representation even though DATA is omitted.
+            fields.append(("content-length", str(len(response.body))))
 
         block = self.encoder.encode(fields)
         self._send_header_block(stream.id, block, not body)

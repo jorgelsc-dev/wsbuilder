@@ -421,6 +421,9 @@ class App:
         self.security = None
         self.proxyi = None
         self.caches = None
+        self._cache_resources = {}
+        self._closed_cache_resources = set()
+        self._cache_resource_lock = threading.RLock()
         self.logs = None
         self.tls = None
         self.tasks = TaskManager(app=self)
@@ -563,6 +566,31 @@ class App:
 
     def api(self, path, methods=("GET",)):
         return self.route(path, methods=methods, kind="api")
+
+    def enable_llm(self, store=None, **options):
+        """Serve a model store and its language models; see :func:`wsbuilder.llm.install_llm`."""
+        from .llm import install_llm
+
+        return install_llm(self, store, **options)
+
+    def rpc(self, path, methods=("POST",), *, codec="cbor", **route_options):
+        """Register ``handler(request, payload)`` as a service-to-service endpoint.
+
+        The body is decoded from CBOR or JSON (by ``Content-Type``) before the
+        handler runs, and its return value is encoded the same way (or as the
+        ``Accept`` header asks); ``codec`` is used when the request names
+        neither. Raise :class:`~wsbuilder.RpcError` for a structured error.
+        ``route_options`` are the worker options of :meth:`route`.
+        """
+        from .rpc import rpc_endpoint
+
+        def decorator(func):
+            self.route(path, methods=methods, kind="api", **route_options)(
+                rpc_endpoint(func, default_codec=codec)
+            )
+            return func
+
+        return decorator
 
     def ws(
         self,
@@ -1210,12 +1238,28 @@ class App:
                 tasks.close(wait=False)
             except Exception:
                 pass
-        caches = getattr(self, "caches", None)
-        if caches and hasattr(caches, "close"):
-            try:
-                caches.close()
-            except Exception:
-                pass
+        with self._cache_resource_lock:
+            for name in ("caches", "cache"):
+                resource = getattr(self, name, None)
+                if resource is not None:
+                    self._cache_resources[id(resource)] = resource
+            resources = list(self._cache_resources.values())
+            # Owners close their backing stores; direct registrations of the
+            # same store must not close it again.
+            resources.sort(key=lambda item: not getattr(item, "_owns_store", False))
+            for resource in resources:
+                if id(resource) in self._closed_cache_resources:
+                    continue
+                self._closed_cache_resources.add(id(resource))
+                if not hasattr(resource, "close"):
+                    continue
+                try:
+                    resource.close()
+                except Exception:
+                    pass
+                else:
+                    if getattr(resource, "_owns_store", False):
+                        self._closed_cache_resources.add(id(resource.store))
         proxyi = getattr(self, "proxyi", None)
         if proxyi and hasattr(proxyi, "close"):
             try:

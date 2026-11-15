@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wsbuilder"
-version = "1.2.14.dev0"
+version = "1.3.1.dev0"
 description = "Lightweight HTTP + WebSocket framework for Python."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "wsbuilder Authors" }]
-keywords = ["websocket", "http", "framework", "server", "python"]
+keywords = ["websocket", "http", "http3", "quic", "rpc", "cbor", "llm", "gguf", "framework", "server", "python"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -30,9 +30,12 @@ classifiers = [
 # TLS material handling (wsbuilder.pki). Kept optional so the core framework
 # stays dependency-free and the offline install documented in docs/install.md
 # keeps working.
-tls = ["cryptography>=42"]
+tls = ["cryptography>=43"]
 # Multicast DNS and DNS-SD advertising/discovery (wsbuilder.mdns).
 mdns = ["zeroconf>=0.131"]
+# Running local GGUF language models (wsbuilder.llm.LlamaCppBackend). Storing,
+# downloading, reading and writing models needs no extra.
+llm = ["llama-cpp-python>=0.3"]
 
 [project.urls]
 Homepage = "https://github.com/jorgelsc-dev/wsbuilder"

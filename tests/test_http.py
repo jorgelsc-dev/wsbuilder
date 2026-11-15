@@ -21,6 +21,20 @@ class BufferSocket:
 
 
 class TestHTTPCore(unittest.TestCase):
+    def test_a_whole_response_leaves_in_one_write(self):
+        # Head and body in separate small writes meet Nagle's algorithm here
+        # and delayed ACKs at the client: ~40 ms per kept-alive response.
+        sock = BufferSocket()
+        send_http_response(sock, Response.json({"ok": True}), keep_alive=True)
+        self.assertEqual(len(sock.sent), 1)
+        self.assertTrue(sock.sent[0].endswith(b'{"ok":true}'))
+
+    def test_a_head_response_is_one_write_without_the_body(self):
+        sock = BufferSocket()
+        send_http_response(sock, Response.text("hidden"), send_body=False)
+        self.assertEqual(len(sock.sent), 1)
+        self.assertNotIn(b"hidden", sock.sent[0])
+
     def _closing_stream(self, flags):
         def chunks():
             try:
@@ -43,7 +57,7 @@ class TestHTTPCore(unittest.TestCase):
 
         flags = []
         stream = self._closing_stream(flags)
-        send_http_response(Broken(), Response.stream(stream))
+        self.assertFalse(send_http_response(Broken(), Response.stream(stream)))
         self.assertEqual(flags, ["closed"])
 
     def test_stream_is_closed_when_the_body_is_skipped(self):
@@ -157,6 +171,16 @@ class TestHTTPCore(unittest.TestCase):
         wire = b"".join(conn.sent)
         headers, body = wire.split(b"\r\n\r\n", 1)
         self.assertNotIn(b"Content-Length", headers)
+        self.assertNotIn(b"Transfer-Encoding", headers)
+        self.assertEqual(body, b"")
+
+    def test_not_modified_keeps_explicit_representation_length_without_a_body(self):
+        conn = BufferSocket()
+        self.assertTrue(send_http_response(
+            conn, Response(status=304, body=b"ignored", headers={"Content-Length": "100"}),
+        ))
+        headers, body = b"".join(conn.sent).split(b"\r\n\r\n", 1)
+        self.assertIn(b"Content-Length: 100", headers)
         self.assertNotIn(b"Transfer-Encoding", headers)
         self.assertEqual(body, b"")
 

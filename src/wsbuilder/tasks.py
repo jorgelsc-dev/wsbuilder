@@ -21,6 +21,7 @@ _TERMINAL_STATUSES = {
 # long-running server that spawns a task per request keeps every handle (and its
 # result) alive for the whole process lifetime.
 DEFAULT_MAX_FINISHED_TASKS = 512
+DEFAULT_MAX_PENDING_TASKS = 512
 
 
 class TaskError(Exception):
@@ -95,7 +96,8 @@ class TaskHandle:
         self._started = threading.Event()
         self._finished = threading.Event()
         self._cancel_requested = threading.Event()
-        self._ready_to_run = threading.Event()
+        self._submitted = False
+        self._deadline = None
         self._started_at = None
         self._finished_at = None
         self._result = None
@@ -149,7 +151,19 @@ class TaskHandle:
         return self.status == TASK_RUNNING
 
     def start(self):
-        self._thread.start()
+        with self._state_lock:
+            if self._submitted:
+                raise RuntimeError("Task has already been submitted")
+            self._submitted = True
+        try:
+            if self.manager.max_concurrent:
+                self.manager._enqueue_task(self)
+            else:
+                self._thread.start()
+        except BaseException:
+            with self._state_lock:
+                self._submitted = False
+            raise
         return self
 
     def cancel(self):
@@ -157,7 +171,8 @@ class TaskHandle:
             if self._status in _TERMINAL_STATUSES:
                 return False
             self._cancel_requested.set()
-            return True
+        self.manager._cancel_pending_task(self)
+        return True
 
     def wait(self, timeout=None):
         return self._finished.wait(timeout)
@@ -223,32 +238,6 @@ class TaskHandle:
             self._finished.set()
 
     def _run(self):
-        gate = self.manager._task_slot
-        if gate is not None:
-            deadline = None if self.timeout_seconds is None else (time.monotonic() + self.timeout_seconds)
-            acquired = False
-            while not acquired:
-                if self.manager._closed.is_set() or self._cancel_requested.is_set():
-                    self._set_state(
-                        status=TASK_CANCELLED,
-                        finished_at=time.time(),
-                        exception=TaskCancelledError("Task cancelled before start"),
-                    )
-                    self._release_execution_references()
-                    self._finish_and_finalize()
-                    return
-                remaining = None if deadline is None else deadline - time.monotonic()
-                if remaining is not None and remaining <= 0:
-                    self._set_state(
-                        status=TASK_REJECTED,
-                        finished_at=time.time(),
-                        exception=TaskRejectedError("Task capacity reached"),
-                    )
-                    self._release_execution_references()
-                    self._finish_and_finalize()
-                    return
-                acquired = gate.acquire(timeout=0.1 if remaining is None else min(0.1, remaining))
-
         try:
             if self._cancel_requested.is_set():
                 raise TaskCancelledError("Task cancelled before start")
@@ -276,7 +265,7 @@ class TaskHandle:
             self._set_state(status=TASK_REJECTED, exception=exc)
         except TaskCancelledError as exc:
             self._set_state(status=TASK_CANCELLED, exception=exc)
-        except Exception as exc:
+        except BaseException as exc:
             with self._state_lock:
                 if self._cancel_requested.is_set():
                     self._set_state(
@@ -288,18 +277,30 @@ class TaskHandle:
         finally:
             self._set_state(finished_at=time.time())
             self._release_execution_references()
-            if gate is not None:
-                gate.release()
             self._finish_and_finalize()
 
 
 class TaskManager:
-    def __init__(self, app=None, max_concurrent=0, max_finished_tasks=DEFAULT_MAX_FINISHED_TASKS):
+    def __init__(
+        self,
+        app=None,
+        max_concurrent=0,
+        max_finished_tasks=DEFAULT_MAX_FINISHED_TASKS,
+        *,
+        max_pending_tasks=DEFAULT_MAX_PENDING_TASKS,
+    ):
         self.app = app
         self.max_concurrent = max(0, int(max_concurrent or 0))
         self.max_finished_tasks = max(0, int(max_finished_tasks or 0))
-        self._task_slot = threading.BoundedSemaphore(self.max_concurrent) if self.max_concurrent > 0 else None
+        self.max_pending_tasks = max(0, int(max_pending_tasks or 0))
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
+        self._pending = deque()
+        self._running = {}
+        self._dispatcher = None
+        self._dispatcher_exiting = False
+        self._non_daemon_guard = None
+        self._guard_exiting = False
         self._tasks = {}
         self._by_group = {}
         self._finished_order = deque()
@@ -352,6 +353,133 @@ class TaskManager:
         return task
 
     submit = spawn
+
+    def _enqueue_task(self, task):
+        with self._condition:
+            if self._closed.is_set():
+                raise TaskClosedError("Task manager is closed")
+            self._reap_workers_locked()
+            capacity = self.max_concurrent + self.max_pending_tasks
+            if len(self._running) + len(self._pending) >= capacity:
+                raise TaskRejectedError("Task capacity reached")
+            task._deadline = (
+                None if task.timeout_seconds is None
+                else time.monotonic() + task.timeout_seconds
+            )
+            self._pending.append(task)
+            try:
+                if not task.daemon:
+                    self._ensure_guard_locked()
+                if self._dispatcher is not None and self._dispatcher_exiting:
+                    self._dispatcher.join()
+                    self._dispatcher = None
+                if self._dispatcher is None:
+                    self._dispatcher_exiting = False
+                    self._dispatcher = threading.Thread(
+                        target=self._dispatch,
+                        name="wsbuilder-task-dispatcher",
+                        daemon=True,
+                    )
+                    try:
+                        self._dispatcher.start()
+                    except BaseException:
+                        self._dispatcher = None
+                        raise
+            except BaseException:
+                self._pending.remove(task)
+                self._condition.notify_all()
+                raise
+            self._condition.notify_all()
+
+    def _ensure_guard_locked(self):
+        if self._non_daemon_guard is not None and self._guard_exiting:
+            self._non_daemon_guard.join()
+            self._non_daemon_guard = None
+        if self._non_daemon_guard is None:
+            self._guard_exiting = False
+            self._non_daemon_guard = threading.Thread(
+                target=self._guard_non_daemon_tasks,
+                name="wsbuilder-task-guard",
+                daemon=False,
+            )
+            try:
+                self._non_daemon_guard.start()
+            except BaseException:
+                self._non_daemon_guard = None
+                raise
+
+    def _guard_non_daemon_tasks(self):
+        with self._condition:
+            while any(not task.daemon for task in self._pending):
+                self._condition.wait()
+            # A submitter can join this thread under the manager lock after
+            # this flag: returning from this block needs no further manager lock.
+            self._guard_exiting = True
+
+    def _reap_workers_locked(self):
+        for task_id, task in list(self._running.items()):
+            if task.finished.is_set():
+                # The finished event is the last action of the task. Joining
+                # here ensures the old thread exits before its slot is reused.
+                task._thread.join()
+                del self._running[task_id]
+
+    def _finish_pending_locked(self, task, status, exception):
+        task._set_state(status=status, finished_at=time.time(), exception=exception)
+        task._release_execution_references()
+        task._finish_and_finalize()
+
+    def _cancel_pending_task(self, task):
+        with self._condition:
+            try:
+                self._pending.remove(task)
+            except ValueError:
+                pass
+            else:
+                self._finish_pending_locked(
+                    task, TASK_CANCELLED, TaskCancelledError("Task cancelled before start"),
+                )
+            self._condition.notify_all()
+
+    def _dispatch(self):
+        with self._condition:
+            while True:
+                self._reap_workers_locked()
+                now = time.monotonic()
+                for task in list(self._pending):
+                    cancelled = self._closed.is_set() or task.cancelled
+                    expired = task._deadline is not None and task._deadline <= now
+                    if cancelled or expired:
+                        self._pending.remove(task)
+                        if cancelled:
+                            task._cancel_requested.set()
+                            self._finish_pending_locked(
+                                task, TASK_CANCELLED, TaskCancelledError("Task cancelled before start"),
+                            )
+                        else:
+                            self._finish_pending_locked(
+                                task, TASK_REJECTED, TaskRejectedError("Task capacity wait timed out"),
+                            )
+                while self._pending and len(self._running) < self.max_concurrent:
+                    task = self._pending.popleft()
+                    self._running[task.id] = task
+                    try:
+                        task._thread.start()
+                    except BaseException as exc:
+                        del self._running[task.id]
+                        self._finish_pending_locked(task, TASK_FAILED, exc.with_traceback(None))
+                self._condition.notify_all()
+                if not self._pending and not self._running:
+                    self._dispatcher_exiting = True
+                    return
+                deadlines = [
+                    task._deadline for task in self._pending
+                    if task._deadline is not None
+                ]
+                timeout = 0.05
+                if deadlines:
+                    timeout = min(timeout, max(0.0, min(deadlines) - time.monotonic()))
+                self._condition.wait(timeout)
 
     def get(self, task_id):
         with self._lock:
@@ -422,6 +550,7 @@ class TaskManager:
             "closed": self._closed.is_set(),
             "max_concurrent": self.max_concurrent,
             "max_finished_tasks": self.max_finished_tasks,
+            "max_pending_tasks": self.max_pending_tasks,
             "finished_evicted_total": self._evicted_finished_total,
             "total": len(rows),
             "counts": counts,
@@ -439,6 +568,7 @@ class TaskManager:
             self._tasks[task.id] = task
             self._finished_order.append(task.id)
             self._evict_finished_locked()
+            self._condition.notify_all()
 
     def _evict_finished_locked(self):
         if self.max_finished_tasks <= 0:
@@ -454,12 +584,13 @@ class TaskManager:
             tasks = list(self._tasks.values())
         for task in tasks:
             task.cancel()
-        if wait:
+        current_thread = threading.current_thread()
+        # A worker waiting for another closing worker creates a cycle. Calls
+        # from a task request cancellation and return without joining peers.
+        called_from_task = any(task._thread is current_thread for task in tasks)
+        if wait and not called_from_task:
             deadline = None if timeout is None else (time.monotonic() + max(0.0, float(timeout)))
-            current_thread = threading.current_thread()
             for task in tasks:
-                if task._thread is current_thread:
-                    continue
                 if deadline is None:
                     task.join()
                     continue
@@ -467,3 +598,8 @@ class TaskManager:
                 if remaining <= 0:
                     break
                 task.join(timeout=remaining)
+            for thread in (self._dispatcher, self._non_daemon_guard):
+                if thread is None:
+                    continue
+                remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+                thread.join(remaining)

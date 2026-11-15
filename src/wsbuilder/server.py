@@ -1,3 +1,4 @@
+import errno
 import signal
 import socket
 import ssl
@@ -194,6 +195,11 @@ class HTTPServer:
                     if self._stop.is_set():
                         break
                     get_log(self.app).warning("accept", f"error: {e}")
+                    if e.errno in (errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM):
+                        # Out of descriptors or memory: accept() fails again
+                        # at once, so retrying immediately only spins a core
+                        # and floods the log until a connection closes.
+                        self._stop.wait(self.ACCEPT_BACKOFF_SECONDS)
                     continue
                 acquired = worker_limiter.acquire(timeout=self.ACQUIRE_WORKER_TIMEOUT_SECONDS)
                 if not acquired:
@@ -285,6 +291,12 @@ class HTTPServer:
         try:
             conn.settimeout(self.REQUEST_READ_TIMEOUT_SECONDS)
         except OSError:
+            pass
+        try:
+            # Responses are written whole, or chunk by chunk on purpose:
+            # holding small segments back (Nagle) only adds latency here.
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except (OSError, AttributeError):
             pass
         tls_meta = {
             "enabled": context is not None,
@@ -386,6 +398,9 @@ class HTTPServer:
             if metrics:
                 metrics.error("http2", e)
 
+    #: Pause after accept() fails for lack of descriptors or memory.
+    ACCEPT_BACKOFF_SECONDS = 0.1
+
     #: Upper bound on the time spent draining an unread body before closing.
     LINGER_TIMEOUT_SECONDS = 2.0
 
@@ -462,6 +477,9 @@ class HTTPServer:
             )
         except TimeoutError:
             send_http_response(conn, Response.text("Request Timeout", status=408))
+            # The client may still be sending: drain before closing, or the
+            # kernel answers its bytes with RST and the 408 is lost.
+            self._linger_close(conn, reader)
             return False
         except ValueError as e:
             message = str(e).lower()
@@ -472,6 +490,7 @@ class HTTPServer:
             else:
                 status = 400
             send_http_response(conn, Response.text(str(e), status=status))
+            self._linger_close(conn, reader)
             return False
         if not req:
             return False
@@ -575,6 +594,7 @@ class HTTPServer:
                 )
             except TimeoutError:
                 send_http_response(conn, Response.text("Request Timeout", status=408))
+                self._linger_close(conn, reader)
                 return False
             except (ConnectionError, OSError):
                 send_http_response(
@@ -625,6 +645,7 @@ class HTTPServer:
                 body = reader.read_exactly(cl)
             except TimeoutError:
                 send_http_response(conn, Response.text("Request Timeout", status=408))
+                self._linger_close(conn, reader)
                 return False
             except (ConnectionError, OSError):
                 send_http_response(
@@ -832,13 +853,19 @@ class HTTPServer:
             response.headers.setdefault("Connection", explicit)
 
         try:
-            send_http_response(
+            sent = send_http_response(
                 conn,
                 response,
                 send_body=send_body,
                 keep_alive=keep_alive,
                 version=request.version,
             )
+            if sent is False:
+                # An incomplete response cannot frame another request's reply.
+                if metrics:
+                    metrics.error("http_response", "response write failed")
+                    metrics.http_request_aborted()
+                return False
         except ValueError as e:
             if metrics:
                 metrics.error("http_response", e)
