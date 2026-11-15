@@ -13,6 +13,8 @@ Sirve para crear:
 - rate limiting, ACL, listas de IP y bloqueo temporal.
 - metricas JSON, stream NDJSON, logs y tareas en background.
 - DNS local, mDNS y descubrimiento de servicios, reverse proxy y balanceo.
+- comunicacion entre microservicios en binario (CBOR) sobre HTTP/3 cifrado,
+  con identidad de servicio por mTLS.
 - prediccion simple y redes neuronales basicas desde Python puro.
 
 ## Ruta de documentacion
@@ -33,6 +35,7 @@ Tambien puedes leer:
 - [Arquitectura](docs/architecture.md)
 - [API publica](docs/api-map.md)
 - [mDNS y DNS-SD](docs/mdns.md) (extra opcional `wsbuilder[mdns]`)
+- [RPC entre servicios](docs/rpc.md) (CBOR sobre HTTP/3; HTTP/3 usa el extra `wsbuilder[tls]`)
 - [Proyecto integral](docs/full-project.md)
 
 ## Instalacion rapida
@@ -122,7 +125,30 @@ La demo incluye:
 | Seguridad | `security.py` | `SecurityPolicy`, `ACLRule`, `SecurityDecision` |
 | Observabilidad | `metrics.py`, `logs.py`, `tasks.py` | `AppMetrics`, `NDJSONLog`, `TaskManager` |
 | Red y edge | `dns.py`, `mdns.py`, `proxyi.py` | `LocalDNSServer`, `LocalMDNSServer`, `discover_mdns_services`, `ProxyI` |
+| Entre servicios | `rpc.py`, `codec.py`, `http3_client.py` | `App.rpc`, `RpcClient`, `RpcError`, `cbor_dumps`, `Http3Client` |
 | IA y prediccion | `ia.py`, `predicts.py` | `DataSet`, `NeuralNetwork`, `Predictor` |
+
+## Comunicacion entre servicios
+
+Los servicios se llaman entre si con el payload en CBOR (binario, alrededor de
+un 30 % mas pequeno que JSON y sin base64 para `bytes`) sobre una conexion
+HTTP/3 reutilizada y cifrada con TLS 1.3:
+
+```python
+from wsbuilder import App, RpcClient
+
+app = App()
+
+@app.rpc("/users.get")
+def get_user(request, payload):
+    return {"id": payload["id"], "name": "Ada"}
+
+# En otro servicio:
+with RpcClient("https://users.internal:8443", trust=ca) as users:
+    user = users.call("/users.get", {"id": 7})
+```
+
+Detalles, mTLS y limites en [RPC entre servicios](docs/rpc.md).
 
 ## Ejemplo con datos
 

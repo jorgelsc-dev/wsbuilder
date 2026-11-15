@@ -567,6 +567,25 @@ class App:
     def api(self, path, methods=("GET",)):
         return self.route(path, methods=methods, kind="api")
 
+    def rpc(self, path, methods=("POST",), *, codec="cbor", **route_options):
+        """Register ``handler(request, payload)`` as a service-to-service endpoint.
+
+        The body is decoded from CBOR or JSON (by ``Content-Type``) before the
+        handler runs, and its return value is encoded the same way (or as the
+        ``Accept`` header asks); ``codec`` is used when the request names
+        neither. Raise :class:`~wsbuilder.RpcError` for a structured error.
+        ``route_options`` are the worker options of :meth:`route`.
+        """
+        from .rpc import rpc_endpoint
+
+        def decorator(func):
+            self.route(path, methods=methods, kind="api", **route_options)(
+                rpc_endpoint(func, default_codec=codec)
+            )
+            return func
+
+        return decorator
+
     def ws(
         self,
         path,

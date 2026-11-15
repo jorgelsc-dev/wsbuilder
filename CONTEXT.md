@@ -57,7 +57,9 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   http.py               Request, Response, parse_query_string
   http1.py http2.py     protocolos HTTP/1.x y HTTP/2 (+ hpack.py)
   http3.py http3_server.py http3_websocket.py qpack.py   HTTP/3 sobre QUIC
-  quic/                 address, connection, crypto, frames, packet, recovery, tls, varint
+  http3_client.py       cliente HTTP/3 (Http3Client) con conexión QUIC reutilizada
+  quic/                 address, client, connection, crypto, frames, packet, recovery, tls, varint
+  rpc.py codec.py       RPC entre servicios (App.rpc, RpcClient) y codec CBOR (RFC 8949)
   server.py             HTTPServer (TCP, TLS/ALPN, límites, keep-alive, apagado)
   ws.py                 WebSocket, frames, handshake, errores WebSocket*
   headers.py cookies.py helpers de cabeceras y cookies
@@ -97,6 +99,8 @@ tests, a `tests/`; los de docs, a `docs/`.
 | HTTP/2 y HPACK | `http2.py`, `hpack.py` | `test_http2.py`, `test_hpack.py` | `http-versions.md` |
 | HTTP/3 y WebSocket sobre HTTP/3 | `http3.py`, `http3_server.py`, `http3_websocket.py`, `qpack.py` | `test_http3.py`, `test_http3_server.py`, `test_http3_streaming.py`, `test_http3_streaming_udp.py` | `http-versions.md` |
 | Transporte QUIC | `quic/` | `test_quic_protocol.py`, `test_quic_crypto.py`, `test_quic_tls.py`, `test_quic_recovery.py`, `test_quic_address.py` | `http-versions.md` |
+| Cliente QUIC/HTTP/3 y mTLS en QUIC | `quic/client.py`, `quic/tls.py`, `http3_client.py` | `test_quic_client.py` | `rpc.md` |
+| RPC entre servicios y codec CBOR | `rpc.py`, `codec.py`, `app.py` (`App.rpc`) | `test_rpc.py`, `test_codec.py`, `test_optional_extras.py` | `rpc.md` |
 | WebSocket y frames | `ws.py` | `test_ws.py`, `test_server.py` | `websocket.md` |
 | SQLite, ORM y réplicas | `orm.py`, `db_replicas.py` | `test_orm.py`, `test_orm_replicas.py` | `data-orm.md`, `persistence.md` |
 | Cache clave-valor y cache de vistas | `cache.py`, `caches.py` | `test_cache.py`, `test_caches.py` | `cache.md`, `cache-security.md` |
@@ -210,6 +214,13 @@ Otros atributos: `ENABLE_HTTP2 = True` (ALPN y preface en claro),
 tienen prioridad sobre los del servidor. HTTP/3: `Http3Server` e
 `install_http3(app, tls, host="0.0.0.0", port=0, attr_name="http3")` en
 `http3_server.py`; `alt_svc_header(port, max_age=86400)` anuncia HTTP/3.
+`Http3Server` toma `client_ca_pem`/`require_client_cert` del proveedor TLS
+(`CertificateManager`) para exigir certificados de cliente también en QUIC, y
+expone el certificado verificado en `request.tls["peer_cert"]`
+(`describe_certificate`). Un `socketpair` despierta el hilo del socket cuando un
+handler encola bytes (`QuicConnection.on_outbound`), sin esperar al timeout.
+HTTP/1 escribe cabecera y cuerpo en un solo `sendall` y activa `TCP_NODELAY`
+para no sufrir Nagle más ACK retardado (~40 ms) en keep-alive.
 `Http2Connection` ejecuta los handlers en un pool por conexión
 (`MAX_HANDLER_THREADS = 16`) fuera del bucle de frames y sin el lock.
 
@@ -315,9 +326,38 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   `qdcount != 1`, trunca a 512 B (o al payload EDNS, tope `max_udp_payload`)
   con TC, sigue ante `OSError` por datagrama y reenvía a upstreams en un pool
   acotado (`upstream_workers`, `max_pending_upstream`). Sin listener TCP.
-- PKI: `CertificateAuthority`, `CertificateManager`, `TLSMaterial`,
-  `MaterializedFiles`, `install_tls`. Sin el extra `tls` estos nombres no están
+- PKI y cliente HTTP/3: `CertificateAuthority`, `CertificateManager`,
+  `TLSMaterial`, `MaterializedFiles`, `install_tls`, `Http3Client`,
+  `Http3Response`, `Http3Error` (`_TLS_EXPORT_MODULES` en `__init__.py` indica
+  el módulo de cada uno). Sin el extra `tls` estos nombres no están
   en `__all__` y su acceso lanza `AttributeError` con la pista de instalación.
+- RPC: `App.rpc(path, methods=("POST",), *, codec="cbor")` registra
+  `handler(request, payload)` como ruta `api`; `rpc_endpoint` decodifica según
+  `Content-Type` (CBOR/JSON), responde según `Accept` y convierte `RpcError` en
+  `{"error": {"code", "message", "details"}}` (415, 400 y 500 propios).
+  `RpcClient(base_url, transport=None, codec="cbor", trust=None, ca_pem=None,
+  client_material=None, server_name=None, timeout=10.0, headers=None,
+  max_response_bytes=64 MiB)`: `https://` usa HTTP/3 (extra `tls`), `http://` o
+  `transport="http1"` usan `http.client` con keep-alive por hilo y un reintento
+  solo si una conexión reutilizada estaba cerrada. `call()` lanza `RpcError`
+  (respuesta de error) o `RpcTransportError` (sin respuesta).
+- CBOR (`codec.py`): `cbor_dumps`/`cbor_loads`, forma preferida (más corta),
+  bignums con tags 2/3, `CBORTag`, `CBORSimple`; el decoder comprueba longitudes
+  antes de reservar, limita `max_depth` (256) y rechaza bytes sobrantes. Es
+  Python puro: ~30 % menos bytes que JSON compacto pero 3-5x más CPU que `json`.
+- Cliente QUIC: `QuicClientConnection` (`quic/client.py`) reutiliza
+  `QuicConnection` invirtiendo claves y roles; sigue un Retry y valida
+  `original_destination_connection_id`, `initial_source_connection_id` y
+  `retry_source_connection_id`. `ClientHandshake` (`quic/tls.py`) exige un
+  `CertificateTrust` (verificador WebPKI de `cryptography`), ofrece solo
+  `TLS_AES_128_GCM_SHA256`, rechaza HelloRetryRequest y responde a
+  `CertificateRequest`. `Http3Client` mantiene una sesión (hilo de E/S y socket
+  UDP conectado), un stream bidireccional por petición y rota de conexión al
+  agotar `initial_max_streams_bidi`, al quedar inactiva 20 s o al fallar.
+- QUIC: el servidor no procesa paquetes 1-RTT antes de completar el handshake
+  (RFC 9001 §5.7): los retiene (`MAX_EARLY_SHORT_PACKETS = 16`) hasta verificar
+  el Finished y, con mTLS, el certificado del cliente. Solo se confirman
+  (ACK) paquetes que exigen confirmación (RFC 9000 §13.2.1).
 - QUIC: el emisor respeta el control de flujo del par (`initial_max_*`,
   `MAX_DATA`, `MAX_STREAM_DATA`, con `DATA_BLOCKED`/`STREAM_DATA_BLOCKED`) y la
   ventana NewReno de `quic/recovery.py`; `wait_for_send_room` da backpressure al
@@ -366,8 +406,8 @@ literales del cache, incluidos `%`, `_` y barras invertidas. `QuerySet.count()`,
 ## Restricciones técnicas
 
 - Núcleo: biblioteca estándar de Python. No añadir dependencias de runtime.
-- Extra `tls`: `cryptography>=42`, utilizado únicamente por `pki.py`, `quic/` y
-  `http3_server.py`. Los helpers PKI de la API pública se cargan de forma diferida
+- Extra `tls`: `cryptography>=43`, utilizado únicamente por `pki.py`, `quic/`,
+  `http3_server.py` y `http3_client.py` (`rpc.py` lo importa solo para HTTP/3). Los helpers PKI de la API pública se cargan de forma diferida
   para que importar el núcleo no requiera este extra.
 - Extra `mdns`: `zeroconf>=0.131`, utilizado únicamente por `mdns.py`; su backend
   sigue siendo opcional al importar el paquete.
