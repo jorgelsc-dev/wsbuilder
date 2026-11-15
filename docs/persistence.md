@@ -76,6 +76,10 @@ with db.transaction():
 
 Si una excepcion rompe el bloque, la transaccion se revierte.
 
+Fuera de un bloque explicito, `execute()` y `executemany()` revierten la
+transaccion si falla su confirmacion automatica, tambien con restricciones
+diferidas. La conexion queda disponible para operaciones posteriores.
+
 ## Replicas de lectura
 
 La familia `db_replicas` agrega lectura optimizada:
@@ -93,6 +97,10 @@ from wsbuilder import Database
 db = Database("app.db", enable_wal=True, enable_replicas=True, replica_count=3)
 rows = db.read_replica_fetchall("SELECT * FROM users")
 ```
+
+`db.close()` es idempotente y cierra tambien las replicas. Las lecturas
+posteriores lanzan `sqlite3.ProgrammingError`; para volver a operar, crea otra
+instancia de la base.
 
 En `QuerySet`, puedes forzar el camino de replica con:
 

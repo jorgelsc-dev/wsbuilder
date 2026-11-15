@@ -261,6 +261,35 @@ class TestStreamingCompletion(unittest.TestCase):
 
 
 class TestHttp3BodyLimit(unittest.TestCase):
+    def test_invalid_length_resets_request_without_dispatching_or_blocking_a_sibling(self):
+        calls = []
+        app = SimpleNamespace(dispatch=lambda request: calls.append(request.path) or Response.text("ok"))
+        server = Http3Server("127.0.0.1", 0, app, None)
+        self.addCleanup(server._dispatch_pool.shutdown, wait=True)
+        queued, resets = [], []
+        connection = SimpleNamespace(
+            closed=False, alpn="h3", client_address=("127.0.0.1", 1),
+            queue_stream_data=lambda sid, data, fin=False: queued.append((sid, data, fin)),
+            reset_stream=lambda sid, code: resets.append((sid, code)),
+        )
+
+        def request(path, declared):
+            fields = [
+                (":method", "POST"), (":scheme", "https"), (":path", path),
+                (":authority", "localhost"), ("content-length", declared),
+            ]
+            return http3.encode_frame(http3.FRAME_HEADERS, encode_field_section(fields)) + http3.encode_frame(http3.FRAME_DATA, b"abc")
+
+        with patch("wsbuilder.http3_server.get_log"):
+            server._on_stream_data(connection, 0, request("/bad", "9"), True)
+            server._on_stream_data(connection, 0, b"ignored", True)
+        server._on_stream_data(connection, 4, request("/valid", "3"), True)
+        server._dispatch_pool.shutdown(wait=True)
+        self.assertEqual(calls, ["/valid"])
+        self.assertEqual(resets, [(0, http3.H3_MESSAGE_ERROR)])
+        self.assertEqual([sid for sid, _data, _fin in queued], [4])
+        self.assertEqual(connection.h3_streams[0].body, bytearray())
+
     def test_an_oversized_body_is_answered_413_without_dispatch(self):
         app = App()
         self.addCleanup(app.close)

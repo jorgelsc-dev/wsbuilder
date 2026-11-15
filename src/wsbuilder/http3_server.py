@@ -19,6 +19,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
 from . import http3
+from .http import _close_response_stream, _status_allows_body
 from .http3_websocket import Http3WebSocketStream
 from .logs import get_log
 from .quic.address import AddressValidator
@@ -308,6 +309,8 @@ class Http3Server:
         if stream is None:
             stream = http3.RequestStream(stream_id, max_body_bytes=self.max_request_body_bytes)
             streams[stream_id] = stream
+        if stream.answered and stream.websocket is None:
+            return []
 
         try:
             ready = stream.feed(data, fin=complete)
@@ -315,6 +318,7 @@ class Http3Server:
             get_log(self.app).warning("http3", f"stream {stream_id}: {e}")
             if stream.websocket is not None:
                 stream.websocket.push_eof()
+            self._reject_request_stream(connection, stream, e)
             return []
 
         if stream.body_rejected:
@@ -339,6 +343,7 @@ class Http3Server:
                 extended = http3.is_extended_connect(stream)
             except http3.H3Error as e:
                 get_log(self.app).warning("http3", f"malformed request on stream {stream_id}: {e}")
+                self._reject_request_stream(connection, stream, e)
                 return []
             if extended:
                 # RFC 9220: a WebSocket request is answered at once and its
@@ -356,10 +361,20 @@ class Http3Server:
             request = http3.build_request(stream, connection.client_address, tls_meta)
         except http3.H3Error as e:
             get_log(self.app).warning("http3", f"malformed request on stream {stream_id}: {e}")
+            self._reject_request_stream(connection, stream, e)
             return []
         # The response is queued from the worker; the socket loop sends it.
         self._dispatch_pool.submit(self._dispatch, connection, stream_id, request)
         return []
+
+    @staticmethod
+    def _reject_request_stream(connection, stream, error):
+        stream.answered = True
+        stream.buffer.clear()
+        stream.body.clear()
+        reset = getattr(connection, "reset_stream", None)
+        if callable(reset):
+            reset(stream.id, error.code)
 
     def _dispatch(self, connection, stream_id, request):
         """Run the app for one request on a worker thread and queue the answer."""
@@ -386,18 +401,26 @@ class Http3Server:
 
     def _send_response(self, connection, stream_id, response, *, send_body):
         """Queue a response. A streamed body is sent chunk by chunk as it is produced."""
-        if not getattr(response, "is_stream", False) or not send_body:
+        if (
+            not getattr(response, "is_stream", False)
+            or not send_body
+            or not _status_allows_body(response.status)
+        ):
             payload = http3.build_response_frames(response, send_body=send_body)
             connection.queue_stream_data(stream_id, payload, fin=True)
             return
 
         from .http import _iter_stream_chunks
 
-        connection.queue_stream_data(
-            stream_id,
-            http3.encode_headers_frame(http3.build_response_head(response.status, response.headers)),
-            fin=False,
-        )
+        try:
+            connection.queue_stream_data(
+                stream_id,
+                http3.encode_headers_frame(http3.build_response_head(response.status, response.headers)),
+                fin=False,
+            )
+        except BaseException:
+            _close_response_stream(response)
+            raise
 
         wait_for_room = getattr(connection, "wait_for_send_room", None)
 
@@ -441,7 +464,11 @@ class Http3Server:
                         # A FIN would present the truncated body as complete.
                         reset(stream_id, http3.H3_INTERNAL_ERROR)
 
-        threading.Thread(target=pump, name=f"http3-stream-{stream_id}", daemon=True).start()
+        try:
+            threading.Thread(target=pump, name=f"http3-stream-{stream_id}", daemon=True).start()
+        except BaseException:
+            _close_response_stream(response)
+            raise
 
     def _open_websocket(self, connection, stream):
         """Answer an extended CONNECT: accept it onto a route, or refuse it."""

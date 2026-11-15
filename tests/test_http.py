@@ -43,7 +43,7 @@ class TestHTTPCore(unittest.TestCase):
 
         flags = []
         stream = self._closing_stream(flags)
-        send_http_response(Broken(), Response.stream(stream))
+        self.assertFalse(send_http_response(Broken(), Response.stream(stream)))
         self.assertEqual(flags, ["closed"])
 
     def test_stream_is_closed_when_the_body_is_skipped(self):
@@ -157,6 +157,16 @@ class TestHTTPCore(unittest.TestCase):
         wire = b"".join(conn.sent)
         headers, body = wire.split(b"\r\n\r\n", 1)
         self.assertNotIn(b"Content-Length", headers)
+        self.assertNotIn(b"Transfer-Encoding", headers)
+        self.assertEqual(body, b"")
+
+    def test_not_modified_keeps_explicit_representation_length_without_a_body(self):
+        conn = BufferSocket()
+        self.assertTrue(send_http_response(
+            conn, Response(status=304, body=b"ignored", headers={"Content-Length": "100"}),
+        ))
+        headers, body = b"".join(conn.sent).split(b"\r\n\r\n", 1)
+        self.assertIn(b"Content-Length: 100", headers)
         self.assertNotIn(b"Transfer-Encoding", headers)
         self.assertEqual(body, b"")
 

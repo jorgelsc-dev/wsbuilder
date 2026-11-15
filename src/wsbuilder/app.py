@@ -421,6 +421,9 @@ class App:
         self.security = None
         self.proxyi = None
         self.caches = None
+        self._cache_resources = {}
+        self._closed_cache_resources = set()
+        self._cache_resource_lock = threading.RLock()
         self.logs = None
         self.tls = None
         self.tasks = TaskManager(app=self)
@@ -1210,12 +1213,28 @@ class App:
                 tasks.close(wait=False)
             except Exception:
                 pass
-        caches = getattr(self, "caches", None)
-        if caches and hasattr(caches, "close"):
-            try:
-                caches.close()
-            except Exception:
-                pass
+        with self._cache_resource_lock:
+            for name in ("caches", "cache"):
+                resource = getattr(self, name, None)
+                if resource is not None:
+                    self._cache_resources[id(resource)] = resource
+            resources = list(self._cache_resources.values())
+            # Owners close their backing stores; direct registrations of the
+            # same store must not close it again.
+            resources.sort(key=lambda item: not getattr(item, "_owns_store", False))
+            for resource in resources:
+                if id(resource) in self._closed_cache_resources:
+                    continue
+                self._closed_cache_resources.add(id(resource))
+                if not hasattr(resource, "close"):
+                    continue
+                try:
+                    resource.close()
+                except Exception:
+                    pass
+                else:
+                    if getattr(resource, "_owns_store", False):
+                        self._closed_cache_resources.add(id(resource.store))
         proxyi = getattr(self, "proxyi", None)
         if proxyi and hasattr(proxyi, "close"):
             try:

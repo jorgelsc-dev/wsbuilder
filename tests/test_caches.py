@@ -28,7 +28,7 @@ class _Clock:
         self.now += float(seconds)
 
 
-def _req(path, method="GET", headers=None):
+def _req(path, method="GET", headers=None, tls=None):
     return Request(
         method=method,
         path=path,
@@ -36,7 +36,7 @@ def _req(path, method="GET", headers=None):
         headers=headers or {},
         body=b"",
         client=("127.0.0.1", 1234),
-        tls={},
+        tls=tls or {},
     )
 
 
@@ -54,6 +54,33 @@ class TestViewResponseCaches(unittest.TestCase):
 
     def tearDown(self):
         self.app.close()
+
+    def test_cache_separates_hosts_and_transport_schemes(self):
+        self.app.enable_caches()
+
+        @self.app.view("/origin", cache={"ttl": 60})
+        def origin(request):
+            scheme = "https" if request.tls.get("enabled") else "http"
+            return f"{scheme}://{_request_header(request, 'host')}"
+
+        for host, secure in (("a.example", False), ("b.example", False), ("a.example", True)):
+            with self.subTest(host=host, secure=secure):
+                request = _req(
+                    "/origin", headers={"Host": host}, tls={"enabled": secure},
+                )
+                first = self.app.dispatch(request)
+                scheme = "https" if secure else "http"
+                self.assertEqual(first.body, f"{scheme}://{host}".encode())
+                self.assertIsNone(first.headers.get("X-WSBuilder-Cache"))
+                # Forwarded headers are client-controlled; only the transport
+                # metadata decides which scheme partition receives this lookup.
+                second = self.app.dispatch(_req(
+                    "/origin",
+                    headers={"host": host, "x-forwarded-proto": "http" if secure else "https"},
+                    tls={"enabled": secure},
+                ))
+                self.assertEqual(second.body, first.body)
+                self.assertEqual(second.headers.get("X-WSBuilder-Cache"), "HIT")
 
     def test_view_cache_ttl_from_route_config(self):
         clock = _Clock()

@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from wsbuilder import App, Response
+from wsbuilder.http1 import BufferedReader
 from wsbuilder.logs import console
 from wsbuilder.metrics import AppMetrics
 from wsbuilder.security import SecurityDecision
@@ -66,6 +67,24 @@ class ScriptedConn:
         return b"".join(self.sent)
 
 
+class DrainingConn(ScriptedConn):
+    """Record the half-close and reads of bytes arriving after the response."""
+
+    def __init__(self, script):
+        super().__init__(script)
+        self.reader = BufferedReader(self)
+        self.shutdowns = []
+        self.drain_reads = []
+
+    def shutdown(self, how):
+        self.shutdowns.append((how, self.wire, self.reader._deadline))
+
+    def recv(self, n):
+        if self.shutdowns:
+            self.drain_reads.append((n, self.reader._deadline, self.timeouts[-1]))
+        return super().recv(n)
+
+
 class QuietConsole(unittest.TestCase):
     """Capture framework log lines instead of printing them."""
 
@@ -96,6 +115,65 @@ class QuietConsole(unittest.TestCase):
 
 
 class TestMalformedRequests(QuietConsole):
+    def test_timeouts_half_close_after_the_408_and_drain_late_upload_bytes(self):
+        cases = (
+            [b"GET /echo HTTP/1.1\r\nHost: ", TimeoutError(), b"late\r\n\r\n"],
+            [
+                b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n",
+                b"abc", TimeoutError(), b"remaining",
+            ],
+            [
+                b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n",
+                b"5\r\nab", TimeoutError(), b"cde\r\n0\r\n\r\n",
+            ],
+        )
+        for script in cases:
+            with self.subTest(first_read=script[0]):
+                app = self._app()
+                server = HTTPServer("127.0.0.1", 0, app)
+                conn = DrainingConn(script)
+                keep_alive = server._serve_one_request(
+                    conn.reader, conn, ("127.0.0.1", 1), {},
+                )
+                self.assertFalse(keep_alive)
+                self.assertEqual(len(conn.shutdowns), 1)
+                how, sent_before_shutdown, request_deadline = conn.shutdowns[0]
+                self.assertEqual(how, socket.SHUT_WR)
+                self.assertIn(b"408 Request Timeout", sent_before_shutdown)
+                self.assertTrue(sent_before_shutdown.endswith(b"Request Timeout"))
+                self.assertIsNone(request_deadline)
+                self.assertGreaterEqual(len(conn.drain_reads), 1)
+                for _, deadline, timeout in conn.drain_reads:
+                    self.assertIsNone(deadline)
+                    self.assertGreater(timeout, 0)
+                    self.assertLessEqual(timeout, server.LINGER_TIMEOUT_SECONDS)
+                self.assertEqual(conn.script, [])
+                self.assertEqual(app.calls, [])
+
+    def test_linger_drain_stops_at_its_own_deadline(self):
+        server = HTTPServer("127.0.0.1", 0, self._app())
+        conn = DrainingConn([b"late", b"still arriving"])
+        conn.reader.set_deadline(1.0)
+        with patch("wsbuilder.server.time.monotonic", side_effect=[100.0, 100.5, 102.5]):
+            server._linger_close(conn, conn.reader)
+        self.assertEqual(conn.shutdowns, [(socket.SHUT_WR, b"", None)])
+        self.assertEqual(conn.timeouts, [1.5])
+        self.assertEqual(conn.script, [b"still arriving"])
+
+    def test_linger_drain_stops_after_its_byte_budget_without_waiting_for_eof(self):
+        server = HTTPServer(
+            "127.0.0.1", 0, self._app(),
+            max_request_body_bytes=8, max_request_header_bytes=4,
+        )
+        conn = DrainingConn([b"x" * 65536] * 3)
+        conn.reader.set_deadline(1.0)
+        with patch("wsbuilder.server.time.monotonic", return_value=100.0):
+            server._linger_close(conn, conn.reader)
+        self.assertEqual(conn.shutdowns, [(socket.SHUT_WR, b"", None)])
+        self.assertEqual(len(conn.drain_reads), 1)
+        self.assertEqual(len(conn.script), 2)
+        self.assertEqual(conn.timeouts, [server.LINGER_TIMEOUT_SECONDS])
+
     def test_status_codes_for_broken_request_heads(self):
         cases = (
             ("slow headers", [b"GET /echo HTTP/1.1\r\n", TimeoutError()], {}, b"408 Request Timeout"),
@@ -161,6 +239,46 @@ class TestMalformedRequests(QuietConsole):
 
 
 class TestDispatchFailures(QuietConsole):
+    def test_failed_chunked_stream_does_not_send_the_next_pipelined_response(self):
+        app = self._app()
+        closed = []
+
+        def chunks():
+            try:
+                yield b"first"
+                raise ValueError("producer failed")
+            finally:
+                closed.append(True)
+
+        @app.view("/broken")
+        def broken(_request):
+            return Response.stream(chunks(), headers={"Transfer-Encoding": "chunked"})
+
+        conn = self._serve(app, [
+            b"GET /broken HTTP/1.1\r\nHost: x\r\n\r\n"
+            b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n"
+        ])
+        self.assertEqual(conn.wire.count(b"HTTP/1.1 200"), 1)
+        self.assertIn(b"5\r\nfirst\r\n", conn.wire)
+        self.assertEqual(app.calls, [])
+        self.assertEqual(closed, [True])
+        self.assertTrue(conn.closed)
+        self.assertEqual(app.metrics.active_http_requests, 0)
+        self.assertEqual(app.metrics.total_http_responses, 0)
+
+    def test_failed_buffered_write_does_not_dispatch_the_next_request(self):
+        app = self._app()
+        conn = ScriptedConn([
+            b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n"
+            b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n"
+        ], fail_send=lambda data: data.startswith(b'{"ok"'))
+        HTTPServer("127.0.0.1", 0, app).handle_conn(conn, ("127.0.0.1", 1))
+        self.assertEqual(len(app.calls), 1)
+        self.assertTrue(conn.closed)
+        self.assertIn("http_response", app.metrics.last_error)
+        self.assertEqual(app.metrics.active_http_requests, 0)
+        self.assertEqual(app.metrics.total_http_responses, 0)
+
     def test_a_failing_dispatch_returns_500_and_is_counted(self):
         app = self._app()
 
