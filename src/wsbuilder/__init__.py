@@ -188,7 +188,7 @@ def __dir__():
         names |= _PKI_EXPORTS
     return sorted(names)
 
-__version__ = "1.3.1.dev0"
+__version__ = "1.4.1.dev0"
 
 __all__ = [
     "App",
