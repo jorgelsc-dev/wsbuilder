@@ -320,10 +320,8 @@ class TestHTTPServer(unittest.TestCase):
         )
         server.handle_conn(options_conn, ("127.0.0.1", 1234))
         options_wire = b"".join(options_conn.sent)
-        self.assertIn(
-            b"Access-Control-Allow-Methods: GET, HEAD, OPTIONS, POST",
-            options_wire,
-        )
+        self.assertIn(b"HTTP/1.1 204 No Content", options_wire)
+        self.assertIn(b"Allow: GET, HEAD, OPTIONS, POST", options_wire)
 
     def test_websocket_upgrade_requires_get(self):
         app = App()
@@ -353,6 +351,66 @@ class TestHTTPServer(unittest.TestCase):
             b"HTTP/1.1 405 Method Not Allowed",
             b"".join(conn.sent),
         )
+
+    def _ws_handshake(self, app, origin=None, path="/ws", host="example.test"):
+        lines = [
+            f"GET {path} HTTP/1.1",
+            f"Host: {host}",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+        ]
+        if origin is not None:
+            lines.append(f"Origin: {origin}")
+        conn = DummyConn([("\r\n".join(lines) + "\r\n\r\n").encode()])
+        HTTPServer("127.0.0.1", 0, app).handle_conn(conn, ("127.0.0.1", 1234))
+        return b"".join(conn.sent)
+
+    def test_websocket_refuses_cross_origin_pages_by_default(self):
+        app = App()
+        opened = []
+
+        @app.ws("/ws")
+        def handler(ws, _request):
+            opened.append(True)
+
+        self.assertIn(b"403", self._ws_handshake(app, "https://evil.example").split(b"\r\n")[0])
+        self.assertIn(b" 101 ", self._ws_handshake(app, "https://example.test"))
+        self.assertIn(b" 101 ", self._ws_handshake(app, "http://example.test:80"))
+        self.assertIn(b" 101 ", self._ws_handshake(app, None))  # Non-browser client.
+        self.assertIn(b"403", self._ws_handshake(app, "null").split(b"\r\n")[0])
+        self.assertEqual(len(opened), 3)
+
+    def test_websocket_allowed_origins_route_app_and_callback(self):
+        app = App(ws_allowed_origins=["https://app.example"])
+
+        @app.ws("/ws")
+        def default(_ws, _request):
+            pass
+
+        @app.ws("/open", allowed_origins="*")
+        def anyone(_ws, _request):
+            pass
+
+        @app.ws("/checked", check_origin=lambda origin, request: origin.endswith(".trusted.example"))
+        def checked(_ws, _request):
+            pass
+
+        self.assertIn(b" 101 ", self._ws_handshake(app, "https://APP.example/"))
+        self.assertIn(b"403", self._ws_handshake(app, "https://example.test").split(b"\r\n")[0])
+        self.assertIn(b" 101 ", self._ws_handshake(app, "https://evil.example", path="/open"))
+        self.assertIn(b" 101 ", self._ws_handshake(app, "https://a.trusted.example", path="/checked"))
+        self.assertIn(b"403", self._ws_handshake(app, "https://evil.example", path="/checked").split(b"\r\n")[0])
+
+    def test_websocket_origin_settings_are_validated(self):
+        app = App()
+        with self.assertRaises(ValueError):
+            app.ws("/bad", allowed_origins=["not an origin"])
+        with self.assertRaises(TypeError):
+            app.ws("/bad", check_origin="yes")
+        with self.assertRaises(ValueError):
+            App(ws_allowed_origins=["ftp//nope"])
 
     def test_websocket_limits_resolve_route_then_server_then_default(self):
         app = App()

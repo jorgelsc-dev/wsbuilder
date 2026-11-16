@@ -476,7 +476,7 @@ class TestServeForeverFailures(QuietConsole):
         self.assertIn("[startup] error: hook failed", output)
         self.assertIn("[shutdown] app.close() error: close failed", output)
 
-    def test_connections_beyond_the_worker_limit_are_closed(self):
+    def test_connections_beyond_the_worker_limit_are_answered_503(self):
         app = self._app()
         release = threading.Event()
         started = threading.Event()
@@ -498,13 +498,65 @@ class TestServeForeverFailures(QuietConsole):
 
         with socket.create_connection(server.server_address, timeout=5.0) as extra:
             extra.sendall(b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n")
+            refused = b""
             try:
-                refused = extra.recv(4096)
+                while True:
+                    chunk = extra.recv(4096)
+                    if not chunk:
+                        break
+                    refused += chunk
             except ConnectionResetError:
-                refused = b""
-            self.assertEqual(refused, b"")
+                pass
+            # Over capacity is answered, not reset, so clients can back off.
+            self.assertTrue(refused.startswith(b"HTTP/1.1 503 Service Unavailable"), refused)
+            self.assertIn(b"Retry-After: 1", refused)
         release.set()
         self.assertIn(b"200 OK", holder.recv(4096))
+
+    def _open_ws(self, address, path="/ws"):
+        sock = socket.create_connection(address, timeout=5.0)
+        self.addCleanup(sock.close)
+        sock.sendall(
+            f"GET {path} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".encode()
+        )
+        return sock, sock.recv(4096)
+
+    def test_open_websockets_do_not_hold_http_workers(self):
+        app = self._app()
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+
+        @app.ws("/ws")
+        def idle(_ws, _request):
+            stop.wait(5.0)
+
+        server = HTTPServer("127.0.0.1", 0, app, max_connection_workers=2)
+        server.ACQUIRE_WORKER_TIMEOUT_SECONDS = 0.05
+        self._run(server)
+        self.addCleanup(stop.set)  # Runs before server.stop, so the drain is quick.
+        for _ in range(4):
+            _sock, answer = self._open_ws(server.server_address)
+            self.assertIn(b" 101 ", answer)
+        self.assertIn(b"200 OK", self._get(server.server_address))
+
+    def test_websockets_beyond_their_budget_are_answered_503(self):
+        app = self._app()
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+
+        @app.ws("/ws")
+        def idle(_ws, _request):
+            stop.wait(5.0)
+
+        server = HTTPServer("127.0.0.1", 0, app, max_ws_connections=1)
+        self._run(server)
+        self.addCleanup(stop.set)  # Runs before server.stop, so the drain is quick.
+        _first, answer = self._open_ws(server.server_address)
+        self.assertIn(b" 101 ", answer)
+        _second, refused = self._open_ws(server.server_address)
+        self.assertTrue(refused.startswith(b"HTTP/1.1 503"), refused)
+        self.assertIn(b"Retry-After", refused)
 
     def test_ctrl_c_stops_the_loop_and_closes_the_app(self):
         app = self._app()

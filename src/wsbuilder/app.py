@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import re
 import threading
 import time
 import uuid
@@ -12,13 +13,16 @@ from .headers import add_header
 from .http import Response
 from .logs import get_log
 from .tasks import TaskManager
-from .ws import _normalize_protocols
+from .ws import _normalize_protocols, normalize_allowed_origins, websocket_origin_allowed
 
 THREAD_COOKIE_NAME = "wsbuilder-thread"
 THREAD_RESPONSE_ID_HEADER = "WSBuilder-Thread"
 THREAD_RESPONSE_HOST_HEADER = "WSBuilder-Thread-Host"
 THREAD_RESPONSE_PORT_HEADER = "WSBuilder-Thread-Port"
 THREAD_RESPONSE_MODE_HEADER = "WSBuilder-Thread-Mode"
+
+#: Methods the server itself implements, announced by ``OPTIONS *``.
+SERVER_METHODS = ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT")
 
 DEFAULT_WORKER_REQUEST_TIMEOUT_SECONDS = 5.0
 DEFAULT_MAX_PENDING_JOBS = 256
@@ -294,6 +298,7 @@ class Route:
             ord(char) < 32 for char in self.path
         ):
             raise ValueError("route path must start with '/' and contain no controls")
+        self.pattern, self.converters = compile_route_path(self.path)
         method_rows = (methods,) if isinstance(methods, str) else methods
         self.methods = {
             str(method).strip().upper()
@@ -370,34 +375,102 @@ class Route:
         }
 
 
+_PARAM_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::(str|int|path))?\}")
+_CONVERTERS = {
+    "str": (r"[^/]+", str),
+    "int": (r"[0-9]+", int),
+    "path": (r".+", str),
+}
+
+
+def compile_route_path(path):
+    """Compile ``/users/{id:int}`` into a regex and its converters.
+
+    Returns ``(None, {})`` for a static path, which keeps the O(1) lookup.
+    Supported converters: ``str`` (default, one segment), ``int`` and
+    ``path`` (the rest of the path, slashes included).
+    """
+    if "{" not in path and "}" not in path:
+        return None, {}
+    pattern = ["^"]
+    converters = {}
+    position = 0
+    for match in _PARAM_RE.finditer(path):
+        literal = path[position : match.start()]
+        if "{" in literal or "}" in literal:
+            raise ValueError(f"invalid route parameter syntax in {path!r}")
+        pattern.append(re.escape(literal))
+        name, kind = match.group(1), match.group(2) or "str"
+        if name in converters:
+            raise ValueError(f"route parameter {name!r} appears twice in {path!r}")
+        regex, convert = _CONVERTERS[kind]
+        pattern.append(f"(?P<{name}>{regex})")
+        converters[name] = convert
+        position = match.end()
+    tail = path[position:]
+    if "{" in tail or "}" in tail:
+        raise ValueError(f"invalid route parameter syntax in {path!r}")
+    pattern.append(re.escape(tail) + "$")
+    return re.compile("".join(pattern)), converters
+
+
 class Router:
     def __init__(self):
         self.routes = []
         # Index by path so resolution stays O(1) in the number of registered
         # routes instead of scanning the whole table on every request.
         self._by_path = {}
+        # Routes with ``{name}`` segments, tried in registration order after
+        # the static index, so a static route always wins over a pattern.
+        self._dynamic = []
 
     def add(self, route):
         self.routes.append(route)
-        self._by_path.setdefault(route.path, []).append(route)
+        if getattr(route, "pattern", None) is None:
+            self._by_path.setdefault(route.path, []).append(route)
+        else:
+            self._dynamic.append(route)
+
+    def _candidates(self, path):
+        """``[(route, params), ...]`` for every route whose path matches."""
+        found = [(route, {}) for route in self._by_path.get(path, ())]
+        if found:
+            return found
+        for route in self._dynamic:
+            match = route.pattern.match(path)
+            if match is None:
+                continue
+            try:
+                params = {
+                    name: route.converters[name](value)
+                    for name, value in match.groupdict().items()
+                }
+            except ValueError:
+                continue
+            found.append((route, params))
+        return found
+
+    def match(self, path, method=None):
+        """``(route, path_params)`` for ``path`` and ``method``, or ``(None, {})``."""
+        candidates = self._candidates(path)
+        if not candidates:
+            return None, {}
+        normalized_method = None if method is None else str(method).upper()
+        for route, params in candidates:
+            if normalized_method is None or normalized_method in route.methods:
+                return route, params
+        if normalized_method == "HEAD":
+            for route, params in candidates:
+                if "GET" in route.methods:
+                    return route, params
+        return None, {}
 
     def resolve(self, path, method=None):
-        candidates = self._by_path.get(path)
-        if not candidates:
-            return None
-        normalized_method = None if method is None else str(method).upper()
-        for route in candidates:
-            if normalized_method is None or normalized_method in route.methods:
-                return route
-        if normalized_method == "HEAD":
-            for route in candidates:
-                if "GET" in route.methods:
-                    return route
-        return None
+        return self.match(path, method)[0]
 
     def allowed_methods(self, path):
         methods = set()
-        for route in self._by_path.get(path, ()):
+        for route, _params in self._candidates(path):
             methods.update(route.methods)
         if "GET" in methods:
             methods.add("HEAD")
@@ -412,9 +485,17 @@ class App:
         cors_allow_origin=DEFAULT_CORS_ALLOW_ORIGIN,
         thread_cookie_secret="",
         thread_cookie_name=THREAD_COOKIE_NAME,
+        ws_allowed_origins=None,
+        redirect_slashes=True,
     ):
         self.router = Router()
+        #: Answer ``/items/`` with 308 to ``/items`` (and the reverse) when only
+        #: the other spelling is registered, instead of 404.
+        self.redirect_slashes = bool(redirect_slashes)
         self.ws_routes = {}
+        #: Default ``allowed_origins`` for WebSocket routes that set none:
+        #: ``None`` accepts same-origin pages and non-browser clients only.
+        self.ws_allowed_origins = normalize_allowed_origins(ws_allowed_origins)
         self.startup_hooks = []
         self.cors_allow_origin = (cors_allow_origin or "").strip()
         self.metrics = None
@@ -608,8 +689,19 @@ class App:
         ping_payload=b"",
         max_frame_bytes=None,
         max_message_bytes=None,
+        allowed_origins=None,
+        check_origin=None,
     ):
+        """Register a WebSocket route.
+
+        ``allowed_origins`` and ``check_origin`` guard the handshake against
+        Cross-Site WebSocket Hijacking; see ``wsbuilder.ws.websocket_origin_allowed``.
+        Left as ``None``, the route uses ``App(ws_allowed_origins=...)``.
+        """
         normalized_path = str(path or "")
+        normalized_origins = normalize_allowed_origins(allowed_origins)
+        if check_origin is not None and not callable(check_origin):
+            raise TypeError("check_origin must be callable")
         if not normalized_path.startswith("/") or any(
             ord(char) < 32 for char in normalized_path
         ):
@@ -643,10 +735,36 @@ class App:
                 "ping_payload": normalized_ping_payload,
                 "max_frame_bytes": None if max_frame_bytes is None else int(max_frame_bytes),
                 "max_message_bytes": None if max_message_bytes is None else int(max_message_bytes),
+                "allowed_origins": normalized_origins,
+                "check_origin": check_origin,
             }
             return func
 
         return decorator
+
+    def _slash_redirect(self, request):
+        """308 to the other spelling of the path when only that one exists."""
+        path = str(getattr(request, "path", "") or "")
+        if not self.redirect_slashes or path in ("", "/"):
+            return None
+        other = path[:-1] if path.endswith("/") else path + "/"
+        # "//host" would be read by the client as a scheme-relative URL.
+        if not other.startswith("/") or other.startswith("//"):
+            return None
+        if not self.router.allowed_methods(other):
+            return None
+        query = str(getattr(request, "query_string", "") or "")
+        location = other + (f"?{query}" if query else "")
+        return Response.text("Permanent Redirect", status=308, headers={"Location": location})
+
+    def websocket_origin_allowed(self, route, headers, request=None):
+        """Whether ``route`` accepts a handshake carrying these ``headers``."""
+        allowed = route.get("allowed_origins")
+        if allowed is None:
+            allowed = self.ws_allowed_origins
+        return websocket_origin_allowed(
+            headers, allowed, route.get("check_origin"), request=request
+        )
 
     def add_startup(self, func):
         self.startup_hooks.append(func)
@@ -657,7 +775,11 @@ class App:
         stream_path="/api/metrics/stream",
         app_name=None,
         max_tracked_labels=None,
+        **access_options,
     ):
+        """Install metrics; ``access_options`` go to ``install_metrics``
+        (``access``, ``token``, ``authorize``, ``max_streams``,
+        ``max_stream_seconds``, ``guard``)."""
         from .metrics import DEFAULT_MAX_TRACKED_LABELS, install_metrics
 
         if max_tracked_labels is None:
@@ -705,6 +827,7 @@ class App:
             app_name=app_name,
             extra_snapshot_provider=_extra_snapshot,
             max_tracked_labels=max_tracked_labels,
+            **access_options,
         )
 
     def enable_security(self, policy=None):
@@ -1236,8 +1359,8 @@ class App:
         if tasks:
             try:
                 tasks.close(wait=False)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - closing must go on
+                get_log(self).debug("app", f"task manager close failed: {exc}")
         with self._cache_resource_lock:
             for name in ("caches", "cache"):
                 resource = getattr(self, name, None)
@@ -1255,7 +1378,8 @@ class App:
                     continue
                 try:
                     resource.close()
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 - closing must go on
+                    get_log(self).debug("app", f"cache resource close failed: {exc}")
                     pass
                 else:
                     if getattr(resource, "_owns_store", False):
@@ -1264,14 +1388,14 @@ class App:
         if proxyi and hasattr(proxyi, "close"):
             try:
                 proxyi.close()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - closing must go on
+                get_log(self).debug("app", f"proxy close failed: {exc}")
         logs = getattr(self, "logs", None)
         if logs and hasattr(logs, "close"):
             try:
                 logs.close()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - closing must go on
+                get_log(None).debug("app", f"log close failed: {exc}")
         for route in self.router.routes:
             pool = getattr(route, "thread_pool", None)
             if pool:
@@ -1288,8 +1412,8 @@ class App:
         security = getattr(self, "security", None)
         try:
             request.security_evaluated = True
-        except Exception:
-            pass
+        except (AttributeError, TypeError):
+            pass  # A read-only request object (slots, test doubles) keeps working.
         if not security:
             return None
         decision = security.evaluate(request)
@@ -1313,8 +1437,8 @@ class App:
     def dispatch(self, request):
         try:
             request.app = self
-        except Exception:
-            pass
+        except (AttributeError, TypeError):
+            pass  # A read-only request object (slots, test doubles) keeps working.
         cors_allow_origin = self.cors_allow_origin
 
         if not getattr(request, "security_evaluated", False):
@@ -1322,25 +1446,29 @@ class App:
             if denied is not None:
                 return denied
 
+        if request.method == "OPTIONS" and request.path == "*":
+            # Asks about the server as a whole (RFC 9110 section 9.3.7).
+            return Response(status=204, body=b"", headers={"Allow": ", ".join(SERVER_METHODS)})
+
         if request.method == "OPTIONS" and not self.router.resolve(
             request.path,
             "OPTIONS",
         ):
             allowed_methods = self.router.allowed_methods(request.path)
             if allowed_methods:
-                headers = {
-                    "Access-Control-Allow-Methods": ", ".join(
-                        sorted(allowed_methods)
-                    ),
-                    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Key",
-                }
+                allow = ", ".join(sorted(allowed_methods))
+                headers = {"Allow": allow}
                 if cors_allow_origin:
+                    headers["Access-Control-Allow-Methods"] = allow
+                    headers["Access-Control-Allow-Headers"] = (
+                        "Content-Type, Authorization, X-API-Key"
+                    )
                     headers["Access-Control-Allow-Origin"] = cors_allow_origin
                     if cors_allow_origin != "*":
                         headers["Vary"] = "Origin"
-                return Response(status=200, body=b"", headers=headers)
+                return Response(status=204, body=b"", headers=headers)
 
-        route = self.router.resolve(request.path, request.method)
+        route, path_params = self.router.match(request.path, request.method)
         if not route:
             allowed_methods = self.router.allowed_methods(request.path)
             if allowed_methods:
@@ -1349,7 +1477,14 @@ class App:
                     status=405,
                     headers={"Allow": ", ".join(sorted(allowed_methods))},
                 )
+            redirect = self._slash_redirect(request)
+            if redirect is not None:
+                return redirect
             return Response.text("Not Found", status=404)
+        try:
+            request.path_params = path_params
+        except (AttributeError, TypeError):
+            pass  # A read-only request object (slots, test doubles) keeps working.
 
         caches = getattr(self, "caches", None)
         if caches and route.kind == "plain":

@@ -134,6 +134,38 @@ class TestHTTPCore(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing Host"):
             parse_http_request(BufferSocket(b"GET / HTTP/1.1\r\n\r\n"))
 
+    def test_request_parser_accepts_absolute_form(self):
+        parsed = parse_http_request(
+            BufferSocket(b"GET http://origin.test:8080/items?x=1 HTTP/1.1\r\nHost: other\r\n\r\n")
+        )
+        self.assertEqual(parsed["path"], "/items?x=1")
+        # RFC 9112 section 3.2.2: the target's authority replaces Host.
+        self.assertEqual(parsed["headers"]["host"], "origin.test:8080")
+        bare = parse_http_request(BufferSocket(b"GET https://origin.test HTTP/1.1\r\nHost: x\r\n\r\n"))
+        self.assertEqual(bare["path"], "/")
+
+    def test_request_parser_rejects_bare_lf_at_once(self):
+        for raw in (
+            b"GET / HTTP/1.1\nHost: x\n\n",
+            b"GET / HTTP/1.1\r\nHost: x\nX: y\r\n\r\n",
+        ):
+            with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, "CRLF"):
+                parse_http_request(BufferSocket(raw))
+
+    def test_request_parser_keeps_methods_case_sensitive(self):
+        with self.assertRaisesRegex(ValueError, "case-sensitive"):
+            parse_http_request(BufferSocket(b"get / HTTP/1.1\r\nHost: x\r\n\r\n"))
+
+    def test_request_parser_validates_the_request_target(self):
+        star = parse_http_request(BufferSocket(b"OPTIONS * HTTP/1.1\r\nHost: x\r\n\r\n"))
+        self.assertEqual(star["path"], "*")
+        for raw in (
+            b"GET * HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"GET items HTTP/1.1\r\nHost: x\r\n\r\n",
+        ):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                parse_http_request(BufferSocket(raw))
+
     def test_response_rejects_header_injection(self):
         with self.assertRaises(ValueError):
             Response.text(
@@ -228,11 +260,92 @@ class TestRouterDispatch(unittest.TestCase):
 
         response = self.app.dispatch(self._request("OPTIONS", "/api/items"))
 
-        self.assertEqual(response.status, 200)
+        self.assertEqual(response.status, 204)
+        self.assertEqual(response.headers["Allow"], "GET, HEAD, OPTIONS, POST")
+        # CORS is off by default, so no Access-Control-* headers are sent.
+        self.assertNotIn("Access-Control-Allow-Methods", response.headers)
+
+    def test_options_preflight_carries_cors_headers_when_enabled(self):
+        app = App(cors_allow_origin="https://app.example")
+        self.addCleanup(app.close)
+
+        @app.api("/api/items", methods=("GET", "POST"))
+        def items(_request):
+            return {"ok": True}
+
+        response = app.dispatch(self._request("OPTIONS", "/api/items"))
+        self.assertEqual(response.status, 204)
         self.assertEqual(
-            response.headers["Access-Control-Allow-Methods"],
-            "GET, HEAD, OPTIONS, POST",
+            response.headers["Access-Control-Allow-Methods"], "GET, HEAD, OPTIONS, POST"
         )
+        self.assertEqual(response.headers["Access-Control-Allow-Origin"], "https://app.example")
+        self.assertEqual(response.headers["Vary"], "Origin")
+
+    def test_options_asterisk_describes_the_server(self):
+        response = self.app.dispatch(self._request("OPTIONS", "*"))
+        self.assertEqual(response.status, 204)
+        self.assertIn("GET", response.headers["Allow"])
+
+    def test_router_captures_and_converts_path_parameters(self):
+        @self.app.api("/users/{user_id:int}")
+        def user(request):
+            return {"id": request.path_params["user_id"]}
+
+        @self.app.api("/files/{rest:path}")
+        def files(request):
+            return {"rest": request.path_params["rest"]}
+
+        @self.app.api("/tags/{name}", methods=("GET", "DELETE"))
+        def tag(request):
+            return {"name": request.path_params["name"]}
+
+        response = self.app.dispatch(self._request("GET", "/users/42"))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.body, b'{"id":42}')
+        self.assertEqual(self.app.dispatch(self._request("GET", "/users/abc")).status, 404)
+        self.assertEqual(
+            self.app.dispatch(self._request("GET", "/files/a/b.txt")).body, b'{"rest":"a/b.txt"}'
+        )
+        self.assertEqual(self.app.dispatch(self._request("GET", "/tags/x")).body, b'{"name":"x"}')
+        self.assertEqual(self.app.dispatch(self._request("GET", "/tags/x/y")).status, 404)
+        not_allowed = self.app.dispatch(self._request("POST", "/tags/x"))
+        self.assertEqual(not_allowed.status, 405)
+        self.assertEqual(not_allowed.headers["Allow"], "DELETE, GET, HEAD, OPTIONS")
+
+    def test_static_routes_win_over_patterns(self):
+        @self.app.api("/users/{name}")
+        def by_name(request):
+            return {"who": request.path_params["name"]}
+
+        @self.app.api("/users/me")
+        def me(_request):
+            return {"who": "me"}
+
+        self.assertEqual(self.app.dispatch(self._request("GET", "/users/me")).body, b'{"who":"me"}')
+        self.assertEqual(self.app.dispatch(self._request("GET", "/users/ana")).body, b'{"who":"ana"}')
+
+    def test_invalid_route_patterns_are_refused(self):
+        for path in ("/a/{", "/a/{1x}", "/a/{x}/{x}", "/a/{x:float}"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.app.api(path)(lambda _r: {})
+
+    def test_trailing_slash_redirects_to_the_registered_spelling(self):
+        @self.app.api("/items")
+        def items(_request):
+            return {"ok": True}
+
+        request = self._request("GET", "/items/")
+        request.query_string = "page=2"
+        response = self.app.dispatch(request)
+        self.assertEqual(response.status, 308)
+        self.assertEqual(response.headers["Location"], "/items?page=2")
+        # A double slash would become a scheme-relative (open) redirect.
+        self.assertEqual(self.app.dispatch(self._request("GET", "//items/")).status, 404)
+
+        strict = App(redirect_slashes=False)
+        self.addCleanup(strict.close)
+        strict.api("/items")(items)
+        self.assertEqual(strict.dispatch(self._request("GET", "/items/")).status, 404)
 
     def test_router_index_keeps_registration_order_and_head_fallback(self):
         @self.app.api("/dup", methods=("GET",))

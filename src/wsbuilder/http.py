@@ -1,5 +1,6 @@
 import json
 import re
+import urllib.parse
 from urllib.parse import parse_qsl
 
 from .constants import STATUS_MESSAGES
@@ -18,6 +19,14 @@ HTTP_0_9 = "HTTP/0.9"
 HTTP_1_0 = "HTTP/1.0"
 HTTP_1_1 = "HTTP/1.1"
 _HTTP_METHOD_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+# A LF not preceded by CR. RFC 9112 section 2.2 lets a server reject them;
+# accepting them is how parsers disagree and requests get smuggled.
+_BARE_LF_RE = re.compile(rb"(?<!\r)\n")
+#: Methods defined by RFC 9110 and RFC 5789; their lowercase spelling is a
+#: different (unknown) method, since method names are case-sensitive.
+_STANDARD_METHODS = frozenset(
+    {"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"}
+)
 
 
 def parse_query_string(qs):
@@ -60,6 +69,8 @@ class Request:
         self.version = str(version or HTTP_1_1)
         #: Fields from a chunked body's trailer section, empty for other framings.
         self.trailers = dict(trailers or {})
+        #: Values captured by ``{name}`` segments of the matched route.
+        self.path_params = {}
         self.app = None
 
     def text(self, encoding="utf-8"):
@@ -152,6 +163,9 @@ def parse_http_request(conn, max_header_bytes=65536):
         if not chunk:
             break
         data += chunk
+        header_end = data.find(b"\r\n\r\n")
+        if _BARE_LF_RE.search(data if header_end < 0 else data[: header_end + 4]):
+            raise ValueError("Request headers must end lines with CRLF")
         # An HTTP/0.9 request is one line with no header block at all, so
         # waiting for a blank line would hang until the read timed out.
         first_break = data.find(b"\r\n")
@@ -192,6 +206,10 @@ def parse_http_request(conn, max_header_bytes=65536):
         raise ValueError("Invalid HTTP request line")
     if not _HTTP_METHOD_RE.fullmatch(method):
         raise ValueError("Invalid HTTP method")
+    if method not in _STANDARD_METHODS and method.upper() in _STANDARD_METHODS:
+        # "get" is not GET (RFC 9110 section 9.1); normalising it would let a
+        # request slip past rules that compare the method literally.
+        raise ValueError("HTTP methods are case-sensitive")
     if not path or any(ord(char) < 32 for char in path):
         raise ValueError("Invalid HTTP request target")
     if version not in {HTTP_0_9, "HTTP/1.0", "HTTP/1.1"}:
@@ -213,6 +231,19 @@ def parse_http_request(conn, max_header_bytes=65536):
             headers[normalized] = f"{headers[normalized]}, {header_value}"
         else:
             headers[normalized] = header_value
+
+    if path[:7].lower() == "http://" or path[:8].lower() == "https://":
+        # Absolute-form (RFC 9112 section 3.2.2): a server must accept it, and
+        # its authority replaces any Host header.
+        target = urllib.parse.urlsplit(path)
+        if not target.netloc:
+            raise ValueError("Invalid HTTP request target")
+        headers["host"] = target.netloc
+        path = (target.path or "/") + (f"?{target.query}" if target.query else "")
+    elif path == "*" and method != "OPTIONS":
+        raise ValueError("Only OPTIONS may target '*'")
+    elif path != "*" and not path.startswith("/") and version != HTTP_0_9:
+        raise ValueError("Invalid HTTP request target")
 
     if version == "HTTP/1.1" and not headers.get("host"):
         raise ValueError("Missing Host header")

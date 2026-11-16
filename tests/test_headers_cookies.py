@@ -70,6 +70,18 @@ class TestHeadersCookies(unittest.TestCase):
         self.assertIn("HttpOnly", line)
         self.assertIn("SameSite=Strict", line)
 
+    def test_header_values_refuse_del_and_c0_controls_but_keep_tab(self):
+        from wsbuilder.headers import validate_header_value
+
+        self.assertEqual(validate_header_value("a\tb c"), "a\tb c")
+        self.assertEqual(validate_header_value("caf\u00e9"), "caf\u00e9")
+        for bad in ("a\x7fb", "a\x01b", "a\x1fb", "a\x0bb"):
+            with self.subTest(value=bad), self.assertRaisesRegex(ValueError, "control"):
+                validate_header_value(bad)
+        for bad in ("a\rb", "a\nb", "a\x00b"):
+            with self.subTest(value=bad), self.assertRaisesRegex(ValueError, "CR, LF or NUL"):
+                validate_header_value(bad)
+
     def test_headers_and_cookies_reject_response_splitting(self):
         headers = {}
         with self.assertRaises(ValueError):
