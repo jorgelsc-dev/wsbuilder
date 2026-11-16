@@ -6,6 +6,8 @@ build/
 site/
 .pytest_cache/
 .venv*/
+# Written by setuptools-scm at build time.
+src/wsbuilder/_version.py
 
 # AI assistant files (local only)
 AGENTS.md

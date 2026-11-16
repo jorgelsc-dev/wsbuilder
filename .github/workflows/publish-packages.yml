@@ -1,10 +1,10 @@
 name: publish-packages
 
+# Started only by release-from-main.yml (``gh workflow run --ref vX.Y.Z``) or
+# by hand from the Actions tab on a tag. A tag push does not start it too, so
+# a release is never built and uploaded twice.
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
 
 # Read-only by default; each job asks only for what it uses.
 permissions:
@@ -19,6 +19,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # setuptools-scm reads the version from the tag.
+          fetch-depth: 0
+
+      - name: Refuse anything but a release tag
+        run: |
+          case "${GITHUB_REF}" in
+            refs/tags/v[0-9]*) echo "Publishing ${GITHUB_REF_NAME}" ;;
+            *) echo "Run this workflow on a vX.Y.Z tag, not ${GITHUB_REF}."; exit 1 ;;
+          esac
 
       - name: Setup Python
         uses: actions/setup-python@v7
@@ -40,21 +50,14 @@ jobs:
           python -m twine check dist/*
 
       - name: Validate tag matches package version
-        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#v}"
-          package_version="$(python - <<'PY'
-          import tomllib
-          with open("pyproject.toml", "rb") as f:
-              data = tomllib.load(f)
-          print(data["project"]["version"])
-          PY
-          )"
-
+          built="$(ls dist/*.whl)"
+          package_version="$(basename "$built" | cut -d- -f2)"
           echo "tag=${tag_version} package=${package_version}"
           if [ "$tag_version" != "$package_version" ]; then
-            echo "Tag version and package version do not match"
+            echo "The built version does not match the tag (a dirty or untagged checkout?)."
             exit 1
           fi
 

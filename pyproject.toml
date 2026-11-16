@@ -1,10 +1,13 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=77", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "wsbuilder"
-version = "1.4.1.dev0"
+# Derived from git by setuptools-scm: a tag vX.Y.Z builds X.Y.Z, and every
+# commit after it builds a distinct X.Y.(Z+1).devN+g<hash>, so pip can tell
+# installs from different commits apart.
+dynamic = ["version"]
 description = "Lightweight HTTP + WebSocket framework for Python."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -47,6 +50,11 @@ wsbuilder-demo = "wsbuilder.__main__:main"
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools_scm]
+version_file = "src/wsbuilder/_version.py"
+# Checkouts without tags (shallow CI clones, tarballs) still build.
+fallback_version = "0.0.0.dev0"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["wsbuilder*"]
@@ -57,7 +65,7 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+select = ["E", "F", "W", "I", "B", "UP", "S110"]  # S110: no silent `except Exception: pass`
 ignore = [
   "E501",   # long literals and protocol tables read better unwrapped
   "B905",   # zip() over equal-length vectors; strict= would change behaviour
@@ -70,3 +78,20 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["wsbuilder"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Unclosed sockets, files and SQLite connections fail the suite instead of
+# scrolling past as warnings.
+filterwarnings = [
+  "error::ResourceWarning",
+  "error::pytest.PytestUnraisableExceptionWarning",
+]
+
+[tool.coverage.run]
+source = ["wsbuilder"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

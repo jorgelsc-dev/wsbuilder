@@ -188,7 +188,23 @@ def __dir__():
         names |= _PKI_EXPORTS
     return sorted(names)
 
-__version__ = "1.4.1.dev0"
+def _read_version():
+    """The version setuptools-scm wrote at build time, or the installed one."""
+    try:
+        from ._version import __version__ as version
+    except ImportError:
+        # A source tree used without building it (PYTHONPATH=src).
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as _dist_version
+
+        try:
+            return _dist_version("wsbuilder")
+        except PackageNotFoundError:
+            return "0.0.0.dev0+unknown"
+    return version
+
+
+__version__ = _read_version()
 
 __all__ = [
     "App",
