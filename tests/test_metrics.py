@@ -160,10 +160,6 @@ class TestMetrics(unittest.TestCase):
         self.assertEqual(data["proxyi"]["name"], "proxy-metrics")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestMetricsCardinality(unittest.TestCase):
     def test_unknown_paths_and_methods_fold_into_an_overflow_bucket(self):
         metrics = AppMetrics(app_name="capped", max_tracked_labels=3)
@@ -205,3 +201,80 @@ class TestMetricsCardinality(unittest.TestCase):
         metrics = app.enable_metrics(max_tracked_labels=7)
 
         self.assertEqual(metrics.max_tracked_labels, 7)
+
+
+class TestOperationalEndpointGuard(unittest.TestCase):
+    def request(self, path, client="127.0.0.1", headers=None, query=""):
+        return Request(
+            method="GET",
+            path=path,
+            query_string=query,
+            headers=headers or {},
+            body=b"",
+            client=(client, 4000),
+        )
+
+    def app(self, **options):
+        app = App()
+        self.addCleanup(app.close)
+        app.enable_metrics(**options)
+        return app
+
+    def test_metrics_answer_private_networks_only_by_default(self):
+        app = self.app()
+        self.assertEqual(app.dispatch(self.request("/api/metrics")).status, 200)
+        self.assertEqual(app.dispatch(self.request("/api/metrics", "10.1.2.3")).status, 200)
+        self.assertEqual(app.dispatch(self.request("/api/metrics", "203.0.113.9")).status, 403)
+        self.assertEqual(app.dispatch(self.request("/api/metrics/stream", "203.0.113.9")).status, 403)
+
+    def test_access_any_and_explicit_networks(self):
+        public = self.app(access="*")
+        self.assertEqual(public.dispatch(self.request("/api/metrics", "203.0.113.9")).status, 200)
+        listed = self.app(access=["203.0.113.0/24"])
+        self.assertEqual(listed.dispatch(self.request("/api/metrics", "203.0.113.9")).status, 200)
+        self.assertEqual(listed.dispatch(self.request("/api/metrics", "127.0.0.1")).status, 403)
+        with self.assertRaises(ValueError):
+            self.app(access=["not-a-network"])
+
+    def test_bearer_token_is_required_when_configured(self):
+        app = self.app(access="*", token="s3cret")
+        self.assertEqual(app.dispatch(self.request("/api/metrics")).status, 401)
+        wrong = {"authorization": "Bearer nope"}
+        self.assertEqual(app.dispatch(self.request("/api/metrics", headers=wrong)).status, 401)
+        right = {"authorization": "Bearer s3cret"}
+        self.assertEqual(app.dispatch(self.request("/api/metrics", headers=right)).status, 200)
+
+    def test_authorize_callback_decides_alone(self):
+        app = self.app(authorize=lambda request: request.headers.get("x-ops") == "1")
+        self.assertEqual(app.dispatch(self.request("/api/metrics", "203.0.113.9", {"x-ops": "1"})).status, 200)
+        self.assertEqual(app.dispatch(self.request("/api/metrics")).status, 403)
+
+    def test_streams_are_limited_in_number_and_duration(self):
+        app = self.app(max_streams=1, max_stream_seconds=1)
+        first = app.dispatch(self.request("/api/metrics/stream", query="follow=1&interval=0.1"))
+        self.assertEqual(first.status, 200)
+        busy = app.dispatch(self.request("/api/metrics/stream"))
+        self.assertEqual(busy.status, 429)
+        self.assertEqual(busy.headers["Retry-After"], "5")
+        chunks = list(first.stream)  # Ends at max_stream_seconds despite follow=1.
+        self.assertGreaterEqual(len(chunks), 1)
+        self.assertEqual(app.metrics.guard.active_streams, 0)
+        self.assertEqual(app.dispatch(self.request("/api/metrics/stream", query="limit=1")).status, 200)
+
+    def test_proxyi_dashboard_and_metrics_are_guarded(self):
+        app = App()
+        self.addCleanup(app.close)
+        proxy = ProxyI()
+        proxy.install(app)
+        for path in (proxy.dashboard_path, proxy.metrics_path, proxy.metrics_stream_path):
+            with self.subTest(path=path):
+                self.assertEqual(app.dispatch(self.request(path, "198.51.100.7")).status, 403)
+        self.assertEqual(app.dispatch(self.request(proxy.metrics_path)).status, 200)
+        # ProxyI used directly as the dispatcher applies the same guard.
+        self.assertEqual(proxy.dispatch(self.request(proxy.dashboard_path, "198.51.100.7")).status, 403)
+        open_proxy = ProxyI(access="*")
+        self.assertEqual(open_proxy.dispatch(self.request(open_proxy.metrics_path, "198.51.100.7")).status, 200)
+
+
+if __name__ == "__main__":
+    unittest.main()

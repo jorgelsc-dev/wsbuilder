@@ -235,7 +235,8 @@ class AppMetrics:
     def response_snapshot(self):
         return Response.json(self.snapshot())
 
-    def response_stream(self, interval_seconds=1.0, max_points=None):
+    def response_stream(self, interval_seconds=1.0, max_points=None, guard=None):
+        """NDJSON stream of snapshots; ``guard`` holds a reserved stream slot."""
         headers = {
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
@@ -243,8 +244,11 @@ class AppMetrics:
             "X-Accel-Buffering": "no",
             "X-Content-Type-Options": "nosniff",
         }
+        chunks = self.stream_chunks(interval_seconds=interval_seconds, max_points=max_points)
+        if guard is not None:
+            chunks = guard.bounded(chunks)
         return Response.stream(
-            self.stream_chunks(interval_seconds=interval_seconds, max_points=max_points),
+            chunks,
             content_type="application/x-ndjson; charset=utf-8",
             headers=headers,
         )
@@ -257,19 +261,51 @@ def install_metrics(
     app_name=None,
     extra_snapshot_provider=None,
     max_tracked_labels=DEFAULT_MAX_TRACKED_LABELS,
+    *,
+    access=None,
+    token=None,
+    authorize=None,
+    max_streams=None,
+    max_stream_seconds=None,
+    guard=None,
 ):
+    """Register the metrics snapshot and NDJSON stream routes on ``app``.
+
+    Both answer only loopback and private networks unless ``access`` says
+    otherwise (``"*"``, ``"loopback"`` or addresses/CIDRs); ``token`` adds a
+    bearer check and ``authorize(request)`` replaces both. At most
+    ``max_streams`` streams run at once, each for ``max_stream_seconds``.
+    See ``wsbuilder._access.EndpointGuard``.
+    """
+    from ._access import coerce_guard
+
+    guard = coerce_guard(
+        guard,
+        access=access,
+        token=token,
+        authorize=authorize,
+        max_streams=max_streams,
+        max_stream_seconds=max_stream_seconds,
+    )
     name = app_name or app.__class__.__name__
     metrics = AppMetrics(app_name=name, max_tracked_labels=max_tracked_labels)
     if extra_snapshot_provider:
         metrics.set_extra_snapshot_provider(extra_snapshot_provider)
     app.metrics = metrics
+    metrics.guard = guard
 
     @app.api(path, methods=("GET",))
     def _metrics_snapshot(request):
+        refusal = guard.check(request, app)
+        if refusal is not None:
+            return refusal
         return metrics.response_snapshot()
 
     @app.api(stream_path, methods=("GET",))
     def _metrics_stream(request):
+        refusal = guard.check(request, app)
+        if refusal is not None:
+            return refusal
         interval = request.query.get("interval", "1.0")
         limit_text = request.query.get("limit", "")
         follow = request.query.get("follow", "")
@@ -284,7 +320,11 @@ def install_metrics(
                 max_points = None
             else:
                 max_points = DEFAULT_STREAM_POINTS
-        return metrics.response_stream(interval_seconds=interval, max_points=max_points)
+        if not guard.acquire_stream():
+            return guard.too_many_streams()
+        return metrics.response_stream(
+            interval_seconds=interval, max_points=max_points, guard=guard
+        )
 
     return metrics
 
