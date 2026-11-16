@@ -904,6 +904,81 @@ class TestConcurrentHandlers(ConnectionHarness):
         ]
         self.assertEqual(resets, [ERROR_PROTOCOL_ERROR])
 
+
+class TestAbuseLimits(ConnectionHarness):
+    """Protocol abuse that costs the peer little and the server a lot."""
+
+    def setUp(self):
+        super().setUp()
+        self.calls = 0
+        self.gate = threading.Event()
+
+        @self.app.api("/slow", methods=("GET",))
+        def slow(_request):
+            self.calls += 1
+            self.gate.wait(2)
+            return {"ok": True}
+
+    def goaway_codes(self, frames):
+        return [struct.unpack(">II", f.payload[:8])[1] for f in frames if f.type == FRAME_GOAWAY]
+
+    def rapid_reset(self, path, pairs):
+        chunks = []
+        for index in range(pairs):
+            stream_id = 1 + 2 * index
+            chunks.append(self.headers_frame(stream_id, self.request(path)))
+            chunks.append(Frame(FRAME_RST_STREAM, 0, stream_id, struct.pack(">I", 8)).serialize())
+        return chunks
+
+    def test_rapid_reset_cannot_queue_unbounded_work(self):
+        try:
+            frames = self.run_connection(*self.rapid_reset("/slow", 600), max_streams=10)
+        finally:
+            self.gate.set()
+        # Reset streams keep their slot until the handler is done, so the
+        # backlog stays within max_streams and the rest are refused.
+        self.assertLessEqual(self.calls, 10)
+        self.assertNotIn(ERROR_PROTOCOL_ERROR, self.goaway_codes(frames))
+
+    def test_rapid_reset_ends_the_connection(self):
+        frames = self.run_connection(*self.rapid_reset("/hello", 1000))
+        self.assertIn(ERROR_ENHANCE_YOUR_CALM, self.goaway_codes(frames))
+
+    def test_reset_streams_keep_their_slot_until_the_handler_ends(self):
+        chunks = []
+        for index in range(5):
+            stream_id = 1 + 2 * index
+            chunks.append(self.headers_frame(stream_id, self.request("/slow")))
+            chunks.append(Frame(FRAME_RST_STREAM, 0, stream_id, struct.pack(">I", 8)).serialize())
+        chunks.append(self.headers_frame(11, self.request("/slow")))
+        threading.Timer(0.2, self.gate.set).start()
+        frames = self.run_connection(*chunks, max_streams=2)
+        refused = [f.stream_id for f in frames if f.type == FRAME_RST_STREAM]
+        self.assertTrue(refused, "streams over the limit must be refused while work is pending")
+
+    def test_a_ping_flood_ends_the_connection(self):
+        ping = Frame(FRAME_PING, 0, 0, b"12345678").serialize()
+        frames = self.run_connection(ping * (Http2Connection.MAX_CONTROL_FRAMES + 5))
+        self.assertIn(ERROR_ENHANCE_YOUR_CALM, self.goaway_codes(frames))
+
+    def test_a_settings_flood_ends_the_connection(self):
+        settings = Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+        frames = self.run_connection(settings * (Http2Connection.MAX_CONTROL_FRAMES + 5))
+        self.assertIn(ERROR_ENHANCE_YOUR_CALM, self.goaway_codes(frames))
+
+    def test_a_continuation_flood_ends_the_connection(self):
+        start = Frame(FRAME_HEADERS, 0, 1, self.encoder.encode(self.request("/hello"))).serialize()
+        empty = Frame(FRAME_CONTINUATION, 0, 1, b"").serialize()
+        frames = self.run_connection(start, empty * (Http2Connection.MAX_CONTINUATION_FRAMES + 5))
+        self.assertIn(ERROR_ENHANCE_YOUR_CALM, self.goaway_codes(frames))
+
+    def test_ordinary_traffic_is_not_mistaken_for_abuse(self):
+        chunks = [self.headers_frame(1 + 2 * i, self.request(f"/hello?n={i}")) for i in range(50)]
+        chunks.append(Frame(FRAME_PING, 0, 0, b"abcdefgh").serialize())
+        frames = self.run_connection(*chunks)
+        self.assertEqual(len(self.responses(frames)), 50)
+        self.assertNotIn(ERROR_ENHANCE_YOUR_CALM, self.goaway_codes(frames))
+
 if __name__ == "__main__":
     unittest.main()
 
