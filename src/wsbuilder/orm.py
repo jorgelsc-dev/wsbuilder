@@ -319,6 +319,35 @@ class Database:
                 detect_types=detect_types,
             )
 
+        try:
+            self._configure(
+                path,
+                timeout=timeout,
+                pragmas=pragmas,
+                detect_types=detect_types,
+                enable_replicas=enable_replicas,
+                replica_count=replica_count,
+                enable_wal=enable_wal,
+                cache_size_mb=cache_size_mb,
+            )
+        except BaseException:
+            # A bad pragma or replica setup must not leak the open connection.
+            self._closed = True
+            self._conn.close()
+            raise
+
+    def _configure(
+        self,
+        path,
+        *,
+        timeout,
+        pragmas,
+        detect_types,
+        enable_replicas,
+        replica_count,
+        enable_wal,
+        cache_size_mb,
+    ):
         self._conn.row_factory = sqlite3.Row
 
         # Default optimized pragmas

@@ -3,6 +3,7 @@ import json
 import math
 import os
 import sqlite3
+import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -376,24 +377,14 @@ def build_app(*, upstream_port=DEFAULT_UPSTREAM_PORT, enable_dns=False, dns_host
 
 
 def shutdown_example(app):
-    cache = getattr(app, "cache", None)
-    if cache is not None:
+    for name in ("cache", "db", "dns"):
+        resource = getattr(app, name, None)
+        if resource is None:
+            continue
         try:
-            cache.close()
-        except Exception:
-            pass
-    db = getattr(app, "db", None)
-    if db is not None:
-        try:
-            db.close()
-        except Exception:
-            pass
-    dns = getattr(app, "dns", None)
-    if dns is not None:
-        try:
-            dns.close()
-        except Exception:
-            pass
+            resource.close()
+        except Exception as exc:  # noqa: BLE001 - keep closing the others
+            print(f"[shutdown] {name}.close() failed: {exc}", file=sys.stderr)
 
 
 def main():

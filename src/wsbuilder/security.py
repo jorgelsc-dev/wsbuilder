@@ -60,8 +60,8 @@ def _ip_in_networks(ip_text, networks):
         try:
             if ip_obj in net:
                 return True
-        except Exception:
-            continue
+        except TypeError:
+            continue  # Not a network object; nothing to match against.
     return False
 
 

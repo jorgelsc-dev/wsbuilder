@@ -333,5 +333,17 @@ class TestORM(unittest.TestCase):
         with self.assertRaises(ValueError):
             Database(":memory:", pragmas={"user_version": "1; DROP TABLE x"})
 
+    def test_a_failed_constructor_closes_its_connection(self):
+        import gc
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            with self.assertRaises(ValueError):
+                Database(":memory:", pragmas={"user_version": "1; DROP TABLE x"})
+            gc.collect()
+        leaks = [w for w in caught if issubclass(w.category, ResourceWarning)]
+        self.assertEqual(leaks, [])
+
 if __name__ == "__main__":
     unittest.main()

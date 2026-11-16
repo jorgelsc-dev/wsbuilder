@@ -288,8 +288,8 @@ class _Session:
             if not connection.closed:
                 try:
                     self._send(connection.close(http3.H3_NO_ERROR, ""))
-                except Exception:
-                    pass
+                except OSError:
+                    pass  # The socket is gone; the peer will time the connection out.
             self._handshake.set()
             self._fail_all(connection.error or "connection closed")
             self._stop.set()
