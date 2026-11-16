@@ -112,7 +112,7 @@ completa en [RPC entre servicios](rpc.md).
 | Redes | `DenseLayer`, `NeuralNetwork`, `submit_training_task` |
 | Analisis | `describe_data`, `evaluate_errors` |
 | Prediccion | `Predictor` |
-| Persistencia de redes | `NeuralNetwork.save`, `NeuralNetwork.load` (GGUF) |
+| Persistencia de redes | `NeuralNetwork.save`, `NeuralNetwork.load` (NDJSON) |
 
 ## Modelos de lenguaje
 
@@ -120,9 +120,9 @@ completa en [RPC entre servicios](rpc.md).
 | --- | --- |
 | Almacen | `ModelStore`, `ModelRecord` |
 | Descargas | `download_file`, `huggingface_files`, `huggingface_url`, `DownloadError` |
-| Ejecucion | `LanguageModel`, `LlamaCppBackend` (extra `llm`), `OpenAICompatibleBackend` |
+| Ejecucion | `LanguageModel`, `OpenAICompatibleBackend`, `ModelStore(loader=...)` |
 | HTTP | `install_llm`, `App.enable_llm` |
-| GGUF | `GGUFReader`, `GGUFWriter`, `GGMLType`, `GGUFError`, `read_gguf_metadata` |
+| Formato NDJSON | `ModelReader`, `ModelWriter`, `ModelTensor`, `ModelFormatError`, `MODEL_FORMAT`, `is_model_file`, `read_model_header` |
 
 Guia completa en [Modelos de lenguaje](llm.md).
 

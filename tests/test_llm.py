@@ -2,44 +2,34 @@ import hashlib
 import http.server
 import json
 import os
-import sys
 import tempfile
 import threading
 import time
-import types
 import unittest
 import urllib.request
 
 from wsbuilder import (
     App,
     DownloadError,
-    GGUFWriter,
     HTTPServer,
     LanguageModel,
-    LlamaCppBackend,
     ModelStore,
+    ModelWriter,
+    NeuralNetwork,
     OpenAICompatibleBackend,
     download_file,
     huggingface_files,
     huggingface_url,
     install_llm,
 )
-from wsbuilder.llm import detect_model_format, read_safetensors_header
+from wsbuilder.llm import detect_model_format
 
 
-def _gguf_bytes(name="tiny"):
-    writer = GGUFWriter(architecture="llama")
-    writer.add_metadata("general.name", name)
-    writer.add_metadata("llama.context_length", 2048)
-    writer.add_tensor("token_embd.weight", [0.25] * 32, shape=(8, 4))
+def _model_bytes(name="tiny"):
+    writer = ModelWriter(architecture="tiny-lm", name=name)
+    writer.add_metadata("context_length", 2048)
+    writer.add_tensor("token_embd.weight", [0.25] * 32, shape=(8, 4), dtype="F32")
     return writer.to_bytes()
-
-
-def _safetensors_bytes():
-    header = json.dumps(
-        {"w": {"dtype": "F32", "shape": [2, 2], "data_offsets": [0, 16]}, "__metadata__": {"format": "pt"}}
-    ).encode()
-    return len(header).to_bytes(8, "little") + header + b"\x00" * 16
 
 
 def _write(directory, name, data):
@@ -47,6 +37,24 @@ def _write(directory, name, data):
     with open(path, "wb") as handle:
         handle.write(data)
     return path
+
+
+class _EchoBackend:
+    name = "echo"
+
+    def complete(self, prompt, *, stream=False, **options):
+        if stream:
+            return iter(["eco:", prompt])
+        return {"text": f"eco:{prompt}", "finish_reason": "stop", "usage": None}
+
+    def chat(self, messages, *, stream=False, **options):
+        last = messages[-1]["content"]
+        if stream:
+            return iter(["eco ", last])
+        return {"text": f"eco {last}", "finish_reason": "stop", "usage": {"total_tokens": 2}}
+
+    def close(self):
+        pass
 
 
 # -- a stand-in for the Hugging Face Hub and its CDN ------------------------
@@ -127,7 +135,7 @@ class _HubHandler(http.server.BaseHTTPRequestHandler):
 
 class HubFixture(unittest.TestCase):
     def setUp(self):
-        _HubHandler.files = {"tiny.gguf": _gguf_bytes(), "weights.safetensors": _safetensors_bytes()}
+        _HubHandler.files = {"tiny.ndjson": _model_bytes(), "notes.txt": b"not a model"}
         _HubHandler.seen = []
         _HubHandler.cut_after = None
         self.hub = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HubHandler)
@@ -142,11 +150,11 @@ class HubFixture(unittest.TestCase):
 
 class TestDownloads(HubFixture):
     def test_a_download_is_verified_and_atomic(self):
-        data = _HubHandler.files["tiny.gguf"]
-        target = os.path.join(self.directory, "tiny.gguf")
+        data = _HubHandler.files["tiny.ndjson"]
+        target = os.path.join(self.directory, "tiny.ndjson")
         seen = []
         digest = download_file(
-            f"{self.endpoint}/files/tiny.gguf", target, sha256=hashlib.sha256(data).hexdigest(),
+            f"{self.endpoint}/files/tiny.ndjson", target, sha256=hashlib.sha256(data).hexdigest(),
             allow_http=True, progress=lambda done, total: seen.append((done, total)),
         )
         self.assertEqual(digest, hashlib.sha256(data).hexdigest())
@@ -156,16 +164,16 @@ class TestDownloads(HubFixture):
         self.assertEqual(seen[-1], (len(data), len(data)))
 
     def test_a_checksum_mismatch_deletes_the_file(self):
-        target = os.path.join(self.directory, "bad.gguf")
+        target = os.path.join(self.directory, "bad.ndjson")
         with self.assertRaises(DownloadError):
-            download_file(f"{self.endpoint}/files/tiny.gguf", target, sha256="0" * 64, allow_http=True)
+            download_file(f"{self.endpoint}/files/tiny.ndjson", target, sha256="0" * 64, allow_http=True)
         self.assertFalse(os.path.exists(target))
         self.assertFalse(os.path.exists(target + ".part"))
 
     def test_an_interrupted_download_resumes_with_a_range_request(self):
-        data = _HubHandler.files["tiny.gguf"]
-        target = os.path.join(self.directory, "resumed.gguf")
-        url = f"{self.endpoint}/files/tiny.gguf"
+        data = _HubHandler.files["tiny.ndjson"]
+        target = os.path.join(self.directory, "resumed.ndjson")
+        url = f"{self.endpoint}/files/tiny.ndjson"
         sha = hashlib.sha256(data).hexdigest()
         _HubHandler.cut_after = 100
         with self.assertRaises(DownloadError):
@@ -178,53 +186,55 @@ class TestDownloads(HubFixture):
 
     def test_size_limit(self):
         with self.assertRaises(DownloadError):
-            download_file(f"{self.endpoint}/files/tiny.gguf", os.path.join(self.directory, "x"),
+            download_file(f"{self.endpoint}/files/tiny.ndjson", os.path.join(self.directory, "x"),
                           allow_http=True, max_bytes=10)
 
     def test_plain_http_needs_opting_in(self):
         with self.assertRaises(DownloadError):
-            download_file(f"{self.endpoint}/files/tiny.gguf", os.path.join(self.directory, "x"))
+            download_file(f"{self.endpoint}/files/tiny.ndjson", os.path.join(self.directory, "x"))
 
     def test_the_token_does_not_follow_a_redirect_to_another_host(self):
-        url = huggingface_url("owner/repo", "tiny.gguf", endpoint=self.endpoint)
-        download_file(url, os.path.join(self.directory, "t.gguf"), token="secret", allow_http=True)
+        url = huggingface_url("owner/repo", "tiny.ndjson", endpoint=self.endpoint)
+        download_file(url, os.path.join(self.directory, "t.ndjson"), token="secret", allow_http=True)
         by_path = {path: auth for path, auth, _range in _HubHandler.seen}
-        self.assertEqual(by_path["/owner/repo/resolve/main/tiny.gguf"], "Bearer secret")
-        self.assertIsNone(by_path["/cdn/tiny.gguf"])
+        self.assertEqual(by_path["/owner/repo/resolve/main/tiny.ndjson"], "Bearer secret")
+        self.assertIsNone(by_path["/cdn/tiny.ndjson"])
 
     def test_hub_listing_reports_sizes_and_checksums(self):
         files = huggingface_files("owner/repo", endpoint=self.endpoint, allow_http=True)
         by_path = {entry["path"]: entry for entry in files}
         self.assertNotIn("sub", by_path)
         self.assertIsNone(by_path["README.md"]["sha256"])
-        data = _HubHandler.files["tiny.gguf"]
-        self.assertEqual(by_path["tiny.gguf"], {"path": "tiny.gguf", "size": len(data),
+        data = _HubHandler.files["tiny.ndjson"]
+        self.assertEqual(by_path["tiny.ndjson"], {"path": "tiny.ndjson", "size": len(data),
                                                 "sha256": hashlib.sha256(data).hexdigest()})
-        only = huggingface_files("owner/repo", endpoint=self.endpoint, allow_http=True, suffix=".gguf")
-        self.assertEqual([entry["path"] for entry in only], ["tiny.gguf"])
+        only = huggingface_files("owner/repo", endpoint=self.endpoint, allow_http=True, suffix=".ndjson")
+        self.assertEqual([entry["path"] for entry in only], ["tiny.ndjson"])
 
     def test_bad_repository_names(self):
         for repo in ("noslash", "a/b/c", "../etc"):
             with self.subTest(repo=repo), self.assertRaises(ValueError):
-                huggingface_url(repo, "x.gguf")
+                huggingface_url(repo, "x.ndjson")
 
 
 class TestStore(HubFixture):
     def test_import_list_get_export_verify_remove(self):
-        source = _write(self.directory, "My-Model.Q4.gguf", _gguf_bytes("My Model"))
+        source = _write(self.directory, "My-Model.Q4.ndjson", _model_bytes("My Model"))
         record = self.store.import_file(source)
         self.assertEqual(record.id, "my-model")
-        self.assertEqual(record.format, "gguf")
-        self.assertEqual(record.summary["context_length"], 2048)
-        self.assertEqual(record.sha256, hashlib.sha256(_gguf_bytes("My Model")).hexdigest())
+        self.assertEqual(record.format, "ndjson")
+        self.assertEqual(record.summary["metadata"], {"context_length": 2048})
+        self.assertEqual(record.summary["parameters"], 32)
+        self.assertEqual(record.summary["dtypes"], {"F32": 32})
+        self.assertEqual(record.sha256, hashlib.sha256(_model_bytes("My Model")).hexdigest())
         self.assertTrue(os.path.exists(source), "import copies by default")
         self.assertEqual([r.id for r in self.store.list()], ["my-model"])
         self.assertIn("my-model", self.store)
         self.assertTrue(self.store.verify("my-model"))
 
-        exported = self.store.export("my-model", self.directory + "/out.gguf")
+        exported = self.store.export("my-model", self.directory + "/out.ndjson")
         with open(exported, "rb") as handle:
-            self.assertEqual(handle.read(), _gguf_bytes("My Model"))
+            self.assertEqual(handle.read(), _model_bytes("My Model"))
         with self.assertRaises(FileExistsError):
             self.store.export("my-model", exported)
 
@@ -237,7 +247,7 @@ class TestStore(HubFixture):
             self.store.get("my-model")
 
     def test_ids_are_unique_and_validated(self):
-        source = _write(self.directory, "a.gguf", _gguf_bytes("same"))
+        source = _write(self.directory, "a.ndjson", _model_bytes("same"))
         first = self.store.import_file(source)
         second = self.store.import_file(source)
         self.assertEqual((first.id, second.id), ("same", "same-2"))
@@ -247,166 +257,121 @@ class TestStore(HubFixture):
             self.store.import_file(source, model_id="../escape")
 
     def test_tampering_is_detected(self):
-        record = self.store.import_file(_write(self.directory, "t.gguf", _gguf_bytes()))
+        record = self.store.import_file(_write(self.directory, "t.ndjson", _model_bytes()))
         with open(record.path, "ab") as handle:
             handle.write(b"x")
         self.assertFalse(self.store.verify(record.id))
 
-    def test_move_and_safetensors(self):
-        source = _write(self.directory, "w.safetensors", _safetensors_bytes())
+    def test_move(self):
+        source = _write(self.directory, "w.ndjson", _model_bytes("weights"))
         record = self.store.import_file(source, move=True, name="weights")
         self.assertFalse(os.path.exists(source))
-        self.assertEqual(record.format, "safetensors")
-        self.assertEqual(record.summary["parameters"], 4)
-        self.assertEqual(record.summary["metadata"], {"format": "pt"})
+        self.assertEqual(record.format, "ndjson")
+        self.assertEqual(record.summary["parameters"], 32)
 
     def test_unknown_and_malformed_files_are_refused(self):
         junk = _write(self.directory, "notes.txt", b"just text, not a model")
         with self.assertRaises(ValueError):
             self.store.import_file(junk)
         self.assertEqual(self.store.import_file(junk, require_known_format=False).format, "unknown")
-        broken = _write(self.directory, "broken.gguf", _gguf_bytes()[:40])
+        broken = _write(self.directory, "broken.ndjson", _model_bytes()[:-20])
         with self.assertRaises(ValueError):
             self.store.import_file(broken)
         self.assertEqual(len(self.store.list()), 1)
 
     def test_a_broken_manifest_hides_the_entry(self):
-        record = self.store.import_file(_write(self.directory, "m.gguf", _gguf_bytes()))
+        record = self.store.import_file(_write(self.directory, "m.ndjson", _model_bytes()))
         with open(os.path.join(record.directory, "manifest.json"), "w") as handle:
             handle.write("{not json")
         self.assertEqual(self.store.list(), [])
 
     def test_download_into_the_store(self):
-        data = _HubHandler.files["tiny.gguf"]
+        data = _HubHandler.files["tiny.ndjson"]
         record = self.store.download(
-            f"{self.endpoint}/files/tiny.gguf", allow_http=True, sha256=hashlib.sha256(data).hexdigest()
+            f"{self.endpoint}/files/tiny.ndjson", allow_http=True, sha256=hashlib.sha256(data).hexdigest()
         )
-        self.assertEqual(record.source, f"{self.endpoint}/files/tiny.gguf")
+        self.assertEqual(record.source, f"{self.endpoint}/files/tiny.ndjson")
         self.assertEqual(record.size, len(data))
         self.assertTrue(self.store.verify(record.id))
 
     def test_hub_download_takes_the_checksum_from_the_listing(self):
         record = self.store.download_huggingface(
-            "owner/repo", "tiny.gguf", endpoint=self.endpoint, allow_http=True
+            "owner/repo", "tiny.ndjson", endpoint=self.endpoint, allow_http=True
         )
-        self.assertEqual(record.source, "hf:owner/repo@main/tiny.gguf")
-        self.assertEqual(record.sha256, hashlib.sha256(_HubHandler.files["tiny.gguf"]).hexdigest())
+        self.assertEqual(record.source, "hf:owner/repo@main/tiny.ndjson")
+        self.assertEqual(record.sha256, hashlib.sha256(_HubHandler.files["tiny.ndjson"]).hexdigest())
         with self.assertRaises(DownloadError):
-            self.store.download_huggingface("owner/repo", "absent.gguf", endpoint=self.endpoint,
+            self.store.download_huggingface("owner/repo", "absent.ndjson", endpoint=self.endpoint,
                                             allow_http=True)
         with self.assertRaises(DownloadError):
             self.store.download_huggingface("owner/repo", "README.md", endpoint=self.endpoint,
                                             allow_http=True)
 
     def test_hub_download_detects_a_tampered_file(self):
-        listing_data = _HubHandler.files["tiny.gguf"]
+        listing_data = _HubHandler.files["tiny.ndjson"]
         record_sha = hashlib.sha256(listing_data).hexdigest()
         with self.assertRaises(DownloadError):
             self.store.download_huggingface(
-                "owner/repo", "tiny.gguf", endpoint=self.endpoint, allow_http=True,
+                "owner/repo", "tiny.ndjson", endpoint=self.endpoint, allow_http=True,
                 sha256=record_sha[::-1],
             )
         self.assertEqual(self.store.list(), [])
 
     def test_format_detection(self):
-        self.assertEqual(detect_model_format(_write(self.directory, "a", _gguf_bytes())), "gguf")
-        self.assertEqual(detect_model_format(_write(self.directory, "b", _safetensors_bytes())), "safetensors")
+        self.assertEqual(detect_model_format(_write(self.directory, "a", _model_bytes())), "ndjson")
         self.assertEqual(detect_model_format(_write(self.directory, "c", b"{}")), "unknown")
-        bad = _write(self.directory, "d", (10**6).to_bytes(8, "little") + b"{}")
-        with self.assertRaises(ValueError):
-            read_safetensors_header(bad)
+        self.assertEqual(detect_model_format(_write(self.directory, "d", b"\x00GGUF")), "unknown")
+        self.assertEqual(detect_model_format(_write(self.directory, "e", b"")), "unknown")
 
 
 # -- backends ---------------------------------------------------------------
 
 
-class _FakeLlama:
-    instances = []
+class TestStoreLoader(unittest.TestCase):
+    def test_without_a_loader_stored_models_cannot_be_chatted_with(self):
+        directory = tempfile.mkdtemp()
+        store = ModelStore(os.path.join(directory, "models"))
+        record = store.import_file(_write(directory, "m.ndjson", _model_bytes("m")))
+        with self.assertRaises(NotImplementedError):
+            store.load(record.id)
 
-    def __init__(self, **options):
-        self.options = options
-        self.closed = False
-        type(self).instances.append(self)
+    def test_a_loader_runs_stored_models_and_is_cached_and_unloaded(self):
+        directory = tempfile.mkdtemp()
+        seen = []
 
-    def __call__(self, prompt, stream=False, **params):
-        text = f"echo:{prompt}"
-        if stream:
-            return iter([{"choices": [{"text": piece}]} for piece in ("echo:", prompt)])
-        return {"choices": [{"text": text, "finish_reason": "stop"}], "usage": {"total_tokens": 3}}
+        def loader(record, **options):
+            seen.append((record.id, record.path, options))
+            return LanguageModel(_EchoBackend(), name=record.id)
 
-    def create_chat_completion(self, messages, stream=False, **params):
-        last = messages[-1]["content"]
-        if stream:
-            return iter([{"choices": [{"delta": {"role": "assistant"}}]}]
-                        + [{"choices": [{"delta": {"content": piece}}]} for piece in ("hola ", last)])
-        return {"choices": [{"message": {"role": "assistant", "content": f"hola {last}"},
-                             "finish_reason": "stop"}], "usage": {"total_tokens": 5}, "params": params}
-
-    def close(self):
-        self.closed = True
-
-
-class FakeLlamaCpp(unittest.TestCase):
-    def setUp(self):
-        _FakeLlama.instances = []
-        module = types.ModuleType("llama_cpp")
-        module.Llama = _FakeLlama
-        previous = sys.modules.get("llama_cpp")
-        sys.modules["llama_cpp"] = module
-        self.addCleanup(lambda: sys.modules.pop("llama_cpp", None) if previous is None
-                        else sys.modules.__setitem__("llama_cpp", previous))
-
-
-class TestLlamaCppBackend(FakeLlamaCpp):
-    def test_generate_and_chat(self):
-        model = LanguageModel.from_gguf("/models/x.gguf", n_ctx=512, n_gpu_layers=10)
-        self.assertEqual(_FakeLlama.instances[0].options["n_ctx"], 512)
-        self.assertEqual(_FakeLlama.instances[0].options["n_gpu_layers"], 10)
-        self.assertEqual(model.generate("hi", max_tokens=5), "echo:hi")
-        self.assertEqual("".join(model.stream_generate("hi")), "echo:hi")
-        self.assertEqual(model.chat("mundo"), "hola mundo")
-        self.assertEqual("".join(model.stream_chat([{"role": "user", "content": "mundo"}])), "hola mundo")
-        completion = model.chat_completion("x", temperature=0.2, unknown_option=1)
-        self.assertEqual(completion["usage"], {"total_tokens": 5})
-        model.close()
-        self.assertTrue(_FakeLlama.instances[0].closed)
+        store = ModelStore(os.path.join(directory, "models"), loader=loader)
+        record = store.import_file(_write(directory, "m.ndjson", _model_bytes("m")))
+        first = store.load(record.id, temperature=0)
+        self.assertIs(store.load(record.id), first)
+        self.assertEqual(seen, [(record.id, record.path, {"temperature": 0})])
+        self.assertEqual(first.chat("hola"), "eco hola")
+        store.remove(record.id)
+        self.assertEqual(store.list(), [])
 
     def test_bad_roles_are_refused(self):
-        model = LanguageModel.from_gguf("/models/x.gguf")
+        model = LanguageModel(_EchoBackend())
         with self.assertRaises(ValueError):
             model.chat([{"role": "root", "content": "x"}])
 
-    def test_store_load_caches_and_unloads(self):
+    def test_stored_networks_load_back(self):
         directory = tempfile.mkdtemp()
         store = ModelStore(os.path.join(directory, "models"))
-        record = store.import_file(_write(directory, "m.gguf", _gguf_bytes("m")))
-        first = store.load(record.id)
-        self.assertIs(store.load(record.id), first)
-        self.assertEqual(_FakeLlama.instances[0].options["model_path"], record.path)
-        store.remove(record.id)
-        self.assertTrue(_FakeLlama.instances[0].closed)
-
-    def test_store_load_refuses_non_gguf(self):
-        directory = tempfile.mkdtemp()
-        store = ModelStore(os.path.join(directory, "models"))
-        record = store.import_file(_write(directory, "w.safetensors", _safetensors_bytes()))
-        with self.assertRaises(ValueError):
-            store.load(record.id)
-
-
-class TestMissingLlamaCpp(unittest.TestCase):
-    def test_a_clear_install_hint(self):
-        previous = sys.modules.get("llama_cpp")
-        sys.modules["llama_cpp"] = None  # makes the import fail
-        try:
-            with self.assertRaises(ImportError) as caught:
-                LlamaCppBackend("/models/x.gguf")
-        finally:
-            if previous is None:
-                sys.modules.pop("llama_cpp", None)
-            else:
-                sys.modules["llama_cpp"] = previous
-        self.assertIn("pip install wsbuilder[llm]", str(caught.exception))
+        network = NeuralNetwork(seed=3)
+        network.add_dense(3, input_size=2, activation="tanh")
+        network.add_dense(1, activation="sigmoid")
+        path = network.save(os.path.join(directory, "net.ndjson"), name="red")
+        record = store.import_file(path)
+        self.assertEqual(record.format, "ndjson")
+        self.assertEqual(record.summary["architecture"], "wsbuilder.dense")
+        self.assertEqual(record.summary["parameters"], 3 * 2 + 3 + 3 + 1)
+        same = store.load_network(record.id)
+        self.assertEqual(same.predict([0.2, -0.4]), network.predict([0.2, -0.4]))
+        with store.open(record.id) as reader:
+            self.assertEqual(reader.tensor("blk.0.weight").shape, (3, 2))
 
 
 class _OpenAIHandler(http.server.BaseHTTPRequestHandler):
@@ -474,104 +439,14 @@ class TestOpenAICompatibleBackend(unittest.TestCase):
             OpenAICompatibleBackend("ftp://x", "m")
 
 
-def _tiny_llama(path):
-    """A real (random-weight) llama model, written with GGUFWriter."""
-    import random
-
-    from wsbuilder.gguf import GGUFValueType as T
-
-    rng = random.Random(0)
-    embd, heads, ff = 32, 4, 64
-    words = ["▁", "▁hola", "▁mundo", "a", "o"]
-    tokens = ["<unk>", "<s>", "</s>"] + [f"<0x{b:02X}>" for b in range(256)] + words
-    vocab = len(tokens)
-    writer = GGUFWriter(architecture="llama")
-    writer.add_metadata("general.name", "tiny-random-llama")
-    for key, value in {"context_length": 128, "embedding_length": embd, "block_count": 1,
-                       "feed_forward_length": ff, "attention.head_count": heads,
-                       "attention.head_count_kv": heads, "rope.dimension_count": embd // heads}.items():
-        writer.add_metadata(f"llama.{key}", value, T.UINT32)
-    writer.add_metadata("llama.attention.layer_norm_rms_epsilon", 1e-5, T.FLOAT32)
-    writer.add_metadata("tokenizer.ggml.model", "llama")
-    writer.add_metadata("tokenizer.ggml.tokens", tokens, item_type=T.STRING)
-    writer.add_metadata("tokenizer.ggml.scores", [0.0] * 3 + [-1000.0] * 256 + [-1.0] * len(words),
-                        item_type=T.FLOAT32)
-    writer.add_metadata("tokenizer.ggml.token_type", [2, 3, 3] + [6] * 256 + [1] * len(words),
-                        item_type=T.INT32)
-    writer.add_metadata("tokenizer.ggml.bos_token_id", 1, T.UINT32)
-    writer.add_metadata("tokenizer.ggml.eos_token_id", 2, T.UINT32)
-    writer.add_metadata("tokenizer.chat_template",
-                        "{% for m in messages %}{{ m['content'] }}\n{% endfor %}")
-
-    def weights(*shape):
-        count = 1
-        for dim in shape:
-            count *= dim
-        return [rng.gauss(0, 0.02) for _ in range(count)]
-
-    writer.add_tensor("token_embd.weight", weights(embd, vocab), shape=(embd, vocab))
-    writer.add_tensor("output_norm.weight", [1.0] * embd, shape=(embd,))
-    writer.add_tensor("output.weight", weights(embd, vocab), shape=(embd, vocab))
-    writer.add_tensor("blk.0.attn_norm.weight", [1.0] * embd, shape=(embd,))
-    for name in ("attn_q", "attn_k", "attn_v", "attn_output"):
-        writer.add_tensor(f"blk.0.{name}.weight", weights(embd, embd), shape=(embd, embd))
-    writer.add_tensor("blk.0.ffn_norm.weight", [1.0] * embd, shape=(embd,))
-    writer.add_tensor("blk.0.ffn_gate.weight", weights(embd, ff), shape=(embd, ff))
-    writer.add_tensor("blk.0.ffn_up.weight", weights(embd, ff), shape=(embd, ff))
-    writer.add_tensor("blk.0.ffn_down.weight", weights(ff, embd), shape=(ff, embd))
-    writer.write(path)
-    return path
-
-
-def _real_llama_cpp():
-    module = sys.modules.get("llama_cpp")
-    if module is not None and not isinstance(module, types.ModuleType):
-        return False
-    try:
-        import llama_cpp
-    except ImportError:
-        return False
-    return hasattr(llama_cpp, "Llama") and llama_cpp.Llama is not _FakeLlama
-
-
-@unittest.skipUnless(_real_llama_cpp(), "install wsbuilder[llm] to run a real GGUF model")
-class TestRealLlamaCpp(unittest.TestCase):
-    def test_a_model_written_by_gguf_writer_runs_in_llama_cpp(self):
-        directory = tempfile.mkdtemp()
-        store = ModelStore(os.path.join(directory, "models"))
-        self.addCleanup(store.close)
-        record = store.import_file(_tiny_llama(os.path.join(directory, "tiny.gguf")))
-        model = store.load(record.id, n_ctx=64, seed=1)
-        self.assertIsInstance(model.generate("hola", max_tokens=4, temperature=0), str)
-        self.assertIsInstance("".join(model.stream_chat("hola", max_tokens=4, temperature=0)), str)
-
-
 # -- HTTP endpoints ---------------------------------------------------------
-
-
-class _EchoBackend:
-    name = "echo"
-
-    def complete(self, prompt, *, stream=False, **options):
-        if stream:
-            return iter(["eco:", prompt])
-        return {"text": f"eco:{prompt}", "finish_reason": "stop", "usage": None}
-
-    def chat(self, messages, *, stream=False, **options):
-        last = messages[-1]["content"]
-        if stream:
-            return iter(["eco ", last])
-        return {"text": f"eco {last}", "finish_reason": "stop", "usage": {"total_tokens": 2}}
-
-    def close(self):
-        pass
 
 
 class TestInstallLlm(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.mkdtemp()
         self.store = ModelStore(os.path.join(self.directory, "models"))
-        self.store.import_file(_write(self.directory, "stored.gguf", _gguf_bytes("stored")))
+        self.store.import_file(_write(self.directory, "stored.ndjson", _model_bytes("stored")))
         self.app = App()
         self.addCleanup(self.app.close)
         self.app.enable_llm(
@@ -602,7 +477,7 @@ class TestInstallLlm(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([m["id"] for m in listing["models"]], ["stored"])
         self.assertEqual(listing["remote"], ["eco"])
-        self.assertEqual(json.loads(self.call("GET", "/api/llm/model?id=stored")[2])["format"], "gguf")
+        self.assertEqual(json.loads(self.call("GET", "/api/llm/model?id=stored")[2])["format"], "ndjson")
         self.assertEqual(self.call("GET", "/api/llm/model?id=nope")[0], 404)
 
     def test_chat_plain_and_streamed(self):
@@ -633,15 +508,15 @@ class TestInstallLlm(unittest.TestCase):
         self.assertEqual("".join(model.stream_chat("hola")), "eco hola")
 
     def test_download_endpoint_checks_hosts_and_scheme(self):
-        status, _type, body = self.call("POST", "/api/llm/download", {"url": "https://evil.example/x.gguf"})
+        status, _type, body = self.call("POST", "/api/llm/download", {"url": "https://evil.example/x.ndjson"})
         self.assertEqual(status, 403)
-        status, _type, _body = self.call("POST", "/api/llm/download", {"url": "http://huggingface.co/x.gguf"})
+        status, _type, _body = self.call("POST", "/api/llm/download", {"url": "http://huggingface.co/x.ndjson"})
         self.assertEqual(status, 400)
 
     def test_download_task_reports_its_outcome(self):
         # huggingface.co is allowed but unreachable from tests: the task fails cleanly.
         status, _type, body = self.call("POST", "/api/llm/download",
-                                        {"url": "https://huggingface.co/owner/repo/resolve/main/x.gguf"})
+                                        {"url": "https://huggingface.co/owner/repo/resolve/main/x.ndjson"})
         self.assertEqual(status, 202)
         task_id = json.loads(body)["task"]
         deadline = time.monotonic() + 30
@@ -654,7 +529,7 @@ class TestInstallLlm(unittest.TestCase):
         self.assertEqual(self.call("GET", "/api/llm/tasks?id=unknown")[0], 404)
 
     def test_import_and_delete(self):
-        path = _write(self.directory, "another.gguf", _gguf_bytes("another"))
+        path = _write(self.directory, "another.ndjson", _model_bytes("another"))
         status, _type, body = self.call("POST", "/api/llm/import", {"path": path})
         self.assertEqual((status, json.loads(body)["id"]), (201, "another"))
         self.assertEqual(self.call("POST", "/api/llm/import", {"path": "/no/such/file"})[0], 400)

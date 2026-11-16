@@ -6,16 +6,62 @@ API de OpenAI.
 
 | Pieza | Para que sirve | Dependencias |
 | --- | --- | --- |
-| `GGUFReader` / `GGUFWriter` | Leer y escribir archivos GGUF, el formato de llama.cpp y Ollama | Ninguna |
+| `ModelWriter` / `ModelReader` | Escribir y leer el formato de modelos de wsbuilder: un unico archivo NDJSON con el modelo y sus pesos | Ninguna |
 | `ModelStore` | Directorio de modelos: importar, descargar, exportar, verificar y borrar | Ninguna |
 | `download_file`, `huggingface_files` | Descargas reanudables y verificadas con SHA-256 | Ninguna |
 | `LanguageModel` + `OpenAICompatibleBackend` | Usar un modelo servido por Ollama, llama.cpp server, vLLM, LM Studio u OpenAI | Ninguna |
-| `LanguageModel` + `LlamaCppBackend` | Ejecutar un GGUF local en este proceso | `pip install 'wsbuilder[llm]'` |
+| `ModelStore(loader=...)` | Conectar los modelos guardados a tu propio motor de inferencia | La que use tu motor |
 | `install_llm` / `App.enable_llm` | Exponer los modelos por HTTP | Ninguna |
 
-Para ejecutar un LLM hace falta un motor de inferencia escrito en C/C++, y
-wsbuilder no intenta serlo. Todo lo demas funciona solo con la biblioteca
-estandar.
+Todo funciona solo con la biblioteca estandar.
+
+## El formato de modelos: NDJSON
+
+wsbuilder usa un solo formato para los modelos y sus pesos: un archivo
+**NDJSON** (JSON con un objeto por linea, extension `.ndjson`). No se aceptan
+GGUF, safetensors ni otros formatos.
+
+- **Linea 1, el modelo.** Formato, version, arquitectura, nombre, metadatos
+  libres y el numero de tensores que siguen.
+- **Lineas siguientes, los pesos.** Un tensor por linea con su nombre, su forma
+  (`shape`), su tipo (`dtype`) y sus valores en `data`, en una lista plana y en
+  orden por filas.
+
+```text
+{"format":"wsbuilder-model","version":1,"architecture":"wsbuilder.dense","name":"xor","metadata":{"loss":"mse","activations":["tanh","sigmoid"]},"tensor_count":4}
+{"tensor":"blk.0.weight","shape":[6,2],"dtype":"F64","data":[0.41,-1.2,...]}
+{"tensor":"blk.0.bias","shape":[6],"dtype":"F64","data":[0.03,...]}
+{"tensor":"blk.1.weight","shape":[1,6],"dtype":"F64","data":[...]}
+{"tensor":"blk.1.bias","shape":[1],"dtype":"F64","data":[-0.2]}
+```
+
+```python
+from wsbuilder import ModelReader, ModelWriter
+
+writer = ModelWriter(architecture="mi-modelo", name="demo")
+writer.add_metadata("context_length", 2048)            # cualquier valor JSON
+writer.add_tensor("capa.0.weight", [[0.1, 0.2], [0.3, 0.4]], dtype="F32")
+writer.add_tensor("capa.0.bias", [0.0, 0.0])
+writer.write("demo.ndjson")                            # escritura atomica
+
+with ModelReader("demo.ndjson") as model:
+    model.architecture, model.name, model.metadata
+    model.summary()                                    # parametros, dtypes, tamano...
+    model.tensor("capa.0.weight").shape                # (2, 2)
+    model.tensor("capa.0.weight").rows()               # [[0.1, 0.2], [0.3, 0.4]] (redondeado a F32)
+```
+
+- **Tipos.** `F64` (exacto), `F32` y `F16` (los valores se redondean a esa
+  precision al escribir), `I32` e `I64`. NaN e infinito, que JSON no admite,
+  se escriben como `"NaN"`, `"Infinity"` y `"-Infinity"`.
+- **Lectura por partes.** Al abrir, `ModelReader` valida cada linea (nombres,
+  tipos, formas y cantidad de valores) y recuerda donde empieza cada tensor;
+  `tensor(nombre).values()` solo vuelve a leer esa linea.
+- **Entrada no confiable.** Un archivo con lineas que no son JSON, tensores
+  repetidos, valores que no cuadran con la forma o un `tensor_count` distinto
+  del real se rechaza con `ModelFormatError`.
+- **Portable.** Es texto plano: cualquier lenguaje con un parser JSON puede
+  leerlo linea a linea, y `head -1 modelo.ndjson` muestra el modelo.
 
 ## Guardar modelos: el almacen
 
@@ -23,15 +69,17 @@ estandar.
 from wsbuilder import ModelStore
 
 store = ModelStore()          # $WSBUILDER_MODELS o ~/.cache/wsbuilder/models
-record = store.import_file("descargas/qwen2.5-0.5b-instruct-q4_k_m.gguf")
-print(record.id, record.summary["architecture"], record.summary["quantization"])
+record = store.import_file("descargas/mi-modelo.ndjson")
+print(record.id, record.summary["architecture"], record.summary["parameters"])
 
 for model in store.list():
     print(model.id, model.format, model.size, model.sha256)
 
 store.export(record.id, "/backup/")        # copia el archivo fuera del almacen
 store.verify(record.id)                    # recalcula el SHA-256
-store.rename(record.id, "Qwen 0.5B")
+store.rename(record.id, "Mi modelo")
+with store.open(record.id) as reader:      # ModelReader sobre el archivo guardado
+    reader.tensor("capa.0.weight").values()
 store.remove(record.id)
 ```
 
@@ -39,15 +87,14 @@ store.remove(record.id)
   formato, tamano, SHA-256, origen y un resumen de sus metadatos. Como no hay
   un indice compartido, no hay nada comun que se pueda corromper. Las
   escrituras pasan por archivos temporales y `os.replace`.
-- Se reconocen GGUF y safetensors. Otros formatos se rechazan salvo que se
-  pase `require_known_format=False`. Un archivo malformado nunca entra al
+- Solo se aceptan modelos NDJSON de wsbuilder. Otros archivos se rechazan
+  salvo que se pase `require_known_format=False` (quedan guardados con formato
+  `unknown`, pero no se pueden abrir). Un archivo malformado nunca entra al
   almacen.
 - `import_file(..., move=True)` mueve el archivo en vez de copiarlo.
 
-En un GGUF, el resumen incluye `name`, `architecture`, `parameters`,
-`quantization` (por ejemplo `Q4_K_M`), `context_length`, `embedding_length`,
-`block_count`, `attention_heads`, `tokenizer`, `vocabulary_size`,
-`chat_template`, `license` y `file_size`.
+El resumen incluye `name`, `architecture`, `parameters`, `tensors`, `dtypes`
+(valores por tipo), `metadata` y `file_size`.
 
 ## Descargar modelos
 
@@ -56,13 +103,13 @@ Desde Hugging Face:
 ```python
 from wsbuilder import ModelStore, huggingface_files
 
-files = huggingface_files("Qwen/Qwen2.5-0.5B-Instruct-GGUF", suffix=".gguf")
-# [{"path": "qwen2.5-0.5b-instruct-q4_k_m.gguf", "size": 491400032, "sha256": "..."}, ...]
+files = huggingface_files("usuario/mi-modelo", suffix=".ndjson")
+# [{"path": "mi-modelo.ndjson", "size": 1048576, "sha256": "..."}, ...]
 
 store = ModelStore()
 record = store.download_huggingface(
-    "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
-    "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    "usuario/mi-modelo",
+    "mi-modelo.ndjson",
     progress=lambda done, total: print(done, total),
 )
 ```
@@ -70,7 +117,7 @@ record = store.download_huggingface(
 Desde cualquier URL HTTPS:
 
 ```python
-record = store.download("https://example.com/modelo.gguf", sha256="...")
+record = store.download("https://example.com/modelo.ndjson", sha256="...")
 ```
 
 - **Verificacion.** `download_huggingface` toma de la API del Hub el SHA-256
@@ -87,15 +134,6 @@ record = store.download("https://example.com/modelo.gguf", sha256="...")
 
 ## Ejecutar modelos
 
-Un GGUF local con llama.cpp (`pip install 'wsbuilder[llm]'`):
-
-```python
-model = store.load(record.id, n_ctx=4096, n_gpu_layers=0)   # se cachea por id
-print(model.chat("Explica que es QUIC en una frase"))
-for piece in model.stream_chat([{"role": "user", "content": "Hola"}], max_tokens=64):
-    print(piece, end="", flush=True)
-```
-
 Un modelo servido por Ollama u otro servidor compatible con OpenAI:
 
 ```python
@@ -104,6 +142,25 @@ from wsbuilder import LanguageModel
 model = LanguageModel.from_openai("http://localhost:11434/v1", "llama3.2")
 print(model.chat("Hola"))
 ```
+
+Para conversar con un modelo guardado en el almacen, pasa un `loader` que lo
+convierta en un `LanguageModel` con el motor de inferencia que elijas. Recibe
+el `ModelRecord` (con `record.path` apuntando al archivo NDJSON) y las
+opciones de `load`:
+
+```python
+def loader(record, **options):
+    return LanguageModel(MiBackend(record.path, **options), name=record.id)
+
+store = ModelStore(loader=loader)
+model = store.load(record.id)              # se cachea por id
+for piece in model.stream_chat([{"role": "user", "content": "Hola"}], max_tokens=64):
+    print(piece, end="", flush=True)
+```
+
+Un backend es cualquier objeto con `complete(prompt, *, stream=False, **opciones)`,
+`chat(messages, *, stream=False, **opciones)` y `close()`. Sin `loader`,
+`store.load` lanza `NotImplementedError` y la API HTTP responde 501.
 
 | Metodo | Devuelve |
 | --- | --- |
@@ -125,7 +182,6 @@ app.enable_security(...)  # protege estas rutas antes de exponerlas
 app.enable_llm(
     ModelStore(),
     models={"llama3.2": LanguageModel.from_openai("http://localhost:11434/v1", "llama3.2")},
-    backend_options={"n_ctx": 4096},
 )
 app.run("0.0.0.0", 8765)
 ```
@@ -147,35 +203,15 @@ Las rutas que modifican el disco del servidor estan desactivadas por defecto:
 - `allow_import=True` activa `POST /api/llm/import` (`{"path"}`).
 - `allow_delete=True` activa `POST /api/llm/delete` (`{"id"}`).
 
-## Archivos GGUF y redes propias
+## Redes propias
+
+Las redes de `NeuralNetwork` se guardan en el mismo formato NDJSON, con la
+arquitectura `wsbuilder.dense`:
 
 ```python
-from wsbuilder import GGUFReader, GGUFWriter
+network.save("xor.ndjson", name="xor")          # dtype="F64" (exacto), "F32" o "F16"
+same = NeuralNetwork.load("xor.ndjson")          # mismas predicciones
 
-with GGUFReader("modelo.gguf") as gguf:
-    gguf.metadata["general.architecture"]
-    gguf.summary()
-    gguf.tensor("token_embd.weight").shape
-
-writer = GGUFWriter(architecture="mi-modelo")
-writer.add_metadata("general.name", "demo")
-writer.add_tensor("capa.0.weight", [0.1, 0.2, 0.3, 0.4], shape=(2, 2), ggml_type="F16")
-writer.write("demo.gguf")
-```
-
-- **Lectura sin cargar pesos.** El lector solo lee la cabecera y las tablas,
-  asi que abrir un modelo de varios GB es inmediato. Los arrays largos, como
-  el vocabulario, quedan como `GGUFArray` (tipo y longitud) salvo que se pase
-  `max_array_items=None`.
-- **Decodificacion de tensores.** `tensor.values()` decodifica F32, F16, BF16,
-  F64, I8 a I64, Q8_0 y Q4_0. Las cuantizaciones K e IQ se leen como bytes
-  crudos.
-- **Entrada no confiable.** Cada conteo y cada longitud se comprueban contra el
-  tamano del archivo antes de reservar memoria.
-
-Las redes de `NeuralNetwork` tambien se guardan en GGUF:
-
-```python
-network.save("xor.gguf", name="xor")          # dtype="F64" (exacto), "F32" o "F16"
-same = NeuralNetwork.load("xor.gguf")          # mismas predicciones
+record = store.import_file("xor.ndjson")
+same = store.load_network(record.id)
 ```

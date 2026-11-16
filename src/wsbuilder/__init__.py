@@ -62,7 +62,6 @@ from .framework import (
     parse_query_string,
     proxyi,
 )
-from .gguf import GGMLType, GGUFError, GGUFReader, GGUFWriter, read_gguf_metadata
 from .headers import add_header, get_header, has_header, normalize_header_name, set_header
 from .ia import (
     AudioData,
@@ -82,7 +81,6 @@ from .ia import (
 from .llm import (
     DownloadError,
     LanguageModel,
-    LlamaCppBackend,
     ModelRecord,
     ModelStore,
     OpenAICompatibleBackend,
@@ -94,6 +92,15 @@ from .llm import (
 from .logs import NDJSONLog, install_logs
 from .mdns import LocalMDNSServer, MDNSService, discover_mdns_services
 from .metrics import AppMetrics, install_metrics
+from .ndjson_model import (
+    MODEL_FORMAT,
+    ModelFormatError,
+    ModelReader,
+    ModelTensor,
+    ModelWriter,
+    is_model_file,
+    read_model_header,
+)
 from .orm import (
     SQL,
     BlobField,
@@ -296,14 +303,15 @@ __all__ = [
     "CBORTag",
     "cbor_dumps",
     "cbor_loads",
-    "GGMLType",
-    "GGUFError",
-    "GGUFReader",
-    "GGUFWriter",
-    "read_gguf_metadata",
+    "MODEL_FORMAT",
+    "ModelFormatError",
+    "ModelReader",
+    "ModelTensor",
+    "ModelWriter",
+    "is_model_file",
+    "read_model_header",
     "DownloadError",
     "LanguageModel",
-    "LlamaCppBackend",
     "ModelRecord",
     "ModelStore",
     "OpenAICompatibleBackend",

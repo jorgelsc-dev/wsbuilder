@@ -60,7 +60,7 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   http3_client.py       cliente HTTP/3 (Http3Client) con conexión QUIC reutilizada
   quic/                 address, client, connection, crypto, frames, packet, recovery, tls, varint
   rpc.py codec.py       RPC entre servicios (App.rpc, RpcClient) y codec CBOR (RFC 8949)
-  gguf.py llm.py        lector/escritor GGUF; LLM: ModelStore, descargas, backends, install_llm
+  ndjson_model.py llm.py formato único de modelos (NDJSON); LLM: ModelStore, descargas, backends, install_llm
   server.py             HTTPServer (TCP, TLS/ALPN, límites, keep-alive, apagado)
   ws.py                 WebSocket, frames, handshake, errores WebSocket*
   headers.py cookies.py helpers de cabeceras y cookies
@@ -101,7 +101,7 @@ tests, a `tests/`; los de docs, a `docs/`.
 | HTTP/3 y WebSocket sobre HTTP/3 | `http3.py`, `http3_server.py`, `http3_websocket.py`, `qpack.py` | `test_http3.py`, `test_http3_server.py`, `test_http3_streaming.py`, `test_http3_streaming_udp.py` | `http-versions.md` |
 | Transporte QUIC | `quic/` | `test_quic_protocol.py`, `test_quic_crypto.py`, `test_quic_tls.py`, `test_quic_recovery.py`, `test_quic_address.py` | `http-versions.md` |
 | Cliente QUIC/HTTP/3 y mTLS en QUIC | `quic/client.py`, `quic/tls.py`, `http3_client.py` | `test_quic_client.py` | `rpc.md` |
-| Modelos de lenguaje y GGUF | `llm.py`, `gguf.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_gguf.py` | `llm.md`, `ia.md` |
+| Modelos de lenguaje y formato NDJSON | `llm.py`, `ndjson_model.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ndjson_model.py` | `llm.md`, `ia.md` |
 | RPC entre servicios y codec CBOR | `rpc.py`, `codec.py`, `app.py` (`App.rpc`) | `test_rpc.py`, `test_codec.py`, `test_optional_extras.py` | `rpc.md` |
 | WebSocket y frames | `ws.py` | `test_ws.py`, `test_server.py` | `websocket.md` |
 | SQLite, ORM y réplicas | `orm.py`, `db_replicas.py` | `test_orm.py`, `test_orm_replicas.py` | `data-orm.md`, `persistence.md` |
@@ -343,28 +343,33 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   `transport="http1"` usan `http.client` con keep-alive por hilo y un reintento
   solo si una conexión reutilizada estaba cerrada. `call()` lanza `RpcError`
   (respuesta de error) o `RpcTransportError` (sin respuesta).
-- LLM (`llm.py`): `ModelStore(root=None)` (por defecto `$WSBUILDER_MODELS` o
-  `~/.cache/wsbuilder/models`) guarda cada modelo en `<raíz>/<id>/` con
-  `manifest.json` (sin índice compartido; escrituras atómicas). Métodos:
-  `import_file`, `download`, `download_huggingface` (SHA-256 del listado del Hub),
-  `list`, `get`, `export`, `verify`, `rename`, `remove`, `load` (cachea un
-  `LanguageModel` por id). `download_file` solo acepta `https://` (salvo
-  `allow_http`), reanuda con `Range` desde `.part` solo si hay SHA-256, limita
-  `max_bytes` y no reenvía `Authorization` en redirecciones a otro host.
-  `LanguageModel` (`generate`, `chat`, `chat_completion`, `stream_*`) usa
-  `LlamaCppBackend` (extra `llm`, `llama-cpp-python`, importado en diferido) u
-  `OpenAICompatibleBackend` (stdlib). `install_llm`/`App.enable_llm` sirven
-  `GET models|model`, `POST chat|generate` (NDJSON al hacer streaming) y
+- LLM (`llm.py`): `ModelStore(root=None, loader=None)` (por defecto
+  `$WSBUILDER_MODELS` o `~/.cache/wsbuilder/models`) guarda cada modelo en
+  `<raíz>/<id>/` con `manifest.json` (sin índice compartido; escrituras
+  atómicas). Solo acepta modelos NDJSON de wsbuilder (`require_known_format=False`
+  guarda otros como `unknown`). Métodos: `import_file`, `download`,
+  `download_huggingface` (SHA-256 del listado del Hub), `list`, `get`, `open`
+  (`ModelReader`), `load_network` (`NeuralNetwork`), `export`, `verify`,
+  `rename`, `remove`, `load` (llama a `loader(record, **opciones)` y cachea el
+  `LanguageModel` por id; sin `loader` lanza `NotImplementedError`, 501 por HTTP).
+  `download_file` solo acepta `https://` (salvo `allow_http`), reanuda con
+  `Range` desde `.part` solo si hay SHA-256, limita `max_bytes` y no reenvía
+  `Authorization` en redirecciones a otro host. `LanguageModel` (`generate`,
+  `chat`, `chat_completion`, `stream_*`) usa `OpenAICompatibleBackend` (stdlib)
+  o cualquier backend con `complete`/`chat`/`close`. `install_llm`/`App.enable_llm`
+  sirven `GET models|model`, `POST chat|generate` (NDJSON al hacer streaming) y
   `/v1/models`, `/v1/chat/completions` (SSE); `download`/`import`/`delete`
   solo con `allow_*=True`.
-- GGUF (`gguf.py`): `GGUFReader` lee cabecera y tablas sin cargar tensores,
-  valida conteos/longitudes contra el tamaño del archivo, deja arrays largos
-  como `GGUFArray` (`max_array_items`, 1024) y `summary()` resume arquitectura,
-  cuantización, contexto y vocabulario. `GGUFWriter` escribe GGUF v3 alineado
-  (atómico a ruta). Decodifica F32/F16/BF16/F64/I8-I64/Q8_0/Q4_0. Interoperable
-  con `gguf-py` de llama.cpp en ambos sentidos; llama.cpp ejecuta modelos
-  escritos con `GGUFWriter` (`TestRealLlamaCpp`, se omite sin el extra).
-  `NeuralNetwork.save`/`load` usan la arquitectura `wsbuilder.dense`.
+- Formato de modelos (`ndjson_model.py`): único formato de modelo y pesos del
+  proyecto. Archivo NDJSON: línea 1 `{"format": "wsbuilder-model", "version": 1,
+  "architecture", "name", "metadata", "tensor_count"}`; cada línea siguiente un
+  tensor `{"tensor", "shape", "dtype", "data"}` (lista plana, orden por filas).
+  dtypes `F64`/`F32`/`F16` (redondeo al escribir) e `I32`/`I64`; NaN/infinito
+  como cadenas. `ModelReader` valida todas las líneas al abrir, indexa offsets
+  y lee cada tensor bajo demanda; `ModelWriter` escribe de forma atómica.
+  Errores: `ModelFormatError` (subclase de `ValueError`). `NeuralNetwork.save`/
+  `load` usan la arquitectura `wsbuilder.dense` (`blk.N.weight` con forma
+  `[salidas, entradas]` y `blk.N.bias`).
 - CBOR (`codec.py`): `cbor_dumps`/`cbor_loads`, forma preferida (más corta),
   bignums con tags 2/3, `CBORTag`, `CBORSimple`; el decoder comprueba longitudes
   antes de reservar, limita `max_depth` (256) y rechaza bytes sobrantes. Es
@@ -433,8 +438,6 @@ literales del cache, incluidos `%`, `_` y barras invertidas. `QuerySet.count()`,
 - Extra `tls`: `cryptography>=43`, utilizado únicamente por `pki.py`, `quic/`,
   `http3_server.py` y `http3_client.py` (`rpc.py` lo importa solo para HTTP/3). Los helpers PKI de la API pública se cargan de forma diferida
   para que importar el núcleo no requiera este extra.
-- Extra `llm`: `llama-cpp-python>=0.3`, importado solo por `LlamaCppBackend`
-  en `llm.py`; almacenar, descargar y leer/escribir GGUF no lo necesitan.
 - Extra `mdns`: `zeroconf>=0.131`, utilizado únicamente por `mdns.py`; su backend
   sigue siendo opcional al importar el paquete.
 - Herramientas permitidas: `setuptools`, `wheel`, `build`, `twine`, `pytest`,

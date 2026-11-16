@@ -1,26 +1,26 @@
-"""Large language models: import, store, download and run them.
+"""Language models: import, store, download and run them.
 
-Three independent pieces:
+Every model in wsbuilder is one NDJSON file (see :mod:`wsbuilder.ndjson_model`):
+the first line describes the model and each following line holds one tensor
+of weights. Three independent pieces work with those files:
 
 * :class:`ModelStore` keeps model files in one directory, each with a JSON
   manifest (name, format, size, SHA-256, source and a metadata summary read
   from the file). Files can be imported from disk, downloaded, exported and
-  removed. GGUF (llama.cpp, Ollama) and safetensors files are recognized.
+  removed. Only wsbuilder NDJSON model files are accepted.
 * :func:`download_file` and :func:`huggingface_files` fetch models from any
   HTTPS URL or from the Hugging Face Hub: resumable, size-limited, verified
   against the SHA-256 the Hub publishes, and never leaking a token across a
   redirect to another host.
-* :class:`LanguageModel` runs a model through a backend: a local GGUF file
-  through ``llama-cpp-python`` (optional extra ``wsbuilder[llm]``), or any
-  server speaking the OpenAI API (Ollama, llama.cpp's server, vLLM, LM Studio,
-  OpenAI itself) with the standard library only.
+* :class:`LanguageModel` runs a model through a backend: any server speaking
+  the OpenAI API (Ollama, llama.cpp's server, vLLM, LM Studio, OpenAI itself)
+  with the standard library only, or a stored model through a ``loader``
+  given to the store.
 
 :func:`install_llm` exposes a store and its models over HTTP, including an
 OpenAI-compatible ``/v1/chat/completions`` endpoint.
 
-Running a language model needs an inference engine written in C/C++; this
-module does not try to be one. Everything else — reading and writing GGUF,
-storing, downloading, serving — needs nothing outside the standard library.
+Everything here needs nothing outside the standard library.
 """
 
 import hashlib
@@ -28,7 +28,6 @@ import json
 import os
 import re
 import shutil
-import struct
 import threading
 import time
 import urllib.error
@@ -36,13 +35,12 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from .gguf import GGUF_MAGIC, GGUFError, GGUFReader
+from .ndjson_model import ModelFormatError, ModelReader, is_model_file
 
 __all__ = [
     "DEFAULT_HF_ENDPOINT",
     "DownloadError",
     "LanguageModel",
-    "LlamaCppBackend",
     "ModelRecord",
     "ModelStore",
     "OpenAICompatibleBackend",
@@ -52,7 +50,7 @@ __all__ = [
     "huggingface_files",
     "huggingface_url",
     "install_llm",
-    "read_safetensors_header",
+    "summarize_model_file",
 ]
 
 DEFAULT_HF_ENDPOINT = "https://huggingface.co"
@@ -80,88 +78,16 @@ def default_model_root():
 # -- file formats -----------------------------------------------------------
 
 
-def read_safetensors_header(path, *, max_header_bytes=100 * 1024 * 1024):
-    """The JSON header of a safetensors file, checked against the file size."""
-    size = os.path.getsize(path)
-    with open(path, "rb") as handle:
-        prefix = handle.read(8)
-        if len(prefix) != 8:
-            raise ValueError("not a safetensors file")
-        (length,) = struct.unpack("<Q", prefix)
-        if length > max_header_bytes or 8 + length > size:
-            raise ValueError("safetensors header length is out of range")
-        raw = handle.read(length)
-    try:
-        header = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise ValueError("safetensors header is not JSON") from exc
-    if not isinstance(header, dict):
-        raise ValueError("safetensors header is not an object")
-    data_size = size - 8 - length
-    for name, entry in header.items():
-        if name == "__metadata__":
-            continue
-        offsets = entry.get("data_offsets") if isinstance(entry, dict) else None
-        if (
-            not isinstance(offsets, list)
-            or len(offsets) != 2
-            or not 0 <= offsets[0] <= offsets[1] <= data_size
-        ):
-            raise ValueError(f"safetensors tensor {name!r} has bad offsets")
-    return header
-
-
-def _safetensors_summary(path):
-    header = read_safetensors_header(path)
-    parameters = 0
-    dtypes = {}
-    tensors = 0
-    for name, entry in header.items():
-        if name == "__metadata__":
-            continue
-        tensors += 1
-        count = 1
-        for dim in entry.get("shape", []):
-            count *= int(dim)
-        parameters += count
-        dtype = str(entry.get("dtype"))
-        dtypes[dtype] = dtypes.get(dtype, 0) + count
-    metadata = header.get("__metadata__") if isinstance(header.get("__metadata__"), dict) else {}
-    return {
-        "format": "safetensors",
-        "parameters": parameters,
-        "tensors": tensors,
-        "dtypes": dtypes,
-        "metadata": metadata,
-        "file_size": os.path.getsize(path),
-    }
-
-
 def detect_model_format(path):
-    """``"gguf"``, ``"safetensors"`` or ``"unknown"``, from the file's content."""
-    with open(path, "rb") as handle:
-        head = handle.read(9)
-    if head[:4] == GGUF_MAGIC:
-        return "gguf"
-    if len(head) >= 9 and head[8:9] == b"{":
-        try:
-            read_safetensors_header(path)
-            return "safetensors"
-        except ValueError:
-            pass
-    return "unknown"
+    """``"ndjson"`` for a wsbuilder model file, else ``"unknown"``."""
+    return "ndjson" if is_model_file(path) else "unknown"
 
 
 def summarize_model_file(path):
-    """A metadata summary of a model file (empty for unknown formats)."""
-    kind = detect_model_format(path)
-    if kind == "gguf":
-        with GGUFReader(path) as reader:
-            summary = reader.summary()
-        summary.pop("tensor_types", None)
-        return summary
-    if kind == "safetensors":
-        return _safetensors_summary(path)
+    """A metadata summary of a model file (just its size for other files)."""
+    if detect_model_format(path) == "ndjson":
+        with ModelReader(path) as reader:
+            return reader.summary()
     return {"format": "unknown", "file_size": os.path.getsize(path)}
 
 
@@ -339,7 +265,7 @@ def huggingface_files(repo, *, revision="main", endpoint=None, token=None, timeo
 
     ``sha256`` is the LFS object id the Hub publishes for large files (every
     model weight file); pass it to :func:`download_file` to verify the bytes.
-    ``suffix`` filters by extension, e.g. ``".gguf"``.
+    ``suffix`` filters by extension, e.g. ``".ndjson"``.
     """
     endpoint = (endpoint or os.environ.get("HF_ENDPOINT") or DEFAULT_HF_ENDPOINT).rstrip("/")
     repo = str(repo).strip("/")
@@ -444,13 +370,20 @@ class ModelStore:
     """A directory of model files, one sub-directory per model.
 
     ``root`` defaults to :func:`default_model_root`. Every model directory
-    holds the file and a ``manifest.json``; there is no shared index to
-    corrupt, and writes go through temporary files and ``os.replace``.
+    holds the NDJSON model file and a ``manifest.json``; there is no shared
+    index to corrupt, and writes go through temporary files and
+    ``os.replace``.
+
+    ``loader(record, **options)`` turns a stored model into a ready
+    :class:`LanguageModel` (or any object with its interface) for
+    :meth:`load`; without one, stored models can be kept, served and read
+    (:meth:`open`, :meth:`load_network`) but not chatted with.
     """
 
-    def __init__(self, root=None):
+    def __init__(self, root=None, *, loader=None):
         self.root = os.path.abspath(os.fspath(root)) if root is not None else default_model_root()
         os.makedirs(self.root, exist_ok=True)
+        self.loader = loader
         self._lock = threading.RLock()
         self._loaded = {}
 
@@ -520,10 +453,10 @@ class ModelStore:
         """Move a staged file into its model directory and write the manifest."""
         kind = detect_model_format(staged_path)
         if require_known_format and kind == "unknown":
-            raise ValueError("not a GGUF or safetensors file (pass require_known_format=False)")
+            raise ValueError("not a wsbuilder NDJSON model file (pass require_known_format=False)")
         try:
             summary = summarize_model_file(staged_path)
-        except (GGUFError, ValueError) as exc:
+        except (ModelFormatError, ValueError) as exc:
             raise ValueError(f"the model file is malformed: {exc}") from exc
         digest = sha256 or _sha256_of(staged_path)
         with self._lock:
@@ -580,7 +513,7 @@ class ModelStore:
                  allow_http=False, cancel_event=None, require_known_format=True):
         """Download a model file from a URL into the store."""
         filename = _safe_filename(
-            filename or os.path.basename(urllib.parse.urlsplit(str(url)).path) or "model.bin"
+            filename or os.path.basename(urllib.parse.urlsplit(str(url)).path) or "model.ndjson"
         )
         # A stable staging name per URL lets an interrupted download resume.
         key = hashlib.sha256(f"{url}|{sha256 or ''}".encode()).hexdigest()[:16]
@@ -669,33 +602,52 @@ class ModelStore:
 
     # -- running -------------------------------------------------------
 
+    def open(self, model_id):
+        """A :class:`~wsbuilder.ndjson_model.ModelReader` on a stored model."""
+        return ModelReader(self.get(model_id).path)
+
+    def load_network(self, model_id, **options):
+        """A stored ``wsbuilder.dense`` model as a :class:`~wsbuilder.ia.NeuralNetwork`."""
+        from .ia import NeuralNetwork
+
+        return NeuralNetwork.load(self.get(model_id).path, **options)
+
     def load(self, model_id, **backend_options):
-        """A :class:`LanguageModel` for a stored GGUF model (needs llama-cpp-python).
+        """A :class:`LanguageModel` for a stored model, built by ``loader``.
 
         Loaded models are cached per id; :meth:`unload` releases one.
+        Raises ``NotImplementedError`` when the store has no ``loader``.
         """
         with self._lock:
             model = self._loaded.get(model_id)
             if model is not None:
                 return model
             record = self.get(model_id)
-            if record.format != "gguf":
-                raise ValueError(f"{model_id!r} is {record.format}; llama.cpp runs GGUF files")
-            model = LanguageModel(LlamaCppBackend(record.path, **backend_options), name=record.id)
+            if self.loader is None:
+                raise NotImplementedError(
+                    f"no loader runs stored models; create the store with "
+                    f"ModelStore(loader=...) to chat with {model_id!r}"
+                )
+            model = self.loader(record, **backend_options)
             self._loaded[model_id] = model
             return model
 
     def unload(self, model_id):
         with self._lock:
             model = self._loaded.pop(model_id, None)
-        if model is not None:
-            model.close()
+        _close(model)
 
     def close(self):
         with self._lock:
             loaded, self._loaded = self._loaded, {}
         for model in loaded.values():
-            model.close()
+            _close(model)
+
+
+def _close(model):
+    closer = getattr(model, "close", None)
+    if callable(closer):
+        closer()
 
 
 # -- backends ---------------------------------------------------------------
@@ -705,72 +657,6 @@ def _generation_options(options):
     allowed = ("max_tokens", "temperature", "top_p", "top_k", "stop", "seed", "repeat_penalty",
                "presence_penalty", "frequency_penalty")
     return {key: options[key] for key in allowed if options.get(key) is not None}
-
-
-class LlamaCppBackend:
-    """A local GGUF model run by ``llama-cpp-python`` (``pip install wsbuilder[llm]``)."""
-
-    name = "llama.cpp"
-
-    def __init__(self, model_path, *, n_ctx=4096, n_gpu_layers=0, n_threads=None, chat_format=None,
-                 verbose=False, **options):
-        try:
-            import llama_cpp
-        except ImportError as exc:
-            raise ImportError(
-                "running GGUF models needs llama-cpp-python. "
-                "Install it with: pip install wsbuilder[llm]"
-            ) from exc
-        self.model_path = os.fspath(model_path)
-        self._lock = threading.Lock()
-        self._llama = llama_cpp.Llama(
-            model_path=self.model_path,
-            n_ctx=int(n_ctx),
-            n_gpu_layers=int(n_gpu_layers),
-            n_threads=n_threads,
-            chat_format=chat_format,
-            verbose=bool(verbose),
-            **options,
-        )
-
-    def complete(self, prompt, *, stream=False, **options):
-        params = _generation_options(options)
-        if not stream:
-            with self._lock:
-                result = self._llama(prompt, **params)
-            choice = result["choices"][0]
-            return {"text": choice.get("text", ""), "finish_reason": choice.get("finish_reason"),
-                    "usage": result.get("usage")}
-        return self._stream(lambda: self._llama(prompt, stream=True, **params), "text")
-
-    def chat(self, messages, *, stream=False, **options):
-        params = _generation_options(options)
-        if not stream:
-            with self._lock:
-                result = self._llama.create_chat_completion(messages=list(messages), **params)
-            choice = result["choices"][0]
-            return {"text": choice["message"].get("content") or "",
-                    "finish_reason": choice.get("finish_reason"), "usage": result.get("usage")}
-        return self._stream(
-            lambda: self._llama.create_chat_completion(messages=list(messages), stream=True, **params),
-            "delta",
-        )
-
-    def _stream(self, start, kind):
-        # llama.cpp contexts are not thread-safe: hold the lock while the
-        # generator runs, and release it even if the consumer stops early.
-        with self._lock:
-            for chunk in start():
-                choice = chunk["choices"][0]
-                piece = choice.get("text", "") if kind == "text" else (choice.get("delta") or {}).get("content")
-                if piece:
-                    yield piece
-
-    def close(self):
-        llama, self._llama = getattr(self, "_llama", None), None
-        closer = getattr(llama, "close", None)
-        if callable(closer):
-            closer()
 
 
 class OpenAICompatibleBackend:
@@ -868,10 +754,6 @@ class LanguageModel:
         self.name = name or getattr(backend, "model", None) or getattr(backend, "name", "model")
 
     @classmethod
-    def from_gguf(cls, path, **options):
-        return cls(LlamaCppBackend(path, **options), name=os.path.basename(os.fspath(path)))
-
-    @classmethod
     def from_openai(cls, base_url, model, **options):
         return cls(OpenAICompatibleBackend(base_url, model, **options), name=model)
 
@@ -963,7 +845,7 @@ def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_downlo
             model = model_for(name)
         except KeyError:
             return None, error(404, f"unknown model {name!r}")
-        except ImportError as exc:
+        except (ImportError, NotImplementedError) as exc:
             return None, error(501, str(exc))
         options = {key: payload[key] for key in ("max_tokens", "temperature", "top_p", "top_k",
                                                  "stop", "seed") if key in payload}
