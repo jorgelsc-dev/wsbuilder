@@ -739,92 +739,76 @@ class NeuralNetwork:
         self.layers.append(layer)
         return layer
 
-    # -- persistence (GGUF) ---------------------------------------------
+    # -- persistence (NDJSON) -------------------------------------------
 
-    GGUF_ARCHITECTURE = "wsbuilder.dense"
+    MODEL_ARCHITECTURE = "wsbuilder.dense"
 
-    def to_gguf(self, *, dtype="F64", name=None):
-        """A :class:`~wsbuilder.gguf.GGUFWriter` holding this network.
+    def to_model(self, *, dtype="F64", name=None):
+        """A :class:`~wsbuilder.ndjson_model.ModelWriter` holding this network.
 
-        Weights are stored as ``blk.N.weight`` (shape ``[inputs, outputs]``)
-        and ``blk.N.bias``; ``dtype`` is ``"F64"`` (exact), ``"F32"`` or
-        ``"F16"`` (smaller files, rounded weights).
+        Weights are stored as ``blk.N.weight`` (shape ``[outputs, inputs]``,
+        one row per neuron) and ``blk.N.bias``; ``dtype`` is ``"F64"``
+        (exact), ``"F32"`` or ``"F16"`` (rounded weights).
         """
-        import json as _json
-
-        from .gguf import GGMLType, GGUFValueType, GGUFWriter
+        from .ndjson_model import ModelWriter
 
         if not self.layers:
             raise ValueError("the network has no layers to save")
-        ggml_type = GGMLType.from_name(dtype)
-        arch = self.GGUF_ARCHITECTURE
-        writer = GGUFWriter(architecture=arch)
-        if name:
-            writer.add_metadata("general.name", str(name))
-        writer.add_metadata(f"{arch}.loss", self.loss)
-        writer.add_metadata(f"{arch}.task", self.task)
-        writer.add_metadata(f"{arch}.learning_rate", self.learning_rate, GGUFValueType.FLOAT64)
-        writer.add_metadata(
-            f"{arch}.classification_threshold", self.classification_threshold, GGUFValueType.FLOAT64
-        )
-        writer.add_metadata(f"{arch}.layer_count", len(self.layers))
-        writer.add_metadata(
-            f"{arch}.activations", [layer.activation for layer in self.layers],
-            item_type=GGUFValueType.STRING,
-        )
+        writer = ModelWriter(architecture=self.MODEL_ARCHITECTURE, name=name)
+        writer.add_metadata("loss", self.loss)
+        writer.add_metadata("task", self.task)
+        writer.add_metadata("learning_rate", float(self.learning_rate))
+        writer.add_metadata("classification_threshold", float(self.classification_threshold))
+        writer.add_metadata("layer_count", len(self.layers))
+        writer.add_metadata("activations", [layer.activation for layer in self.layers])
         if self._class_labels is not None:
-            writer.add_metadata(f"{arch}.class_labels_json", _json.dumps(list(self._class_labels)))
+            writer.add_metadata("class_labels", list(self._class_labels))
         for index, layer in enumerate(self.layers):
             flat = [value for row in layer.weights for value in row]
             writer.add_tensor(
-                f"blk.{index}.weight", flat, shape=(layer.input_size, layer.output_size),
-                ggml_type=ggml_type,
+                f"blk.{index}.weight", flat, shape=(layer.output_size, layer.input_size), dtype=dtype
             )
             writer.add_tensor(f"blk.{index}.bias", layer.biases, shape=(layer.output_size,),
-                              ggml_type=ggml_type)
+                              dtype=dtype)
         return writer
 
     def save(self, path, *, dtype="F64", name=None):
-        """Write the network to a GGUF file (atomically)."""
-        self.to_gguf(dtype=dtype, name=name).write(path)
+        """Write the network (model and weights) to an NDJSON file, atomically."""
+        self.to_model(dtype=dtype, name=name).write(path)
         return path
 
     @classmethod
     def load(cls, path, *, seed=None):
         """Read a network written by :meth:`save`."""
-        import json as _json
+        from .ndjson_model import ModelReader
 
-        from .gguf import GGUFReader
-
-        arch = cls.GGUF_ARCHITECTURE
-        with GGUFReader(path) as reader:
-            if reader.architecture != arch:
+        with ModelReader(path) as reader:
+            if reader.architecture != cls.MODEL_ARCHITECTURE:
                 raise ValueError(f"not a wsbuilder network (architecture {reader.architecture!r})")
             meta = reader.metadata
             network = cls(
                 seed=seed,
-                learning_rate=meta.get(f"{arch}.learning_rate", 0.1),
-                loss=meta.get(f"{arch}.loss", "mse"),
-                task=meta.get(f"{arch}.task", "regression"),
-                classification_threshold=meta.get(f"{arch}.classification_threshold", 0.5),
+                learning_rate=meta.get("learning_rate", 0.1),
+                loss=meta.get("loss", "mse"),
+                task=meta.get("task", "regression"),
+                classification_threshold=meta.get("classification_threshold", 0.5),
             )
-            activations = meta.get(f"{arch}.activations") or []
-            count = int(meta.get(f"{arch}.layer_count", len(activations)))
+            activations = meta.get("activations") or []
+            count = int(meta.get("layer_count", len(activations)))
             if len(activations) != count:
                 raise ValueError("layer_count does not match the activations")
             for index in range(count):
                 weight = reader.tensor(f"blk.{index}.weight")
                 bias = reader.tensor(f"blk.{index}.bias")
-                if len(weight.shape) != 2 or bias.shape != (weight.shape[1],):
+                if len(weight.shape) != 2 or bias.shape != (weight.shape[0],):
                     raise ValueError(f"layer {index} has inconsistent shapes")
-                inputs, outputs = weight.shape
+                outputs, inputs = weight.shape
                 layer = network.add_dense(outputs, input_size=inputs, activation=activations[index])
-                values = [float(v) for v in weight.values()]
-                layer.weights = [values[row * inputs:(row + 1) * inputs] for row in range(outputs)]
+                layer.weights = [[float(v) for v in row] for row in weight.rows()]
                 layer.biases = [float(v) for v in bias.values()]
-            labels = meta.get(f"{arch}.class_labels_json")
-            if labels:
-                network._class_labels = _json.loads(labels)
+            labels = meta.get("class_labels")
+            if labels is not None:
+                network._class_labels = list(labels)
         return network
 
     def _coerce_dataset(self, X, Y=None):

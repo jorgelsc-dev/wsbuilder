@@ -16,8 +16,8 @@ WSBuilder incluye herramientas sencillas de data science y redes neuronales hech
 - `ByteTokenizer`
 - `HashingTextVectorizer`
 - `AudioData`, `load_wav`, `audio_features`
-- `NeuralNetwork.save`, `NeuralNetwork.load` (GGUF)
-- [Modelos de lenguaje](llm.md): `ModelStore`, `LanguageModel`, `GGUFReader`, `GGUFWriter`
+- `NeuralNetwork.save`, `NeuralNetwork.load` (NDJSON)
+- [Modelos de lenguaje](llm.md): `ByteLanguageModel` (motor nativo), `ModelStore`, `LanguageModel`, `ModelReader`, `ModelWriter`
 
 ## Texto, tokens y audio
 
@@ -31,19 +31,21 @@ Consulta los [ejemplos de texto y audio](ai-predict.md#texto-unicode-y-tokens).
 Estos adaptadores preparan datos: no incorporan un modelo de conversacion,
 traduccion, reconocimiento de voz, generacion de audio, imagen o video.
 
-## Modelos de lenguaje y archivos GGUF
+## Modelos y pesos en NDJSON
 
-Para modelos de lenguaje (LLM) existe [`wsbuilder.llm`](llm.md). Permite
-importar, guardar, exportar y descargar modelos GGUF y safetensors (por ejemplo
-desde Hugging Face, con verificacion SHA-256), ejecutarlos con llama.cpp
-(extra `wsbuilder[llm]`) o mediante un servidor compatible con OpenAI como
-Ollama, y servirlos por HTTP.
+wsbuilder guarda todos los modelos en un unico formato: un archivo
+[NDJSON](llm.md#el-formato-de-modelos-ndjson) cuya primera linea describe el
+modelo y cada linea siguiente contiene un tensor de pesos. Para texto existe
+`ByteLanguageModel`, el modelo de lenguaje nativo de wsbuilder: se entrena,
+genera texto y conversa en Python puro, sin motores externos. Con
+[`wsbuilder.llm`](llm.md) los modelos se guardan, descargan (con verificacion
+SHA-256), ejecutan y sirven por HTTP con una API compatible con OpenAI.
 
-Las redes propias tambien se guardan y cargan en GGUF:
+Las redes propias se guardan y cargan en ese formato:
 
 ```python
-network.save("modelo.gguf", name="mi-red")
-network = NeuralNetwork.load("modelo.gguf")
+network.save("modelo.ndjson", name="mi-red")
+network = NeuralNetwork.load("modelo.ndjson")
 ```
 
 ## Datos
