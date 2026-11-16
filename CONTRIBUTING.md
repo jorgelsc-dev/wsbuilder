@@ -40,7 +40,10 @@ Before opening a PR, run the checks that apply to the area you touched.
 
 ## Security
 
-Do not report vulnerabilities in public issues. Use a private channel and keep the report minimal until triage.
+Do not report vulnerabilities in public issues. Report them privately as described in
+[`.github/SECURITY.md`](.github/SECURITY.md), through
+<https://github.com/jorgelsc-dev/wsbuilder/security/advisories/new>, and keep the report
+minimal until triage.
 
 ## Optional financial support
 

@@ -24,23 +24,23 @@ Sirve para crear:
 
 La documentacion esta organizada por nivel:
 
-- [Principiantes](docs/beginners.md): instala, crea la primera app y entiende
+- [Principiantes](https://wsbuilder.jorgelsc.dev/beginners/): instala, crea la primera app y entiende
   rutas `view` y `api`.
-- [Intermedios](docs/intermediate.md): agrega SQLite, cache, seguridad, metricas,
+- [Intermedios](https://wsbuilder.jorgelsc.dev/intermediate/): agrega SQLite, cache, seguridad, metricas,
   logs y tareas.
-- [Avanzados](docs/advanced.md): configura limites HTTP, TLS, worker pools, DNS,
+- [Avanzados](https://wsbuilder.jorgelsc.dev/advanced/): configura limites HTTP, TLS, worker pools, DNS,
   ProxyI, replicas SQLite y operacion.
 
 Tambien puedes leer:
 
-- [Que puedes hacer con wsbuilder](docs/capabilities.md)
-- [Instalacion](docs/install.md)
-- [Arquitectura](docs/architecture.md)
-- [API publica](docs/api-map.md)
-- [mDNS y DNS-SD](docs/mdns.md) (extra opcional `wsbuilder[mdns]`)
-- [Modelos de lenguaje (LLM)](docs/llm.md) (motor nativo, formato NDJSON, API compatible con OpenAI)
-- [RPC entre servicios](docs/rpc.md) (CBOR sobre HTTP/3; HTTP/3 usa el extra `wsbuilder[tls]`)
-- [Proyecto integral](docs/full-project.md)
+- [Que puedes hacer con wsbuilder](https://wsbuilder.jorgelsc.dev/capabilities/)
+- [Instalacion](https://wsbuilder.jorgelsc.dev/install/)
+- [Arquitectura](https://wsbuilder.jorgelsc.dev/architecture/)
+- [API publica](https://wsbuilder.jorgelsc.dev/api-map/)
+- [mDNS y DNS-SD](https://wsbuilder.jorgelsc.dev/mdns/) (extra opcional `wsbuilder[mdns]`)
+- [Modelos de lenguaje (LLM)](https://wsbuilder.jorgelsc.dev/llm/) (motor nativo, formato NDJSON, API compatible con OpenAI)
+- [RPC entre servicios](https://wsbuilder.jorgelsc.dev/rpc/) (CBOR sobre HTTP/3; HTTP/3 usa el extra `wsbuilder[tls]`)
+- [Proyecto integral](https://wsbuilder.jorgelsc.dev/full-project/)
 
 ## Instalacion rapida
 
@@ -128,7 +128,7 @@ La demo incluye:
 | Cache | `cache.py`, `caches.py` | `SQLiteMemoryCache`, `ViewResponseCache` |
 | Seguridad | `security.py` | `SecurityPolicy`, `ACLRule`, `SecurityDecision` |
 | Observabilidad | `metrics.py`, `logs.py`, `tasks.py` | `AppMetrics`, `NDJSONLog`, `TaskManager` |
-| Red y edge | `dns.py`, `mdns.py`, `proxyi.py` | `LocalDNSServer`, `LocalMDNSServer`, `discover_mdns_services`, `ProxyI` |
+| Red y edge | `dns.py`, `mdns.py`, `proxyi/` | `LocalDNSServer`, `LocalMDNSServer`, `discover_mdns_services`, `ProxyI` |
 | Entre servicios | `rpc.py`, `codec.py`, `http3_client.py` | `App.rpc`, `RpcClient`, `RpcError`, `cbor_dumps`, `Http3Client` |
 | IA y prediccion | `ia.py`, `predicts.py` | `DataSet`, `NeuralNetwork`, `Predictor` |
 | Modelos de lenguaje | `llm.py`, `ia_lm.py`, `ndjson_model.py` | `ByteLanguageModel`, `ModelStore`, `LanguageModel`, `ModelReader`, `ModelWriter`, `App.enable_llm` |
@@ -153,7 +153,7 @@ with RpcClient("https://users.internal:8443", trust=ca) as users:
     user = users.call("/users.get", {"id": 7})
 ```
 
-Detalles, mTLS y limites en [RPC entre servicios](docs/rpc.md).
+Detalles, mTLS y limites en [RPC entre servicios](https://wsbuilder.jorgelsc.dev/rpc/).
 
 ## Ejemplo con datos
 
@@ -208,7 +208,7 @@ python -m build --no-isolation
 python -m pip install --no-index dist/wsbuilder-*.whl
 ```
 
-La guia completa esta en [docs/install.md](docs/install.md).
+La guia completa esta en [Instalacion](https://wsbuilder.jorgelsc.dev/install/).
 
 ## Desarrollo
 

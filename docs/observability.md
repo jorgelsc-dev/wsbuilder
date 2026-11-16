@@ -16,6 +16,24 @@ Eso crea:
 - `GET /api/metrics`
 - `GET /api/metrics/stream`
 
+### Acceso a las metricas
+
+Las metricas describen rutas, errores y, con ProxyI, los upstreams, asi que por
+defecto **solo responden a loopback y redes privadas** (10/8, 172.16/12,
+192.168/16, fc00::/7...). El resto recibe `403`. Detras de un proxy, activa
+la seguridad con `trust_x_forwarded_for=True` y `trusted_proxy_cidrs=[...]` para que se use la IP real del cliente.
+
+```python
+app.enable_metrics(access="*")                        # publico
+app.enable_metrics(access=["203.0.113.0/24"])          # redes concretas
+app.enable_metrics(access="*", token="s3cret")         # Authorization: Bearer s3cret
+app.enable_metrics(authorize=lambda request: request.headers.get("x-ops") == "1")
+```
+
+El stream NDJSON esta acotado: como maximo `max_streams=4` a la vez (el resto
+recibe `429` con `Retry-After`), y cada uno se cierra tras
+`max_stream_seconds=300`, incluso con `follow=1`.
+
 ## `AppMetrics`
 
 `AppMetrics` registra:

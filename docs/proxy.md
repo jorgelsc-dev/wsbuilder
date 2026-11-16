@@ -105,6 +105,13 @@ proxy.route(name="lb", path_prefix="/api", balance="least_response_time") \
 
 Tambien puedes montar la instancia sobre un `App` con `proxy.install(app)`.
 
+El dashboard y las metricas muestran los upstreams y su estado, asi que por
+defecto solo responden a loopback y redes privadas. Ajustalo con
+`ProxyI(access="*")`, `ProxyI(access=["10.0.0.0/8"], token="...")`,
+`ProxyI(authorize=funcion)` o los mismos argumentos en `install_proxyi(...)`.
+El codigo esta repartido en `wsbuilder.proxyi._common`, `stats`, `routing` y
+`core`, pero todo se sigue importando desde `wsbuilder.proxyi`.
+
 ## Snapshot
 
 `proxy.snapshot()` devuelve:

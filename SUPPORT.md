@@ -7,7 +7,8 @@
 
 ## Security
 
-Do not report security issues publicly. Use the private security process described in `CONTRIBUTING.md`.
+Do not report security issues publicly. Follow [`.github/SECURITY.md`](.github/SECURITY.md) and use
+[GitHub private vulnerability reporting](https://github.com/jorgelsc-dev/wsbuilder/security/advisories/new).
 
 ## Donations
 

@@ -8,24 +8,49 @@ edit_uri: edit/main/docs/
 
 nav:
   - Inicio: index.md
-  - Guia:
+  - Ruta de aprendizaje:
+      - Instalacion: install.md
       - Empezar: getting-started.md
+      - Principiantes: beginners.md
+      - Intermedios: intermediate.md
+      - Avanzados: advanced.md
+      - Que puedes hacer: capabilities.md
+      - Proyecto integral: full-project.md
+  - Guia:
       - Arquitectura: architecture.md
       - HTTP: http.md
+      - App, rutas y HTTP: app-http.md
+      - Versiones de HTTP: http-versions.md
       - WebSocket: websocket.md
       - Persistencia: persistence.md
+      - Datos y ORM: data-orm.md
       - Cache: cache.md
+      - Cache y seguridad: cache-security.md
       - Seguridad: security.md
+      - Certificados TLS: tls-certificates.md
       - Observabilidad: observability.md
+      - Observabilidad y tareas: observability-tasks.md
       - Tareas: tasks.md
       - Proxy: proxy.md
+      - Red y edge: network-edge.md
       - RPC entre servicios: rpc.md
       - DNS: dns.md
       - mDNS: mdns.md
-      - IA: ia.md
-      - Modelos de lenguaje: llm.md
-  - Referencia: reference/index.md
+      - IA (experimental): ia.md
+      - Prediccion (experimental): ai-predict.md
+      - Modelos de lenguaje (experimental): llm.md
+  - Referencia:
+      - reference/index.md
+      - API publica: api-map.md
+      - Cambios: changelog.md
   - Ayuda: help/index.md
+
+# Every page under docs/ must be reachable from the menu: mkdocs build --strict
+# fails when one is left out of nav.
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
 
 theme:
   name: material

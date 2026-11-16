@@ -108,13 +108,42 @@ def stream(_request):
     return Response.stream(chunks(), content_type="application/x-ndjson")
 ```
 
+## Parametros de ruta
+
+Un segmento `{nombre}` captura una parte de la ruta y la deja en
+`request.path_params`. Los conversores disponibles son `str` (por defecto, un
+segmento), `int` y `path` (el resto de la ruta, barras incluidas):
+
+```python
+@app.api("/users/{user_id:int}")
+def user(request):
+    return {"id": request.path_params["user_id"]}  # int
+
+@app.api("/files/{rest:path}")
+def files(request):
+    return {"path": request.path_params["rest"]}
+```
+
+Las rutas estaticas tienen prioridad: `/users/me` gana a `/users/{name}`. Si el
+valor no encaja con el conversor (`/users/abc` con `int`), la ruta no coincide.
+
+## Barra final
+
+Con `App(redirect_slashes=True)` (valor por defecto), si solo existe `/items`,
+`GET /items/` responde `308` con `Location: /items` (conservando la query
+string), y al reves. `App(redirect_slashes=False)` devuelve `404`.
+
 ## CORS y `OPTIONS`
+
+El `OPTIONS` automatico responde `204` con la cabecera `Allow` y la union de
+metodos permitidos. `OPTIONS *` describe los metodos del servidor.
 
 Si `cors_allow_origin` esta configurado:
 
 - las rutas `api` incluyen `Access-Control-Allow-Origin`.
-- el `OPTIONS` automatico responde con la union de metodos permitidos y
-  cabeceras basicas.
+- el `OPTIONS` automatico anade `Access-Control-Allow-Methods`,
+  `Access-Control-Allow-Headers` y `Access-Control-Allow-Origin`. Sin CORS no se
+  envian cabeceras `Access-Control-*`.
 
 El `OPTIONS` automatico solo actua cuando ninguna ruta declara ese metodo. Si
 registras un handler propio para `OPTIONS`, la peticion llega a tu codigo:

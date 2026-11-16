@@ -58,6 +58,40 @@ python -m pip install 'wsbuilder[mdns]'
 Este extra agrega `zeroconf`; la instalacion base permanece sin dependencias de
 runtime. Consulta los [ejemplos de mDNS y DNS-SD](mdns.md).
 
+### Instalar desde GitHub
+
+Para probar lo ultimo que se ha integrado en `main`, o una version concreta sin
+esperar a PyPI, instala directamente desde el repositorio:
+
+```bash
+# Una version publicada concreta (reproducible)
+python -m pip install "git+https://github.com/jorgelsc-dev/wsbuilder@v1.5.0"
+
+# Lo ultimo de main
+python -m pip install --upgrade "git+https://github.com/jorgelsc-dev/wsbuilder@main"
+
+# Con extras
+python -m pip install "wsbuilder[tls,mdns] @ git+https://github.com/jorgelsc-dev/wsbuilder@main"
+```
+
+La version se calcula a partir de los tags de git (con `setuptools-scm`): un tag
+`vX.Y.Z` produce `X.Y.Z`, y cada commit posterior produce una version distinta,
+por ejemplo `X.Y.(Z+1).dev3+g1a2b3c4`. Por eso `pip install --upgrade` instala el
+commit nuevo en cuanto cambia `main`.
+
+!!! note "Versiones anteriores a este cambio"
+    Antes, `main` declaraba la misma version (`X.Y.Z.dev0`) durante muchos
+    commits, y `pip install --upgrade git+...` respondia "Requirement already
+    satisfied" sin instalar nada nuevo. Si tienes instalada una copia de esa
+    epoca, fuerza la reinstalacion una vez:
+
+    ```bash
+    python -m pip install --force-reinstall --no-deps "git+https://github.com/jorgelsc-dev/wsbuilder@main"
+    ```
+
+Comprueba que version tienes con `python -m pip show wsbuilder` o
+`python -c "import wsbuilder; print(wsbuilder.__version__)"`.
+
 ## 2. Compilar en local e instalar en local sin internet
 
 Usa esta ruta cuando ya tienes una copia local del repositorio y no quieres que
@@ -67,7 +101,10 @@ Usa esta ruta cuando ya tienes una copia local del repositorio y no quieres que
 
 - Tener el repositorio clonado o copiado en la maquina local.
 - Tener Python `3.11+`.
-- Tener disponibles en el entorno `build`, `setuptools>=77` y `wheel`.
+- Tener disponibles en el entorno `build`, `setuptools>=77`, `setuptools-scm>=8` y `wheel`.
+- Tener el historial y los tags de git (`git clone` completo). Sin ellos la version
+  sale como `0.0.0.dev0`; puedes fijarla con la variable de entorno
+  `SETUPTOOLS_SCM_PRETEND_VERSION=1.2.3`.
 - Si vas a usar un `venv`, crearlo antes de desconectarte o con herramientas ya instaladas localmente.
 
 ### Compilar el wheel local sin red
@@ -86,10 +123,10 @@ dist/wsbuilder-<version>-py3-none-any.whl
 dist/wsbuilder-<version>.tar.gz
 ```
 
-`<version>` es la que declara `pyproject.toml` en el arbol que estas
-compilando. Un checkout de `main` lleva sufijo `.dev0` porque va por delante de
-la ultima version publicada; los artefactos publicados en PyPI salen de la rama
-`release/vX.Y.Z`, donde la version ya no lleva ese sufijo.
+`<version>` se deriva de git: el commit de un tag `vX.Y.Z` compila `X.Y.Z`, y
+cualquier otro commit compila una version de desarrollo posterior al ultimo tag
+(`X.Y.(Z+1).devN+g<hash>`). Los artefactos publicados en PyPI salen siempre de un
+tag.
 
 ### Instalar el wheel local sin consultar PyPI
 
