@@ -120,7 +120,8 @@ completa en [RPC entre servicios](rpc.md).
 | --- | --- |
 | Almacen | `ModelStore`, `ModelRecord` |
 | Descargas | `download_file`, `huggingface_files`, `huggingface_url`, `DownloadError` |
-| Ejecucion | `LanguageModel`, `OpenAICompatibleBackend`, `ModelStore(loader=...)` |
+| Motor nativo | `ByteLanguageModel`, `NativeBackend`, `format_chat`, `submit_lm_training_task`, `BYTELM_ARCHITECTURE` |
+| Ejecucion | `LanguageModel` (`native`, `from_file`, `from_openai`), `OpenAICompatibleBackend`, `ModelStore(loader=...)` |
 | HTTP | `install_llm`, `App.enable_llm` |
 | Formato NDJSON | `ModelReader`, `ModelWriter`, `ModelTensor`, `ModelFormatError`, `MODEL_FORMAT`, `is_model_file`, `read_model_header` |
 

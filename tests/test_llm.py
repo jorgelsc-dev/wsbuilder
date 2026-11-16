@@ -451,8 +451,8 @@ class TestInstallLlm(unittest.TestCase):
         self.addCleanup(self.app.close)
         self.app.enable_llm(
             self.store, models={"eco": LanguageModel(_EchoBackend())},
-            allow_download=True, allow_import=True, allow_delete=True,
-            download_hosts=["huggingface.co"],
+            allow_download=True, allow_import=True, allow_delete=True, allow_train=True,
+            download_hosts=["huggingface.co"], backend_options={"temperature": 0},
         )
         self.server = HTTPServer("127.0.0.1", 0, self.app)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -543,8 +543,62 @@ class TestInstallLlm(unittest.TestCase):
         install_llm(app, self.store)
         paths = {route["path"] for route in app.describe()["routes"]}
         self.assertIn("/api/llm/models", paths)
-        for path in ("/api/llm/download", "/api/llm/import", "/api/llm/delete"):
+        for path in ("/api/llm/download", "/api/llm/import", "/api/llm/delete", "/api/llm/train",
+                     "/api/llm/tasks"):
             self.assertNotIn(path, paths)
+
+    def _finished(self, task_id):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            snapshot = json.loads(self.call("GET", f"/api/llm/tasks?id={task_id}")[2])
+            if snapshot["status"] in ("completed", "failed"):
+                return snapshot
+            time.sleep(0.05)
+        self.fail("the task did not finish")
+
+    def test_train_a_native_model_over_http_and_chat_with_it(self):
+        conversations = [[{"role": "user", "content": "hola"}, {"role": "assistant", "content": "Hola!"}]]
+        status, _type, body = self.call("POST", "/api/llm/train", {
+            "name": "Bot HTTP", "conversations": conversations, "context": 16, "embedding": 8,
+            "hidden": [32], "epochs": 60, "learning_rate": 0.1, "seed": 1,
+        })
+        self.assertEqual(status, 202)
+        snapshot = self._finished(json.loads(body)["task"])
+        self.assertEqual(snapshot["status"], "completed", snapshot.get("error"))
+        self.assertEqual(snapshot["result"]["id"], "bot-http")
+        self.assertEqual(snapshot["result"]["summary"]["architecture"], "wsbuilder.bytelm")
+        self.assertEqual(snapshot["metadata"]["epoch"], 60)
+
+        status, _type, body = self.call("POST", "/api/llm/chat", {
+            "model": "bot-http", "messages": [{"role": "user", "content": "hola"}]})
+        self.assertEqual((status, json.loads(body)["text"]), (200, "Hola!"))
+        status, _type, body = self.call("POST", "/v1/chat/completions", {
+            "model": "bot-http", "stream": False, "messages": [{"role": "user", "content": "hola"}]})
+        self.assertEqual(json.loads(body)["choices"][0]["message"]["content"], "Hola!")
+
+    def test_train_requests_are_validated(self):
+        bad = [
+            {},
+            {"texts": ["a"], "conversations": []},
+            {"texts": [1]},
+            {"texts": ["a"], "epochs": 0},
+            {"texts": ["a"], "epochs": 10**6},
+            {"texts": ["a"], "hidden": [10**6]},
+            {"texts": ["a"], "context": 10**4},
+            {"texts": ["a"], "learning_rate": "fast"},
+            {"texts": ["x" * (2 * 1024 * 1024)]},
+            {"conversations": ["no"]},
+        ]
+        for payload in bad:
+            with self.subTest(payload=str(payload)[:60]):
+                # An oversized body may already be refused by the server (413).
+                self.assertIn(self.call("POST", "/api/llm/train", payload)[0], (400, 413))
+
+    def test_stored_models_that_cannot_chat_answer_501(self):
+        status, _type, body = self.call("POST", "/api/llm/chat", {
+            "model": "stored", "messages": [{"role": "user", "content": "hola"}]})
+        self.assertEqual(status, 501)
+        self.assertIn("not a language model", json.loads(body)["error"]["message"])
 
 
 if __name__ == "__main__":

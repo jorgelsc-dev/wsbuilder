@@ -78,6 +78,13 @@ from .ia import (
     load_wav,
     submit_training_task,
 )
+from .ia_lm import (
+    BYTELM_ARCHITECTURE,
+    ByteLanguageModel,
+    NativeBackend,
+    format_chat,
+    submit_lm_training_task,
+)
 from .llm import (
     DownloadError,
     LanguageModel,
@@ -312,6 +319,11 @@ __all__ = [
     "read_model_header",
     "DownloadError",
     "LanguageModel",
+    "BYTELM_ARCHITECTURE",
+    "ByteLanguageModel",
+    "NativeBackend",
+    "format_chat",
+    "submit_lm_training_task",
     "ModelRecord",
     "ModelStore",
     "OpenAICompatibleBackend",

@@ -12,10 +12,11 @@ of weights. Three independent pieces work with those files:
   HTTPS URL or from the Hugging Face Hub: resumable, size-limited, verified
   against the SHA-256 the Hub publishes, and never leaking a token across a
   redirect to another host.
-* :class:`LanguageModel` runs a model through a backend: any server speaking
-  the OpenAI API (Ollama, llama.cpp's server, vLLM, LM Studio, OpenAI itself)
-  with the standard library only, or a stored model through a ``loader``
-  given to the store.
+* :class:`LanguageModel` runs a model through a backend. Stored models run
+  natively in this process with :class:`~wsbuilder.ia_lm.NativeBackend`
+  (wsbuilder's own pure-Python language model, architecture
+  ``wsbuilder.bytelm``); any server speaking the OpenAI API can also be used
+  through :class:`OpenAICompatibleBackend`.
 
 :func:`install_llm` exposes a store and its models over HTTP, including an
 OpenAI-compatible ``/v1/chat/completions`` endpoint.
@@ -39,6 +40,7 @@ from .ndjson_model import ModelFormatError, ModelReader, is_model_file
 
 __all__ = [
     "DEFAULT_HF_ENDPOINT",
+    "DEFAULT_TRAIN_LIMITS",
     "DownloadError",
     "LanguageModel",
     "ModelRecord",
@@ -374,10 +376,9 @@ class ModelStore:
     index to corrupt, and writes go through temporary files and
     ``os.replace``.
 
-    ``loader(record, **options)`` turns a stored model into a ready
-    :class:`LanguageModel` (or any object with its interface) for
-    :meth:`load`; without one, stored models can be kept, served and read
-    (:meth:`open`, :meth:`load_network`) but not chatted with.
+    :meth:`load` runs stored ``wsbuilder.bytelm`` models natively. A custom
+    ``loader(record, **options)`` returning a :class:`LanguageModel` (or any
+    object with its interface) replaces that for every model.
     """
 
     def __init__(self, root=None, *, loader=None):
@@ -613,24 +614,38 @@ class ModelStore:
         return NeuralNetwork.load(self.get(model_id).path, **options)
 
     def load(self, model_id, **backend_options):
-        """A :class:`LanguageModel` for a stored model, built by ``loader``.
+        """A :class:`LanguageModel` for a stored model.
 
+        ``wsbuilder.bytelm`` models run natively; ``backend_options`` are
+        their default generation options (``temperature``, ``max_tokens``...).
         Loaded models are cached per id; :meth:`unload` releases one.
-        Raises ``NotImplementedError`` when the store has no ``loader``.
+        Raises ``NotImplementedError`` for a model no backend can run.
         """
         with self._lock:
             model = self._loaded.get(model_id)
             if model is not None:
                 return model
             record = self.get(model_id)
-            if self.loader is None:
-                raise NotImplementedError(
-                    f"no loader runs stored models; create the store with "
-                    f"ModelStore(loader=...) to chat with {model_id!r}"
-                )
-            model = self.loader(record, **backend_options)
+            loader = self.loader or _native_loader
+            model = loader(record, **backend_options)
             self._loaded[model_id] = model
             return model
+
+    def add(self, model, *, name=None, model_id=None, dtype="F32"):
+        """Save a model object (``ByteLanguageModel``, ``NeuralNetwork``) into the store."""
+        if not hasattr(model, "to_model"):
+            raise TypeError("model must provide to_model() (ByteLanguageModel or NeuralNetwork)")
+        label = str(name or getattr(model, "architecture", None) or "model")
+        filename = _safe_filename(f"{_slug(label)}.ndjson")
+        staged = self._staging_path(filename)
+        model.to_model(dtype=dtype, name=label).write(staged)
+        try:
+            return self._register(staged, name=label, filename=filename, source="wsbuilder",
+                                  model_id=model_id)
+        except BaseException:
+            if os.path.exists(staged):
+                os.unlink(staged)
+            raise
 
     def unload(self, model_id):
         with self._lock:
@@ -642,6 +657,18 @@ class ModelStore:
             loaded, self._loaded = self._loaded, {}
         for model in loaded.values():
             _close(model)
+
+
+def _native_loader(record, **options):
+    from .ia_lm import BYTELM_ARCHITECTURE, ByteLanguageModel, NativeBackend
+
+    architecture = record.summary.get("architecture")
+    if record.format != "ndjson" or architecture != BYTELM_ARCHITECTURE:
+        raise NotImplementedError(
+            f"{record.id!r} ({record.format}, architecture {architecture!r}) is not a language "
+            f"model wsbuilder can run; train one with wsbuilder.ByteLanguageModel"
+        )
+    return LanguageModel(NativeBackend(ByteLanguageModel.load(record.path), **options), name=record.id)
 
 
 def _close(model):
@@ -754,6 +781,20 @@ class LanguageModel:
         self.name = name or getattr(backend, "model", None) or getattr(backend, "name", "model")
 
     @classmethod
+    def from_file(cls, path, **defaults):
+        """A native model read from a ``wsbuilder.bytelm`` NDJSON file."""
+        from .ia_lm import NativeBackend
+
+        return cls(NativeBackend(os.fspath(path), **defaults), name=os.path.basename(os.fspath(path)))
+
+    @classmethod
+    def native(cls, model, *, name=None, **defaults):
+        """A :class:`~wsbuilder.ia_lm.ByteLanguageModel` object as a language model."""
+        from .ia_lm import NativeBackend
+
+        return cls(NativeBackend(model, **defaults), name=name or "native")
+
+    @classmethod
     def from_openai(cls, base_url, model, **options):
         return cls(OpenAICompatibleBackend(base_url, model, **options), name=model)
 
@@ -796,23 +837,90 @@ class LanguageModel:
 
 # -- HTTP -------------------------------------------------------------------
 
+#: Caps on what ``POST train`` accepts; training runs in pure Python on the
+#: server's CPU, so keep them modest.
+DEFAULT_TRAIN_LIMITS = {
+    "max_text_bytes": 1024 * 1024,
+    "max_context": 128,
+    "max_embedding": 64,
+    "max_hidden": 512,
+    "max_layers": 4,
+    "max_epochs": 500,
+}
+
+
+def _training_spec(payload, limits):
+    """Validate a ``POST train`` body against ``limits``."""
+
+    def integer(key, default, cap):
+        value = payload.get(key, default)
+        if type(value) is not int or not 1 <= value <= cap:
+            raise ValueError(f"{key} must be an integer between 1 and {cap}")
+        return value
+
+    texts = payload.get("texts")
+    conversations = payload.get("conversations")
+    if (texts is None) == (conversations is None):
+        raise ValueError("send either texts or conversations")
+    if texts is not None:
+        if isinstance(texts, str):
+            texts = [texts]
+        if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
+            raise ValueError("texts must be a list of strings")
+        size = sum(len(text.encode("utf-8")) for text in texts)
+    else:
+        if not isinstance(conversations, list) or not all(
+            isinstance(conversation, list) and all(isinstance(m, dict) for m in conversation)
+            for conversation in conversations
+        ):
+            raise ValueError("conversations must be lists of {role, content} messages")
+        size = sum(len(str(m.get("content", "")).encode("utf-8")) + 16
+                   for conversation in conversations for m in conversation)
+    if size > limits["max_text_bytes"]:
+        raise ValueError(f"the training text exceeds {limits['max_text_bytes']} bytes")
+    hidden = payload.get("hidden", [96])
+    if isinstance(hidden, int):
+        hidden = [hidden]
+    if (not isinstance(hidden, list) or not 1 <= len(hidden) <= limits["max_layers"]
+            or not all(type(h) is int and 1 <= h <= limits["max_hidden"] for h in hidden)):
+        raise ValueError(f"hidden must list 1 to {limits['max_layers']} sizes up to {limits['max_hidden']}")
+    rate = payload.get("learning_rate", 0.05)
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate <= 10:
+        raise ValueError("learning_rate must be a number in (0, 10]")
+    seed = payload.get("seed")
+    if seed is not None and type(seed) is not int:
+        raise ValueError("seed must be an integer")
+    return {
+        "name": str(payload.get("name") or "native-model")[:100],
+        "texts": texts,
+        "conversations": conversations,
+        "context": integer("context", 24, limits["max_context"]),
+        "embedding": integer("embedding", 12, limits["max_embedding"]),
+        "hidden": hidden,
+        "epochs": integer("epochs", 10, limits["max_epochs"]),
+        "learning_rate": float(rate),
+        "seed": seed,
+    }
+
+
 
 def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_download=False,
-                allow_import=False, allow_delete=False, openai_path="/v1", backend_options=None,
-                download_hosts=None):
+                allow_import=False, allow_delete=False, allow_train=False, openai_path="/v1",
+                backend_options=None, download_hosts=None, train_limits=None):
     """Serve a :class:`ModelStore` and its models from ``app``.
 
     Routes under ``prefix``: ``GET models``, ``GET model?id=``, ``POST chat``
     (``{"model", "messages", "stream"}``; streaming answers as NDJSON),
     ``POST generate``, and when allowed ``POST download``, ``POST import``,
-    ``POST delete`` and ``GET tasks?id=``. With ``openai_path`` (``"/v1"``),
+    ``POST delete``, ``POST train`` and ``GET tasks?id=``. With ``openai_path`` (``"/v1"``),
     ``POST /v1/chat/completions`` and ``GET /v1/models`` speak the OpenAI API
     so existing clients can point at the app.
 
     ``models`` maps extra names to ready :class:`LanguageModel` objects (for
-    example one backed by Ollama). Downloading, importing and deleting
-    change the server's disk and are off by default; ``download_hosts``
-    limits downloads to the listed hosts. Protect these routes with
+    example one backed by Ollama). Downloading, importing, deleting and
+    training change the server's disk (and training uses its CPU), so they
+    are off by default; ``download_hosts`` limits downloads to the listed
+    hosts and ``train_limits`` overrides the caps in ``DEFAULT_TRAIN_LIMITS``. Protect these routes with
     ``app.enable_security`` before exposing them.
     """
     from .http import Response
@@ -945,6 +1053,40 @@ def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_downlo
             task = app.tasks.spawn(job, name="llm-download", group="llm", pass_handle=True,
                                    metadata={"url": url})
             return Response.json({"task": task.id}, status=202)
+
+    if allow_train:
+        limits = dict(DEFAULT_TRAIN_LIMITS)
+        limits.update(train_limits or {})
+
+        @app.api(f"{base}/train", methods=("POST",))
+        def train(request):
+            from .ia_lm import ByteLanguageModel
+
+            try:
+                payload = body_of(request)
+                spec = _training_spec(payload, limits)
+                model = ByteLanguageModel(context=spec["context"], embedding=spec["embedding"],
+                                          hidden=spec["hidden"], seed=spec["seed"])
+            except (ValueError, TypeError) as exc:
+                return error(400, str(exc))
+
+            def job(handle):
+                def report(epoch, loss):
+                    handle.metadata["epoch"], handle.metadata["loss"] = epoch, loss
+
+                options = {"epochs": spec["epochs"], "learning_rate": spec["learning_rate"],
+                           "seed": spec["seed"], "progress": report, "task_handle": handle}
+                if spec["conversations"] is not None:
+                    model.fit_chat(spec["conversations"], **options)
+                else:
+                    model.fit(spec["texts"], **options)
+                return store.add(model, name=spec["name"]).to_dict()
+
+            task = app.tasks.spawn(job, name="llm-train", group="llm", pass_handle=True,
+                                   metadata={"name": spec["name"], "epochs": spec["epochs"]})
+            return Response.json({"task": task.id}, status=202)
+
+    if allow_download or allow_train:
 
         @app.api(f"{base}/tasks", methods=("GET",))
         def task_status(request):

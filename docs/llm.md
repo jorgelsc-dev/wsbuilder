@@ -1,19 +1,79 @@
 # Modelos de lenguaje (LLM)
 
-`wsbuilder.llm` permite importar, guardar, descargar y ejecutar modelos de
-lenguaje. Tambien puede servirlos por HTTP, con un endpoint compatible con la
-API de OpenAI.
+`wsbuilder.llm` permite entrenar, importar, guardar, descargar y ejecutar
+modelos de lenguaje. Tambien puede servirlos por HTTP, con un endpoint
+compatible con la API de OpenAI. Los modelos se ejecutan con el **motor nativo
+de wsbuilder**, escrito en Python puro: no hace falta llama.cpp ni ningun otro
+motor externo.
 
 | Pieza | Para que sirve | Dependencias |
 | --- | --- | --- |
+| `ByteLanguageModel` | Modelo de lenguaje nativo: se entrena, genera texto y se guarda en NDJSON | Ninguna |
+| `LanguageModel` + `NativeBackend` | Conversar con un modelo nativo (`chat`, `generate`, streaming) | Ninguna |
 | `ModelWriter` / `ModelReader` | Escribir y leer el formato de modelos de wsbuilder: un unico archivo NDJSON con el modelo y sus pesos | Ninguna |
 | `ModelStore` | Directorio de modelos: importar, descargar, exportar, verificar y borrar | Ninguna |
 | `download_file`, `huggingface_files` | Descargas reanudables y verificadas con SHA-256 | Ninguna |
-| `LanguageModel` + `OpenAICompatibleBackend` | Usar un modelo servido por Ollama, llama.cpp server, vLLM, LM Studio u OpenAI | Ninguna |
-| `ModelStore(loader=...)` | Conectar los modelos guardados a tu propio motor de inferencia | La que use tu motor |
+| `LanguageModel` + `OpenAICompatibleBackend` | Opcional: usar un modelo que ya sirve otro programa por HTTP (API de OpenAI) | Ninguna |
 | `install_llm` / `App.enable_llm` | Exponer los modelos por HTTP | Ninguna |
 
 Todo funciona solo con la biblioteca estandar.
+
+## Inicio rapido: entrenar y conversar
+
+```python
+from wsbuilder import ByteLanguageModel, LanguageModel
+
+conversaciones = [
+    [{"role": "user", "content": "hola"}, {"role": "assistant", "content": "Hola, en que te ayudo?"}],
+    [{"role": "user", "content": "precio"}, {"role": "assistant", "content": "El plan cuesta 10 euros."}],
+]
+
+modelo = ByteLanguageModel(context=16, embedding=8, hidden=(64,), seed=1)
+modelo.fit_chat(conversaciones, epochs=60, learning_rate=0.1, decay=0.97)
+modelo.chat("precio", temperature=0)          # "El plan cuesta 10 euros."
+modelo.save("bot.ndjson", name="bot")         # modelo + pesos en un NDJSON
+
+bot = LanguageModel.from_file("bot.ndjson", temperature=0.7)
+print(bot.chat("hola"))
+```
+
+## El motor nativo: `ByteLanguageModel`
+
+Es el modelo de lenguaje propio de wsbuilder (arquitectura `wsbuilder.bytelm`).
+Lee los ultimos `context` bytes del texto UTF-8 y predice el siguiente byte con
+una red neuronal: un vector por byte (`embedding`), una o varias capas `tanh`
+(`hidden`) y un softmax sobre los 256 bytes mas un token de fin de texto.
+
+| Metodo | Uso |
+| --- | --- |
+| `ByteLanguageModel(context=24, embedding=12, hidden=(96,), seed=None)` | Crea un modelo con pesos aleatorios. |
+| `fit(textos, epochs=10, learning_rate=0.05, decay=0.9, progress=None)` | Entrena con textos. Devuelve el historial `{"epoch", "loss", "learning_rate"}`. |
+| `fit_chat(conversaciones, ...)` | Entrena con conversaciones `[{"role", "content"}, ...]`. |
+| `generate(prompt, **opciones)` / `stream(prompt, **opciones)` | Continua un texto, entero o por partes. |
+| `chat(messages, **opciones)` | Responde a una conversacion. |
+| `perplexity(texto)` | Mide lo bien que el modelo predice un texto (menos es mejor). |
+| `save(ruta, dtype="F32", name=None)` / `ByteLanguageModel.load(ruta)` | Guarda y carga el modelo en NDJSON. |
+
+Opciones de generacion: `max_tokens` (en bytes, 256 por defecto),
+`temperature` (`0` elige siempre el byte mas probable), `top_k`, `top_p`,
+`repeat_penalty`, `stop` (texto o lista de textos) y `seed`.
+
+- **Formato de chat.** `format_chat(messages)` convierte la conversacion en
+  `<|user|>hola\n<|assistant|>`. El modelo aprende ese formato con `fit_chat` y
+  la respuesta termina en el token de fin de texto o antes del siguiente
+  `\n<|`.
+- **Entrenamiento en segundo plano.** `submit_lm_training_task(app.tasks, modelo,
+  textos, epochs=...)` entrena en una tarea de `TaskManager`; su `metadata`
+  muestra `epoch` y `loss` mientras avanza.
+- **Para que sirve.** Es un modelo pequeno pensado para corpus pequenos y
+  concretos: respuestas de un asistente, comandos, preguntas frecuentes,
+  frases de un dominio. Solo ve los ultimos `context` bytes, asi que no
+  mantiene conversaciones largas ni conocimiento general.
+- **Rendimiento.** Es Python puro: el coste de entrenar crece con
+  `context * embedding * hidden` por cada byte de texto y epoca. Con
+  `context=16, embedding=8, hidden=(64,)`, cada byte de entrenamiento tarda
+  unos 2-3 ms y generar una respuesta corta, milisegundos. Empieza con
+  tamanos pequenos y entrena en una tarea.
 
 ## El formato de modelos: NDJSON
 
@@ -134,33 +194,31 @@ record = store.download("https://example.com/modelo.ndjson", sha256="...")
 
 ## Ejecutar modelos
 
-Un modelo servido por Ollama u otro servidor compatible con OpenAI:
+Los modelos nativos guardados en el almacen se ejecutan sin configurar nada:
 
 ```python
-from wsbuilder import LanguageModel
+from wsbuilder import ModelStore
 
-model = LanguageModel.from_openai("http://localhost:11434/v1", "llama3.2")
-print(model.chat("Hola"))
-```
-
-Para conversar con un modelo guardado en el almacen, pasa un `loader` que lo
-convierta en un `LanguageModel` con el motor de inferencia que elijas. Recibe
-el `ModelRecord` (con `record.path` apuntando al archivo NDJSON) y las
-opciones de `load`:
-
-```python
-def loader(record, **options):
-    return LanguageModel(MiBackend(record.path, **options), name=record.id)
-
-store = ModelStore(loader=loader)
-model = store.load(record.id)              # se cachea por id
-for piece in model.stream_chat([{"role": "user", "content": "Hola"}], max_tokens=64):
+store = ModelStore()
+record = store.add(modelo, name="Mi bot")      # guarda un ByteLanguageModel en el almacen
+bot = store.load(record.id, temperature=0.7)   # LanguageModel nativo, cacheado por id
+print(bot.chat("Hola"))
+for piece in bot.stream_chat([{"role": "user", "content": "precio"}], max_tokens=64):
     print(piece, end="", flush=True)
 ```
 
-Un backend es cualquier objeto con `complete(prompt, *, stream=False, **opciones)`,
-`chat(messages, *, stream=False, **opciones)` y `close()`. Sin `loader`,
-`store.load` lanza `NotImplementedError` y la API HTTP responde 501.
+Las opciones de `store.load` son las opciones de generacion por defecto de ese
+modelo. Un modelo guardado que no es de lenguaje (por ejemplo una red
+`wsbuilder.dense`) no se puede usar para conversar: `store.load` lanza
+`NotImplementedError` y la API HTTP responde 501. Tambien puedes crear un
+`LanguageModel` directamente con `LanguageModel.native(modelo)` o
+`LanguageModel.from_file("bot.ndjson")`.
+
+Opcionalmente, un modelo que ya sirve otro programa con la API de OpenAI se usa
+con `LanguageModel.from_openai("http://localhost:11434/v1", "nombre")`.
+`ModelStore(loader=...)` permite sustituir el motor nativo por uno propio:
+`loader(record, **opciones)` recibe el `ModelRecord` y devuelve un
+`LanguageModel`.
 
 | Metodo | Devuelve |
 | --- | --- |
@@ -175,13 +233,14 @@ Las opciones admitidas son `max_tokens`, `temperature`, `top_p`, `top_k`,
 ## Servir modelos por HTTP
 
 ```python
-from wsbuilder import App, LanguageModel, ModelStore
+from wsbuilder import App, ModelStore
 
 app = App()
 app.enable_security(...)  # protege estas rutas antes de exponerlas
 app.enable_llm(
     ModelStore(),
-    models={"llama3.2": LanguageModel.from_openai("http://localhost:11434/v1", "llama3.2")},
+    backend_options={"temperature": 0.7},   # opciones por defecto de los modelos nativos
+    allow_train=True,
 )
 app.run("0.0.0.0", 8765)
 ```
@@ -202,6 +261,14 @@ Las rutas que modifican el disco del servidor estan desactivadas por defecto:
   restringe los hosts permitidos.
 - `allow_import=True` activa `POST /api/llm/import` (`{"path"}`).
 - `allow_delete=True` activa `POST /api/llm/delete` (`{"id"}`).
+- `allow_train=True` activa `POST /api/llm/train`: entrena un modelo nativo en
+  segundo plano y lo guarda en el almacen. Recibe `{"name", "texts"}` o
+  `{"name", "conversations"}` y, opcionalmente, `context`, `embedding`,
+  `hidden`, `epochs`, `learning_rate` y `seed`. Responde `{"task"}`; en
+  `GET /api/llm/tasks?id=` se ven `epoch` y `loss` y, al terminar, el
+  manifiesto del modelo nuevo. `train_limits` ajusta los limites de
+  `DEFAULT_TRAIN_LIMITS` (1 MiB de texto, `context` 128, `embedding` 64,
+  capas de hasta 512 unidades, 500 epocas).
 
 ## Redes propias
 

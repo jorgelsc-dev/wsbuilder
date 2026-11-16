@@ -61,6 +61,7 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   quic/                 address, client, connection, crypto, frames, packet, recovery, tls, varint
   rpc.py codec.py       RPC entre servicios (App.rpc, RpcClient) y codec CBOR (RFC 8949)
   ndjson_model.py llm.py formato único de modelos (NDJSON); LLM: ModelStore, descargas, backends, install_llm
+  ia_lm.py              motor de lenguaje nativo (ByteLanguageModel, NativeBackend)
   server.py             HTTPServer (TCP, TLS/ALPN, límites, keep-alive, apagado)
   ws.py                 WebSocket, frames, handshake, errores WebSocket*
   headers.py cookies.py helpers de cabeceras y cookies
@@ -101,7 +102,7 @@ tests, a `tests/`; los de docs, a `docs/`.
 | HTTP/3 y WebSocket sobre HTTP/3 | `http3.py`, `http3_server.py`, `http3_websocket.py`, `qpack.py` | `test_http3.py`, `test_http3_server.py`, `test_http3_streaming.py`, `test_http3_streaming_udp.py` | `http-versions.md` |
 | Transporte QUIC | `quic/` | `test_quic_protocol.py`, `test_quic_crypto.py`, `test_quic_tls.py`, `test_quic_recovery.py`, `test_quic_address.py` | `http-versions.md` |
 | Cliente QUIC/HTTP/3 y mTLS en QUIC | `quic/client.py`, `quic/tls.py`, `http3_client.py` | `test_quic_client.py` | `rpc.md` |
-| Modelos de lenguaje y formato NDJSON | `llm.py`, `ndjson_model.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ndjson_model.py` | `llm.md`, `ia.md` |
+| Modelos de lenguaje, motor nativo y formato NDJSON | `llm.py`, `ia_lm.py`, `ndjson_model.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_ndjson_model.py` | `llm.md`, `ia.md` |
 | RPC entre servicios y codec CBOR | `rpc.py`, `codec.py`, `app.py` (`App.rpc`) | `test_rpc.py`, `test_codec.py`, `test_optional_extras.py` | `rpc.md` |
 | WebSocket y frames | `ws.py` | `test_ws.py`, `test_server.py` | `websocket.md` |
 | SQLite, ORM y réplicas | `orm.py`, `db_replicas.py` | `test_orm.py`, `test_orm_replicas.py` | `data-orm.md`, `persistence.md` |
@@ -350,16 +351,30 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   guarda otros como `unknown`). Métodos: `import_file`, `download`,
   `download_huggingface` (SHA-256 del listado del Hub), `list`, `get`, `open`
   (`ModelReader`), `load_network` (`NeuralNetwork`), `export`, `verify`,
-  `rename`, `remove`, `load` (llama a `loader(record, **opciones)` y cachea el
-  `LanguageModel` por id; sin `loader` lanza `NotImplementedError`, 501 por HTTP).
+  `rename`, `remove`, `add` (guarda un `ByteLanguageModel`/`NeuralNetwork`),
+  `load` (cachea un `LanguageModel` por id: los `wsbuilder.bytelm` corren con
+  el motor nativo; otras arquitecturas lanzan `NotImplementedError`, 501 por
+  HTTP; `loader=` sustituye el motor). No se usa llama.cpp ni motores externos.
   `download_file` solo acepta `https://` (salvo `allow_http`), reanuda con
   `Range` desde `.part` solo si hay SHA-256, limita `max_bytes` y no reenvía
   `Authorization` en redirecciones a otro host. `LanguageModel` (`generate`,
-  `chat`, `chat_completion`, `stream_*`) usa `OpenAICompatibleBackend` (stdlib)
-  o cualquier backend con `complete`/`chat`/`close`. `install_llm`/`App.enable_llm`
-  sirven `GET models|model`, `POST chat|generate` (NDJSON al hacer streaming) y
-  `/v1/models`, `/v1/chat/completions` (SSE); `download`/`import`/`delete`
-  solo con `allow_*=True`.
+  `chat`, `chat_completion`, `stream_*`; `native`, `from_file`, `from_openai`)
+  usa `NativeBackend` u `OpenAICompatibleBackend` (stdlib), o cualquier backend
+  con `complete`/`chat`/`close`. `install_llm`/`App.enable_llm` sirven
+  `GET models|model`, `POST chat|generate` (NDJSON al hacer streaming) y
+  `/v1/models`, `/v1/chat/completions` (SSE); `download`/`import`/`delete`/
+  `train` solo con `allow_*=True` (`train` valida contra `DEFAULT_TRAIN_LIMITS`).
+- Motor nativo (`ia_lm.py`): `ByteLanguageModel(context, embedding, hidden, seed)`,
+  arquitectura `wsbuilder.bytelm`: modelo neuronal por bytes (vocabulario
+  258 = 256 bytes + BOS + EOS; embedding por byte, capas `tanh`, softmax).
+  `fit`/`fit_chat` (SGD por muestra, `decay`, `progress`, `task_handle`),
+  `generate`/`stream`/`chat` (`max_tokens` en bytes, `temperature`, `top_k`,
+  `top_p`, `repeat_penalty`, `stop`, `seed`; UTF-8 incremental), `perplexity`,
+  `save`/`load` en NDJSON (`tok_embd.weight`, `blk.N.weight|bias`,
+  `output.weight|bias`). `format_chat` usa `<|role|>contenido` por línea y
+  termina en `<|assistant|>`. `NativeBackend` lo adapta a `LanguageModel`;
+  `submit_lm_training_task` entrena con `TaskManager`. Python puro: tamaños
+  pequeños.
 - Formato de modelos (`ndjson_model.py`): único formato de modelo y pesos del
   proyecto. Archivo NDJSON: línea 1 `{"format": "wsbuilder-model", "version": 1,
   "architecture", "name", "metadata", "tensor_count"}`; cada línea siguiente un

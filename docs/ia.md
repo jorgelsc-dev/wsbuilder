@@ -17,7 +17,7 @@ WSBuilder incluye herramientas sencillas de data science y redes neuronales hech
 - `HashingTextVectorizer`
 - `AudioData`, `load_wav`, `audio_features`
 - `NeuralNetwork.save`, `NeuralNetwork.load` (NDJSON)
-- [Modelos de lenguaje](llm.md): `ModelStore`, `LanguageModel`, `ModelReader`, `ModelWriter`
+- [Modelos de lenguaje](llm.md): `ByteLanguageModel` (motor nativo), `ModelStore`, `LanguageModel`, `ModelReader`, `ModelWriter`
 
 ## Texto, tokens y audio
 
@@ -35,11 +35,11 @@ traduccion, reconocimiento de voz, generacion de audio, imagen o video.
 
 wsbuilder guarda todos los modelos en un unico formato: un archivo
 [NDJSON](llm.md#el-formato-de-modelos-ndjson) cuya primera linea describe el
-modelo y cada linea siguiente contiene un tensor de pesos. Para modelos de
-lenguaje (LLM) existe [`wsbuilder.llm`](llm.md): permite importar, guardar,
-exportar y descargar modelos (por ejemplo desde Hugging Face, con verificacion
-SHA-256), usarlos mediante un servidor compatible con OpenAI como Ollama y
-servirlos por HTTP.
+modelo y cada linea siguiente contiene un tensor de pesos. Para texto existe
+`ByteLanguageModel`, el modelo de lenguaje nativo de wsbuilder: se entrena,
+genera texto y conversa en Python puro, sin motores externos. Con
+[`wsbuilder.llm`](llm.md) los modelos se guardan, descargan (con verificacion
+SHA-256), ejecutan y sirven por HTTP con una API compatible con OpenAI.
 
 Las redes propias se guardan y cargan en ese formato:
 

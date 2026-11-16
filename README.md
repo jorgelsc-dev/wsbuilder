@@ -16,9 +16,9 @@ Sirve para crear:
 - comunicacion entre microservicios en binario (CBOR) sobre HTTP/3 cifrado,
   con identidad de servicio por mTLS.
 - prediccion simple y redes neuronales basicas desde Python puro.
-- modelos de lenguaje (LLM): un unico formato NDJSON para el modelo y sus pesos;
-  importar, guardar y descargar modelos, usarlos via Ollama u otro servidor
-  compatible con OpenAI y servirlos con API compatible con OpenAI.
+- modelos de lenguaje (LLM): motor nativo en Python puro (`ByteLanguageModel`)
+  para entrenar y generar texto, un unico formato NDJSON para el modelo y sus
+  pesos, almacen con descargas verificadas y API HTTP compatible con OpenAI.
 
 ## Ruta de documentacion
 
@@ -38,7 +38,7 @@ Tambien puedes leer:
 - [Arquitectura](docs/architecture.md)
 - [API publica](docs/api-map.md)
 - [mDNS y DNS-SD](docs/mdns.md) (extra opcional `wsbuilder[mdns]`)
-- [Modelos de lenguaje (LLM)](docs/llm.md) (formato NDJSON, Hugging Face, Ollama)
+- [Modelos de lenguaje (LLM)](docs/llm.md) (motor nativo, formato NDJSON, API compatible con OpenAI)
 - [RPC entre servicios](docs/rpc.md) (CBOR sobre HTTP/3; HTTP/3 usa el extra `wsbuilder[tls]`)
 - [Proyecto integral](docs/full-project.md)
 
@@ -131,7 +131,7 @@ La demo incluye:
 | Red y edge | `dns.py`, `mdns.py`, `proxyi.py` | `LocalDNSServer`, `LocalMDNSServer`, `discover_mdns_services`, `ProxyI` |
 | Entre servicios | `rpc.py`, `codec.py`, `http3_client.py` | `App.rpc`, `RpcClient`, `RpcError`, `cbor_dumps`, `Http3Client` |
 | IA y prediccion | `ia.py`, `predicts.py` | `DataSet`, `NeuralNetwork`, `Predictor` |
-| Modelos de lenguaje | `llm.py`, `ndjson_model.py` | `ModelStore`, `LanguageModel`, `ModelReader`, `ModelWriter`, `App.enable_llm` |
+| Modelos de lenguaje | `llm.py`, `ia_lm.py`, `ndjson_model.py` | `ByteLanguageModel`, `ModelStore`, `LanguageModel`, `ModelReader`, `ModelWriter`, `App.enable_llm` |
 
 ## Comunicacion entre servicios
 
