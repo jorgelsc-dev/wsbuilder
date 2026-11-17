@@ -36,10 +36,6 @@ jobs:
             echo "OK: Dependabot PR hacia main."
             exit 0
           fi
-          if [ "${PR_AUTHOR}" = "github-actions[bot]" ] && [[ "${HEAD_REF}" =~ ^chore/open-[0-9]+\.[0-9]+\.[0-9]+\.dev0$ ]]; then
-            echo "OK: automated development version pull request."
-            exit 0
-          fi
           if [ "${PR_AUTHOR}" != "jorgelsc-dev" ]; then
             echo "ERROR: only jorgelsc-dev may submit human pull requests."
             exit 1

@@ -10,7 +10,7 @@ from pathlib import Path
 
 WORKFLOW = (
     Path(__file__).resolve().parents[1]
-    / ".github/workflows/main-only-from-develop.yml"
+    / ".github/workflows/pr-policy.yml"
 )
 OWNER = {
     "name": "jorgelsc-dev",
@@ -86,7 +86,8 @@ class TestPullRequestIdentityPolicy(unittest.TestCase):
         cases = (
             ("dependabot[bot]", "dependabot/pip/example", True),
             ("dependabot[bot]", "fix/example", False),
-            ("github-actions[bot]", "chore/open-1.2.3.dev0", True),
+            # Releases no longer open version-bump PRs, so no bot branch is exempt.
+            ("github-actions[bot]", "chore/open-1.2.3.dev0", False),
             ("github-actions[bot]", "fix/example", False),
             ("another-user", "dependabot/pip/example", False),
         )

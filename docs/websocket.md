@@ -41,6 +41,41 @@ La funcion `handshake_websocket_with_options()` valida:
 
 Tambien negocia subprotocolos compatibles cuando se declaran en `supported_subprotocols`.
 
+### Origen permitido (`Origin`)
+
+Los navegadores envian `Origin` en cada handshake y adjuntan las cookies del
+usuario sin importar que pagina abrio el socket. Sin comprobarlo, cualquier web
+podria usar un canal autenticado por cookies (*Cross-Site WebSocket Hijacking*).
+Por eso el servidor aplica esta politica antes del `101 Switching Protocols`:
+
+- Por defecto se aceptan las peticiones sin `Origin` (clientes que no son un
+  navegador) y las del mismo origen, cuyo `Origin` coincide con `Host`.
+- Cualquier otro origen recibe `403`.
+
+```python
+# Para toda la app
+app = App(ws_allowed_origins=["https://app.example", "https://admin.example"])
+
+# Por ruta: una lista, "*" para cualquiera, o una funcion propia
+@app.ws("/public", allowed_origins="*")
+def public(ws, request): ...
+
+@app.ws("/partners", check_origin=lambda origin, request: origin.endswith(".partner.example"))
+def partners(ws, request): ...
+```
+
+La misma regla se aplica a WebSocket sobre HTTP/3 (RFC 9220). La logica esta en
+`wsbuilder.ws.websocket_origin_allowed()`.
+
+### Capacidad
+
+Un WebSocket abierto ya no ocupa un hilo de trabajo HTTP: al completar el
+handshake devuelve su hueco y pasa a contar contra
+`HTTPServer(max_ws_connections=1024)`. Los handshakes por encima de ese limite
+reciben `503` con `Retry-After`. Configura `idle_timeout` o
+`keepalive_interval`/`pong_timeout` en las rutas para liberar conexiones
+muertas.
+
 ## `WebSocket`
 
 Metodos mas utiles:

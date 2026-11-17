@@ -33,6 +33,31 @@ El servidor valida:
 - combinacion ambigua de `Content-Length` y `Transfer-Encoding`.
 - cuerpos incompletos, demasiado grandes o sin framing.
 - `Expect: 100-continue` solo con `Content-Length`.
+- lineas terminadas solo en LF (se rechazan con `400` al instante) y metodos en
+  minusculas (`get` no es `GET`).
+- destinos en *absolute-form* (`GET http://host/ruta`), cuyo `host` sustituye a
+  `Host`, y `OPTIONS *`.
+
+### Capacidad y sobrecarga
+
+| Opcion | Por defecto | Efecto |
+| --- | --- | --- |
+| `max_connection_workers` | 64 | Conexiones HTTP atendidas a la vez |
+| `max_ws_connections` | 1024 | WebSockets abiertos; no consumen hilos HTTP |
+| `max_concurrent_streams` | 100 | Streams HTTP/2 por conexion, incluidos los reseteados con handler pendiente |
+| `max_http2_handler_threads` | 64 | Hilos de handlers compartidos por todas las conexiones HTTP/2 |
+
+Una conexion que llega sin hueco libre recibe `503 Service Unavailable` con
+`Retry-After` (sin TLS) en lugar de un reset.
+
+HTTP/2 tambien se protege del abuso del protocolo: si un cliente cancela
+demasiados streams antes de recibir respuesta ("Rapid Reset", CVE-2023-44487)
+o inunda la conexion de `PING`, `SETTINGS`, frames vacios o `CONTINUATION`, la
+conexion se cierra con `GOAWAY(ENHANCE_YOUR_CALM)`. Los umbrales son atributos
+de `wsbuilder.http2.Http2Connection` (`MAX_EARLY_RESETS`,
+`MAX_CONTROL_FRAMES`, `MAX_CONTINUATION_FRAMES`, `ABUSE_WINDOW_SECONDS`).
+
+Para medir el rendimiento en tu maquina: `python benchmarks/http1_keepalive.py`.
 
 ## TLS
 

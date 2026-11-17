@@ -3,6 +3,7 @@ import hashlib
 import re
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass
 
 from .constants import MAGIC_WS
@@ -112,6 +113,93 @@ def _normalize_protocols(value):
         if protocol not in protocols:
             protocols.append(protocol)
     return tuple(protocols)
+
+
+#: ``allowed_origins`` value that accepts a handshake from any page.
+ANY_ORIGIN = "*"
+_DEFAULT_PORTS = {"http": "80", "https": "443", "ws": "80", "wss": "443"}
+
+
+def _normalize_origin(value):
+    """``scheme://host[:port]`` in lowercase, default port dropped, or ``""``."""
+    text = str(value or "").strip().rstrip("/").lower()
+    if not text or text == "null":
+        return text
+    parts = urllib.parse.urlsplit(text)
+    if not parts.scheme or not parts.hostname:
+        return ""
+    host = parts.hostname
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        return ""
+    if port is not None and str(port) != _DEFAULT_PORTS.get(parts.scheme):
+        host = f"{host}:{port}"
+    return f"{parts.scheme}://{host}"
+
+
+def _origin_matches_host(origin, host):
+    """Whether ``origin`` names the same host and port as the ``Host`` header."""
+    parts = urllib.parse.urlsplit(origin)
+    if not parts.hostname:
+        return False
+    host = str(host or "").strip().lower()
+    default = _DEFAULT_PORTS.get(parts.scheme)
+    if default and host.endswith(f":{default}"):
+        host = host[: -len(default) - 1]
+    expected = parts.netloc
+    if default and expected.endswith(f":{default}"):
+        expected = expected[: -len(default) - 1]
+    return bool(host) and host == expected
+
+
+def websocket_origin_allowed(headers, allowed_origins=None, check_origin=None, request=None):
+    """Decide whether a WebSocket handshake may proceed given its ``Origin``.
+
+    Browsers send ``Origin`` on every WebSocket handshake and attach cookies
+    whatever page opened it, so without this check any site could drive a
+    cookie-authenticated channel (Cross-Site WebSocket Hijacking).
+
+    - ``check_origin(origin, request)``, when given, decides alone.
+    - ``allowed_origins=None`` (the default) accepts handshakes without
+      ``Origin`` (non-browser clients) and same-origin ones, whose ``Origin``
+      names the request's ``Host``.
+    - ``allowed_origins="*"`` accepts every origin.
+    - Otherwise it is an iterable of exact origins such as
+      ``"https://app.example"``; ``"*"`` inside it also accepts every origin.
+    """
+    origin = str(headers.get("origin", "") or "").strip()
+    if check_origin is not None:
+        return bool(check_origin(origin, request))
+    if allowed_origins == ANY_ORIGIN:
+        return True
+    if not origin:
+        return True
+    normalized = _normalize_origin(origin)
+    if allowed_origins is None:
+        return bool(normalized) and _origin_matches_host(normalized, headers.get("host", ""))
+    allowed = {_normalize_origin(item) if item != ANY_ORIGIN else ANY_ORIGIN for item in allowed_origins}
+    return ANY_ORIGIN in allowed or (bool(normalized) and normalized in allowed)
+
+
+def normalize_allowed_origins(value):
+    """Validate an ``allowed_origins`` setting: ``None``, ``"*"`` or origins."""
+    if value is None or value == ANY_ORIGIN:
+        return value
+    if isinstance(value, str):
+        value = (value,)
+    out = []
+    for item in value:
+        if item == ANY_ORIGIN:
+            out.append(item)
+            continue
+        normalized = _normalize_origin(item)
+        if not normalized or normalized == "null":
+            raise ValueError(f"invalid WebSocket origin: {item!r}")
+        out.append(normalized)
+    return tuple(out)
 
 
 def _websocket_handshake_error_response(headers):
@@ -321,8 +409,8 @@ class WebSocket:
         if self.idle_timeout > 0 or self.keepalive_interval > 0 or self.pong_timeout > 0:
             try:
                 self.sock.settimeout(self.io_poll_interval)
-            except Exception:
-                pass
+            except (OSError, AttributeError):
+                pass  # Not a real socket: timeouts are simply not polled.
 
     def _now(self):
         return time.monotonic()
@@ -423,8 +511,8 @@ class WebSocket:
             except WebSocketProtocolError as exc:
                 try:
                     self.close(exc.close_code, exc.close_reason)
-                except Exception:
-                    pass
+                except (OSError, ValueError):
+                    pass  # The peer is gone; the protocol error is still raised.
                 self._report_error(exc)
                 raise
 
@@ -435,8 +523,8 @@ class WebSocket:
                 except WebSocketProtocolError as exc:
                     try:
                         self.close(1002, "Protocol Error")
-                    except Exception:
-                        pass
+                    except (OSError, ValueError):
+                        pass  # The peer is gone; the protocol error is still raised.
                     self._report_error(exc)
                     raise
                 self._peer_close_received = True
@@ -502,8 +590,8 @@ class WebSocket:
                     self._report_error(protocol_error)
                     try:
                         self.close(1007, "Invalid UTF-8")
-                    except Exception:
-                        pass
+                    except (OSError, ValueError):
+                        pass  # The peer is gone; the protocol error is still raised.
                     raise protocol_error from exc
             return frame
 

@@ -298,8 +298,8 @@ class Http3Server:
             return None
         try:
             header = parse_long_header(datagram)
-        except Exception:
-            return None
+        except (ValueError, IndexError):
+            return None  # Malformed (QuicPacketError is a ValueError): let it be dropped later.
         if header.packet_type != PACKET_INITIAL:
             return None
         if header.token:
@@ -577,6 +577,15 @@ class Http3Server:
                 ),
                 fin=True,
             )
+            return
+
+        origin_headers = dict(request.headers)
+        origin_headers.setdefault("host", request.headers.get("host", ""))
+        if not self.app.websocket_origin_allowed(route, origin_headers, request):
+            get_log(self.app).warning(
+                "http3", f"refused cross-origin WebSocket: {request.headers.get('origin', '')!r}"
+            )
+            connection.queue_stream_data(stream.id, self._refusal(403, "Forbidden"), fin=True)
             return
 
         security = getattr(self.app, "security", None)

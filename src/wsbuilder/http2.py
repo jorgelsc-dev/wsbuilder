@@ -11,8 +11,10 @@ so a header block must be decoded even on a stream being discarded -- skipping
 it would desynchronise the decoder for every later stream.
 """
 
+import collections
 import struct
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
 from .headers import (
@@ -363,6 +365,17 @@ class Http2Connection:
     #: Handler threads per connection; streams beyond it wait in the pool's
     #: queue, so many connections cannot multiply into thousands of threads.
     MAX_HANDLER_THREADS = 16
+    #: Streams the peer may reset before we answer them, within
+    #: ``ABUSE_WINDOW_SECONDS``, before the connection is closed with
+    #: ENHANCE_YOUR_CALM (HTTP/2 "Rapid Reset", CVE-2023-44487).
+    MAX_EARLY_RESETS = 200
+    #: PING, SETTINGS and empty DATA/HEADERS-free frames tolerated within
+    #: ``ABUSE_WINDOW_SECONDS`` (CVE-2019-9512, CVE-2019-9515, CVE-2019-9518).
+    MAX_CONTROL_FRAMES = 1000
+    #: CONTINUATION frames allowed for a single header block (CVE-2024-27316).
+    MAX_CONTINUATION_FRAMES = 64
+    #: Length of the window the abuse counters above are measured over.
+    ABUSE_WINDOW_SECONDS = 10.0
 
     def __init__(
         self,
@@ -374,6 +387,7 @@ class Http2Connection:
         max_streams=100,
         max_body_bytes=None,
         max_header_bytes=None,
+        handler_pool=None,
     ):
         self.conn = conn
         #: Largest request body buffered per stream; None leaves it unbounded.
@@ -414,8 +428,18 @@ class Http2Connection:
         #: Set when producers must stop at once (connection error or timeout).
         self._abandoned = False
         self._max_handlers = max(1, min(int(max_streams), int(self.MAX_HANDLER_THREADS)))
-        self._handler_pool = None
+        #: A pool shared with other connections (owned by the server) or None,
+        #: in which case the connection creates and shuts down its own.
+        self._shared_pool = handler_pool
+        self._handler_pool = handler_pool
         self._handlers = set()
+        #: Streams whose handler is queued or running. They count against
+        #: MAX_CONCURRENT_STREAMS even after the peer resets them, so a reset
+        #: does not free a slot while the work it started is still pending.
+        self._inflight = set()
+        self._early_resets = collections.deque()
+        self._control_frames = collections.deque()
+        self._continuations = 0
 
     # -- transport -----------------------------------------------------
 
@@ -522,8 +546,11 @@ class Http2Connection:
             pool, self._handler_pool = self._handler_pool, None
         if pending:
             wait(pending, timeout=self.PRODUCER_GRACE_SECONDS)
-        if pool is not None:
+        if pool is not None and pool is not self._shared_pool:
             pool.shutdown(wait=False, cancel_futures=True)
+        elif pending:
+            for future in pending:
+                future.cancel()  # Queued work for a closed connection must not run.
 
     def _streaming(self):
         self._producers = [thread for thread in self._producers if thread.is_alive()]
@@ -586,6 +613,16 @@ class Http2Connection:
                 while len(self._recently_reset) > self.RECENTLY_RESET_STREAMS:
                     del self._recently_reset[next(iter(self._recently_reset))]
 
+    def _count_abuse(self, events, limit, what):
+        """Record one event and end the connection when ``limit`` is passed."""
+        now = time.monotonic()
+        events.append(now)
+        horizon = now - self.ABUSE_WINDOW_SECONDS
+        while events and events[0] < horizon:
+            events.popleft()
+        if len(events) > limit:
+            raise ConnectionError_(f"too many {what}", ERROR_ENHANCE_YOUR_CALM)
+
     def _require_stream_id(self, frame, expected_zero):
         if expected_zero and frame.stream_id != 0:
             raise ConnectionError_(f"{frame.name} must use stream 0")
@@ -598,6 +635,7 @@ class Http2Connection:
             if frame.payload:
                 raise ConnectionError_("SETTINGS ack carries a payload", ERROR_FRAME_SIZE_ERROR)
             return
+        self._count_abuse(self._control_frames, self.MAX_CONTROL_FRAMES, "control frames")
         settings = validate_settings(decode_settings(frame.payload))
         if SETTINGS_INITIAL_WINDOW_SIZE in settings:
             previous = self.peer_settings.get(
@@ -619,6 +657,7 @@ class Http2Connection:
         if len(frame.payload) != 8:
             raise ConnectionError_("PING payload must be 8 octets", ERROR_FRAME_SIZE_ERROR)
         if not frame.has(FLAG_ACK):
+            self._count_abuse(self._control_frames, self.MAX_CONTROL_FRAMES, "control frames")
             self._send(Frame(FRAME_PING, FLAG_ACK, 0, frame.payload))
 
     def _on_goaway(self, frame):
@@ -643,7 +682,12 @@ class Http2Connection:
         if stream is None:
             if frame.stream_id > self.last_stream_id:
                 raise ConnectionError_("RST_STREAM on an idle stream")
+            if frame.stream_id in self._inflight:
+                self._count_abuse(self._early_resets, self.MAX_EARLY_RESETS, "stream resets")
             return
+        if not stream.closed and (stream.headers is None or stream.id in self._inflight):
+            # Cancelled before we answered: cheap for the peer, costly for us.
+            self._count_abuse(self._early_resets, self.MAX_EARLY_RESETS, "stream resets")
         stream.state = CLOSED
         stream.reset_code = struct.unpack(">I", frame.payload)[0]
 
@@ -685,8 +729,14 @@ class Http2Connection:
 
         if stream is None:
             limit = self.local_settings[SETTINGS_MAX_CONCURRENT_STREAMS]
-            live = sum(1 for s in self.streams.values() if not s.closed)
-            if live >= limit:
+            live = {s.id for s in self.streams.values() if not s.closed}
+            if len(live | self._inflight) >= limit:
+                # A refused stream still consumes its identifier (RFC 9113
+                # section 5.1.1), so a later RST_STREAM on it is not "idle".
+                self.last_stream_id = max(self.last_stream_id, frame.stream_id)
+                self._recently_reset[frame.stream_id] = None
+                while len(self._recently_reset) > self.RECENTLY_RESET_STREAMS:
+                    del self._recently_reset[next(iter(self._recently_reset))]
                 raise StreamError("too many concurrent streams", frame.stream_id,
                                   ERROR_REFUSED_STREAM)
             stream = Stream(frame.stream_id, self.peer_settings[SETTINGS_INITIAL_WINDOW_SIZE])
@@ -694,6 +744,7 @@ class Http2Connection:
             self.last_stream_id = max(self.last_stream_id, frame.stream_id)
 
         self._pending_headers = (stream, bytearray(payload), frame.has(FLAG_END_STREAM))
+        self._continuations = 0
         self._check_header_block_size(self._pending_headers[1])
         if frame.has(FLAG_END_HEADERS):
             self._finish_header_block()
@@ -704,6 +755,11 @@ class Http2Connection:
         stream, buffer, end_stream = self._pending_headers
         if frame.stream_id != stream.id:
             raise ConnectionError_("CONTINUATION on a different stream")
+        self._continuations += 1
+        if not frame.payload and not frame.has(FLAG_END_HEADERS):
+            self._count_abuse(self._control_frames, self.MAX_CONTROL_FRAMES, "empty frames")
+        if self._continuations > self.MAX_CONTINUATION_FRAMES:
+            raise ConnectionError_("too many CONTINUATION frames", ERROR_ENHANCE_YOUR_CALM)
         buffer.extend(frame.payload)
         self._check_header_block_size(buffer)
         if frame.has(FLAG_END_HEADERS):
@@ -762,6 +818,8 @@ class Http2Connection:
             self._send(Frame(FRAME_WINDOW_UPDATE, 0, 0, struct.pack(">I", received)))
             self.inbound.credit(received)
 
+        if not payload and not frame.has(FLAG_END_STREAM):
+            self._count_abuse(self._control_frames, self.MAX_CONTROL_FRAMES, "empty frames")
         if stream is None or stream.closed:
             return
         if stream.state not in (OPEN, HALF_CLOSED_LOCAL):
@@ -847,15 +905,30 @@ class Http2Connection:
             version="HTTP/2",
             trailers=_validated_trailers(stream.trailers, stream.id),
         )
+        if self._handler_pool is None and self._shared_pool is not None:
+            raise ConnectionError_("connection is closing")
         if self._handler_pool is None:
             self._handler_pool = ThreadPoolExecutor(
                 max_workers=self._max_handlers, thread_name_prefix="http2-handler"
             )
+        self._inflight.add(stream.id)
         future = self._handler_pool.submit(self._run_handler, stream, request)
         self._handlers.add(future)
 
     def _run_handler(self, stream, request):
         """Run the app off the frame loop, then send the answer under the lock."""
+        try:
+            self._run_handler_inner(stream, request)
+        finally:
+            with self._lock:
+                self._inflight.discard(stream.id)
+
+    def _run_handler_inner(self, stream, request):
+        with self._lock:
+            if self._stream_abandoned(stream):
+                # Reset while it waited in the queue: the answer has nowhere to go.
+                self._release_closed_streams()
+                return
         try:
             response = self.app.dispatch(request)
         except Exception as exc:  # noqa: BLE001 - reported on the stream
@@ -897,8 +970,8 @@ class Http2Connection:
             if callable(close):
                 try:
                     close()
-                except Exception:  # noqa: BLE001 - cleanup only
-                    pass
+                except Exception as exc:  # noqa: BLE001 - cleanup only
+                    get_log(None).debug("http2", f"unsent body close failed: {exc}")
 
     def send_response(self, stream, response, *, send_body=True):
         producer_started = False

@@ -195,6 +195,7 @@ def download_file(
     try:
         response = _opener().open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
+        exc.close()  # It holds the response body; Python 3.14 warns if left open.
         if exc.code == 416 and offset:
             # The partial file is already complete (or bigger): start over.
             os.unlink(partial)
@@ -283,6 +284,7 @@ def huggingface_files(repo, *, revision="main", endpoint=None, token=None, timeo
         with _opener().open(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
             entries = json.loads(response.read(32 * 1024 * 1024).decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        exc.close()
         raise DownloadError(f"listing {repo} failed: HTTP {exc.code}") from exc
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise DownloadError(f"listing {repo} failed: {exc}") from exc
@@ -716,7 +718,8 @@ class OpenAICompatibleBackend:
         try:
             return _opener().open(request, timeout=self.timeout)
         except urllib.error.HTTPError as exc:
-            detail = exc.read(2000).decode("utf-8", "replace")
+            with exc:
+                detail = exc.read(2000).decode("utf-8", "replace")
             raise RuntimeError(f"{self.base_url}{path}: HTTP {exc.code} {detail}") from exc
         except (urllib.error.URLError, OSError) as exc:
             raise ConnectionError(f"{self.base_url}{path}: {getattr(exc, 'reason', exc)}") from exc

@@ -4,6 +4,7 @@ import socket
 import ssl
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .http import Request, Response, parse_http_request, send_http_response
 from .http1 import (
@@ -67,6 +68,14 @@ class HTTPServer:
     #: defaults. A route's own ``max_*_bytes`` wins over these.
     MAX_WS_FRAME_BYTES = None
     MAX_WS_MESSAGE_BYTES = None
+    #: Open WebSocket connections. An upgraded connection gives its HTTP
+    #: worker slot back, so long-lived sockets cannot starve plain requests;
+    #: handshakes beyond this budget are answered 503.
+    MAX_WS_CONNECTIONS = 1024
+    #: Handler threads shared by every HTTP/2 connection of this server.
+    MAX_HTTP2_HANDLER_THREADS = 64
+    #: ``Retry-After`` sent with the 503 for connections over capacity.
+    OVERLOAD_RETRY_AFTER_SECONDS = 1
 
     #: Constructor keyword -> (attribute it overrides, type, smallest value).
     LIMIT_OPTIONS = {
@@ -80,6 +89,8 @@ class HTTPServer:
         "graceful_shutdown_timeout": ("GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS", float, 0.0),
         "max_ws_frame_bytes": ("MAX_WS_FRAME_BYTES", int, 1),
         "max_ws_message_bytes": ("MAX_WS_MESSAGE_BYTES", int, 1),
+        "max_ws_connections": ("MAX_WS_CONNECTIONS", int, 1),
+        "max_http2_handler_threads": ("MAX_HTTP2_HANDLER_THREADS", int, 1),
     }
 
     def __init__(self, host, port, app, ssl_context=None, **limits):
@@ -98,6 +109,10 @@ class HTTPServer:
         self._serving = threading.Event()
         self._workers = set()
         self._workers_lock = threading.Lock()
+        self._local = threading.local()
+        self._ws_limiter = threading.BoundedSemaphore(self.MAX_WS_CONNECTIONS)
+        self._http2_pool = None
+        self._http2_pool_lock = threading.Lock()
         self.server_address = (host, port)
 
     def _apply_limits(self, limits):
@@ -203,10 +218,7 @@ class HTTPServer:
                     continue
                 acquired = worker_limiter.acquire(timeout=self.ACQUIRE_WORKER_TIMEOUT_SECONDS)
                 if not acquired:
-                    try:
-                        conn.close()
-                    except OSError:
-                        pass
+                    self._refuse_overloaded(conn, addr)
                     continue
                 t = threading.Thread(
                     target=self._handle_conn_with_release,
@@ -227,6 +239,10 @@ class HTTPServer:
             if previous_sigterm is not None:
                 signal.signal(signal.SIGTERM, previous_sigterm)
             remaining = self._drain_workers()
+            with self._http2_pool_lock:
+                pool, self._http2_pool = self._http2_pool, None
+            if pool is not None:
+                pool.shutdown(wait=False, cancel_futures=True)
             if remaining:
                 get_log(self.app).warning("shutdown", f"{remaining} connection(s) still open after timeout")
             try:
@@ -237,18 +253,127 @@ class HTTPServer:
             if interrupted:
                 get_log(self.app).info("shutdown", "server stopped.")
 
+    def _refuse_overloaded(self, conn, addr):
+        """Tell a client over capacity to come back later, then close.
+
+        A plain-text 503 is only meaningful without TLS: over TLS the client
+        expects a handshake, so the connection is simply closed.
+        """
+        metrics = getattr(self.app, "metrics", None)
+        if metrics:
+            metrics.error("server", "connection refused: no worker available")
+        get_log(self.app).warning("server", f"over capacity, refusing {addr}")
+        try:
+            if not self.ssl_context:
+                conn.settimeout(0.5)
+                body = b"Service Unavailable"
+                conn.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Content-Type: text/plain; charset=utf-8\r\n"
+                    + f"Retry-After: {int(self.OVERLOAD_RETRY_AFTER_SECONDS)}\r\n".encode()
+                    + f"Content-Length: {len(body)}\r\n".encode()
+                    + b"Connection: close\r\n\r\n"
+                    + body
+                )
+                conn.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass  # The client left, or its buffer is full: closing is all that is left.
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
     def _handle_conn_with_release(self, conn, addr, limiter):
         metrics = getattr(self.app, "metrics", None)
         if metrics:
             metrics.tcp_connection_open()
+        slot = _WorkerSlot(limiter)
+        self._local.slot = slot
         try:
             self.handle_conn(conn, addr)
         finally:
+            self._local.slot = None
             if metrics:
                 metrics.tcp_connection_close()
             with self._workers_lock:
                 self._workers.discard(threading.current_thread())
-            limiter.release()
+            slot.release()
+
+    def _serve_websocket(self, ws_route, reader, conn, addr, headers, request, path, metrics, security, started):
+        """Complete the upgrade and run the route's handler until it returns.
+
+        The connection gives its HTTP worker slot back first: a WebSocket may
+        stay open for hours and is bounded by ``MAX_WS_CONNECTIONS`` instead.
+        """
+        ws = handshake_websocket_with_options(
+            _ReaderWriter(reader, conn),
+            addr,
+            headers,
+            supported_subprotocols=ws_route.get("subprotocols", ()),
+            idle_timeout=ws_route.get("idle_timeout", 0.0),
+            keepalive_interval=ws_route.get("keepalive_interval", 0.0),
+            pong_timeout=ws_route.get("pong_timeout", 0.0),
+            auto_pong=ws_route.get("auto_pong", True),
+            on_close=ws_route.get("on_close"),
+            on_error=ws_route.get("on_error"),
+            on_timeout=ws_route.get("on_timeout"),
+            io_poll_interval=ws_route.get("io_poll_interval", 1.0),
+            ping_payload=ws_route.get("ping_payload", b""),
+            max_frame_bytes=_first_set(ws_route.get("max_frame_bytes"), self.MAX_WS_FRAME_BYTES),
+            max_message_bytes=_first_set(
+                ws_route.get("max_message_bytes"), self.MAX_WS_MESSAGE_BYTES
+            ),
+        )
+        if not ws:
+            if metrics:
+                elapsed = (time.time() - started) * 1000.0
+                metrics.error("ws_handshake", "failed")
+                metrics.http_response_sent(
+                    request.method,
+                    request.path,
+                    400,
+                    body_size=0,
+                    duration_ms=elapsed,
+                )
+            if security:
+                security.observe_response(request, 400)
+            return False
+        if metrics:
+            metrics.ws_opened(path)
+            elapsed = (time.time() - started) * 1000.0
+            metrics.http_response_sent(
+                request.method,
+                request.path,
+                101,
+                body_size=0,
+                duration_ms=elapsed,
+            )
+        if security:
+            security.observe_response(request, 101)
+        slot = getattr(self._local, "slot", None)
+        if slot is not None:
+            slot.release()
+        try:
+            ws_route["handler"](ws, request)
+        except Exception as e:
+            get_log(self.app).exception("ws", f"handler error: {e}", e)
+            if metrics:
+                metrics.error("ws_handler", e)
+        finally:
+            if metrics:
+                metrics.ws_closed(path)
+        return False
+
+    def http2_handler_pool(self):
+        """The handler pool shared by this server's HTTP/2 connections."""
+        with self._http2_pool_lock:
+            if self._http2_pool is None:
+                self._http2_pool = ThreadPoolExecutor(
+                    max_workers=int(self.MAX_HTTP2_HANDLER_THREADS),
+                    thread_name_prefix="http2-handler",
+                )
+            return self._http2_pool
 
     def _reuse_allowed(self):
         # A draining server answers in-flight requests with Connection: close.
@@ -368,8 +493,8 @@ class HTTPServer:
             try:
                 if selected() == "h2":
                     return True
-            except Exception:
-                pass
+            except (OSError, ValueError, AttributeError):
+                pass  # Not negotiated (or not a TLS socket): fall back to the preface.
         try:
             return reader.starts_with(HTTP2_PREFACE)
         except (ConnectionError, OSError):
@@ -387,6 +512,7 @@ class HTTPServer:
             max_streams=self.MAX_CONCURRENT_STREAMS,
             max_body_bytes=self.MAX_REQUEST_BODY_BYTES,
             max_header_bytes=self.MAX_REQUEST_HEADER_BYTES,
+            handler_pool=self.http2_handler_pool(),
         )
         # The reader already owns any bytes read while sniffing, and writes
         # still go straight to the socket.
@@ -745,6 +871,22 @@ class HTTPServer:
                     security.observe_response(request, response.status)
                 return False
             handshake_error = _websocket_handshake_error_response(headers)
+            if handshake_error is None and not self.app.websocket_origin_allowed(
+                ws_route, headers, request
+            ):
+                get_log(self.app).warning(
+                    "ws", f"refused cross-origin WebSocket from {addr}: {headers.get('origin', '')!r}"
+                )
+                handshake_error = Response.text("Forbidden: WebSocket origin not allowed", status=403)
+            ws_reserved = False
+            if handshake_error is None:
+                ws_reserved = self._ws_limiter.acquire(blocking=False)
+                if not ws_reserved:
+                    handshake_error = Response.text(
+                        "Service Unavailable: too many WebSocket connections",
+                        status=503,
+                        headers={"Retry-After": str(int(self.OVERLOAD_RETRY_AFTER_SECONDS))},
+                    )
             if handshake_error is not None:
                 send_http_response(
                     conn,
@@ -766,61 +908,12 @@ class HTTPServer:
                 return False
             # Frames that arrived with the upgrade request are already in the
             # reader's buffer, so the WebSocket must read through it.
-            ws = handshake_websocket_with_options(
-                _ReaderWriter(reader, conn),
-                addr,
-                headers,
-                supported_subprotocols=ws_route.get("subprotocols", ()),
-                idle_timeout=ws_route.get("idle_timeout", 0.0),
-                keepalive_interval=ws_route.get("keepalive_interval", 0.0),
-                pong_timeout=ws_route.get("pong_timeout", 0.0),
-                auto_pong=ws_route.get("auto_pong", True),
-                on_close=ws_route.get("on_close"),
-                on_error=ws_route.get("on_error"),
-                on_timeout=ws_route.get("on_timeout"),
-                io_poll_interval=ws_route.get("io_poll_interval", 1.0),
-                ping_payload=ws_route.get("ping_payload", b""),
-                max_frame_bytes=_first_set(ws_route.get("max_frame_bytes"), self.MAX_WS_FRAME_BYTES),
-                max_message_bytes=_first_set(
-                    ws_route.get("max_message_bytes"), self.MAX_WS_MESSAGE_BYTES
-                ),
-            )
-            if not ws:
-                if metrics:
-                    elapsed = (time.time() - started) * 1000.0
-                    metrics.error("ws_handshake", "failed")
-                    metrics.http_response_sent(
-                        request.method,
-                        request.path,
-                        400,
-                        body_size=0,
-                        duration_ms=elapsed,
-                    )
-                if security:
-                    security.observe_response(request, 400)
-                return False
-            if metrics:
-                metrics.ws_opened(path)
-                elapsed = (time.time() - started) * 1000.0
-                metrics.http_response_sent(
-                    request.method,
-                    request.path,
-                    101,
-                    body_size=0,
-                    duration_ms=elapsed,
-                )
-            if security:
-                security.observe_response(request, 101)
             try:
-                ws_route["handler"](ws, request)
-            except Exception as e:
-                get_log(self.app).exception("ws", f"handler error: {e}", e)
-                if metrics:
-                    metrics.error("ws_handler", e)
+                return self._serve_websocket(
+                    ws_route, reader, conn, addr, headers, request, path, metrics, security, started
+                )
             finally:
-                if metrics:
-                    metrics.ws_closed(path)
-            return False
+                self._ws_limiter.release()
 
         try:
             response = self.app.dispatch(request)
@@ -893,3 +986,21 @@ class HTTPServer:
         if security:
             security.observe_response(request, response.status)
         return keep_alive
+
+
+class _WorkerSlot:
+    """One worker-limiter permit that can be given back early, exactly once."""
+
+    __slots__ = ("_limiter", "_released", "_lock")
+
+    def __init__(self, limiter):
+        self._limiter = limiter
+        self._released = False
+        self._lock = threading.Lock()
+
+    def release(self):
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        self._limiter.release()

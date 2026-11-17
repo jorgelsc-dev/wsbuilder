@@ -1,4 +1,3 @@
-import os
 import re
 import tomllib
 import unittest
@@ -10,59 +9,69 @@ DECLARED_VERSION = re.compile(r'^__version__ = "([^"]+)"$', re.MULTILINE)
 ARTIFACT_NAME = re.compile(r"wsbuilder-(\d+\.\d+\.\d+[^-\s/]*)")
 
 
+DOCS_SITE = "https://wsbuilder.jorgelsc.dev/"
+GITHUB_BLOB = "https://github.com/jorgelsc-dev/wsbuilder/blob/main/"
+
+
 class TestDocumentationFiles(unittest.TestCase):
-    def test_readme_local_links_exist(self):
-        readme = ROOT / "README.md"
-        text = readme.read_text(encoding="utf-8")
+    def test_readme_uses_absolute_links(self):
+        # README.md is the PyPI description, where relative links 404 (#82).
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        relative = [
+            target
+            for target in MARKDOWN_LINK.findall(text)
+            if not target.startswith(("http://", "https://", "mailto:", "#"))
+        ]
+        self.assertEqual(relative, [])
 
+    def test_readme_links_point_at_existing_pages(self):
+        text = (ROOT / "README.md").read_text(encoding="utf-8")
         missing = []
-        for raw_target in MARKDOWN_LINK.findall(text):
-            target = raw_target.split("#", 1)[0].strip()
-            if not target or "://" in target or target.startswith("mailto:"):
-                continue
-            if not (ROOT / target).exists():
-                missing.append(raw_target)
-
+        for target in MARKDOWN_LINK.findall(text):
+            target = target.split("#", 1)[0]
+            if target.startswith(DOCS_SITE):
+                page = target[len(DOCS_SITE):].strip("/")
+                candidates = [ROOT / "docs" / f"{page}.md", ROOT / "docs" / page / "index.md"]
+                if page and not any(path.exists() for path in candidates):
+                    missing.append(target)
+            elif target.startswith(GITHUB_BLOB):
+                if not (ROOT / target[len(GITHUB_BLOB):]).exists():
+                    missing.append(target)
         self.assertEqual(missing, [])
 
 
 class TestPackageVersion(unittest.TestCase):
-    """The version lives in two files that the release workflow patches
-    independently; nothing else would notice if one of them drifted."""
+    """The version comes from git tags through setuptools-scm (issue #69)."""
 
     def setUp(self):
         with (ROOT / "pyproject.toml").open("rb") as handle:
-            self.project_version = tomllib.load(handle)["project"]["version"]
+            self.config = tomllib.load(handle)
+
+    def test_the_version_is_dynamic_and_has_one_source(self):
+        project = self.config["project"]
+        self.assertNotIn("version", project, "pyproject.toml must not pin a version")
+        self.assertIn("version", project.get("dynamic", []))
+        self.assertIn("setuptools_scm", self.config["tool"])
+        self.assertTrue(
+            any(req.startswith("setuptools-scm") for req in self.config["build-system"]["requires"])
+        )
         init_text = (ROOT / "src" / "wsbuilder" / "__init__.py").read_text(encoding="utf-8")
-        match = DECLARED_VERSION.search(init_text)
-        self.assertIsNotNone(match, "src/wsbuilder/__init__.py declares no __version__")
-        self.module_version = match.group(1)
-
-    def test_pyproject_and_module_versions_agree(self):
-        self.assertEqual(self.project_version, self.module_version)
-
-    @unittest.skipIf(
-        os.environ.get("GITHUB_REF", "").startswith(("refs/tags/v", "refs/heads/release/")),
-        "release tags and branches declare the plain release version",
-    )
-    def test_main_declares_an_unreleased_development_version(self):
-        # release-from-main.yml strips the suffix on the release/vX.Y.Z branch
-        # it cuts, so a plain version here means the tree claims to *be* a
-        # published release it is not.
-        self.assertRegex(
-            self.project_version,
-            r"^\d+\.\d+\.\d+\.dev\d+$",
-            "the version on main must carry a .devN suffix",
+        self.assertIsNone(
+            DECLARED_VERSION.search(init_text), "__init__.py must not hard-code __version__"
         )
 
-    def test_docs_do_not_pin_a_stale_artifact_version(self):
+    def test_the_module_reports_a_pep440_version(self):
+        import wsbuilder
+
+        self.assertRegex(wsbuilder.__version__, r"^\d+\.\d+\.\d+")
+
+    def test_docs_do_not_pin_an_artifact_version(self):
         stale = []
         for path in sorted((ROOT / "docs").glob("*.md")) + [ROOT / "README.md"]:
             for found in ARTIFACT_NAME.findall(path.read_text(encoding="utf-8")):
-                if found != self.project_version:
-                    stale.append(f"{path.relative_to(ROOT)}: wsbuilder-{found}")
+                stale.append(f"{path.relative_to(ROOT)}: wsbuilder-{found}")
 
-        self.assertEqual(stale, [])
+        self.assertEqual(stale, [], "use wsbuilder-*.whl instead of a concrete version")
 
 
 class TestPackageDiscovery(unittest.TestCase):

@@ -112,7 +112,8 @@ class TestMaterialization(unittest.TestCase):
 
     def test_certificate_file_carries_the_chain(self):
         with self.leaf.materialize() as files:
-            payload = open(files.certificate, "rb").read()
+            with open(files.certificate, "rb") as handle:
+                payload = handle.read()
         self.assertEqual(payload.count(b"BEGIN CERTIFICATE"), 2)
 
     def test_closing_twice_is_harmless(self):

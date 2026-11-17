@@ -665,8 +665,10 @@ class QuicConnection:
         if callback is not None:
             try:
                 callback()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - a callback must not break the connection
+                from ..logs import get_log
+
+                get_log(None).warning("quic", f"on_outbound callback failed: {exc}")
 
     # -- sending -------------------------------------------------------
 

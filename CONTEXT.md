@@ -50,7 +50,7 @@ extras opcionales. El paquete está clasificado como Alpha en
 
 ```text
 src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
-  __init__.py           API pública, __version__, carga diferida de PKI
+  __init__.py           API pública, __version__ (de _version.py, generado por setuptools-scm), carga diferida de PKI
   __main__.py           CLI/demo (argparse, CLI_LIMITS, build_demo_app, main)
   framework.py          fachada de reexportación
   app.py                App, Router, Route, workers por vista, docs, dispatch
@@ -72,7 +72,8 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   security.py           ACL, rate limit, bloqueo de IP
   logs.py metrics.py tasks.py   observabilidad y tareas en segundo plano
   dns.py mdns.py        servidor DNS local, mDNS/DNS-SD
-  proxyi.py             reverse proxy y balanceo
+  proxyi/               reverse proxy y balanceo: _common (constantes, helpers), stats, routing, core
+  _access.py            EndpointGuard: acceso y límites de streams de métricas y dashboard
   pki.py                CA, certificados y material TLS (extra tls)
   ia.py predicts.py     redes neuronales y predicción
   ia_text.py ia_audio.py tokens UTF-8, vectores de texto y audio WAV PCM
@@ -80,7 +81,10 @@ tests/                  suite unittest ejecutada con pytest (test_*.py)
 docs/ + mkdocs.yml      sitio MkDocs (docs/reference, docs/help, stylesheets, assets)
 examples/full-project/  proyecto de ejemplo
 .github/workflows/      CI, empaquetado, docs, release y política de PR
-.github/rulesets/       protect-main/develop/release/tags-v (sincronizados por workflow)
+.github/rulesets/       protect-main y protect-tags-v (sincronizados por workflow)
+.github/SECURITY.md     política de seguridad y reporte privado
+benchmarks/             benchmarks manuales (http1_keepalive.py)
+CHANGELOG.md            registro de cambios (sección Unreleased → notas de la release)
 .github/CODEOWNERS, .github/dependabot.yml
 CONTRIBUTING.md, SUPPORT.md, LICENSE, MANIFEST.in, requirements-docs.txt
 ```
@@ -110,7 +114,7 @@ tests, a `tests/`; los de docs, a `docs/`.
 | ACL, rate limiting y bloqueo de IP | `security.py` | `test_security.py` | `security.md` |
 | Logs, métricas y tareas | `logs.py`, `metrics.py`, `tasks.py` | `test_logs.py`, `test_metrics.py`, `test_tasks.py` | `observability.md`, `observability-tasks.md`, `tasks.md` |
 | DNS, mDNS y descubrimiento | `dns.py`, `mdns.py` | `test_dns.py`, `test_mdns.py` | `dns.md`, `mdns.md`, `network-edge.md` |
-| Reverse proxy y balanceo | `proxyi.py` | `test_proxyi.py`, `test_proxyi_routing.py` | `proxy.md` |
+| Reverse proxy y balanceo | `proxyi/`, `_access.py` | `test_proxyi.py`, `test_proxyi_routing.py` | `proxy.md` |
 | Certificados y material TLS | `pki.py`, `__init__.py` (exportación diferida) | `test_pki.py`, `test_optional_extras.py` | `tls-certificates.md` |
 | Redes neuronales, texto, audio y predicción | `ia.py`, `ia_text.py`, `ia_audio.py`, `predicts.py` | `test_ia.py`, `test_ia_text_audio.py`, `test_predicts.py` | `ia.md`, `ai-predict.md` |
 | Demo, documentación y políticas de contribución | `__main__.py`, `docs/`, `.github/workflows/`, `CONTRIBUTING.md` | `test_demo_monitor.py`, `test_docs.py`, `test_documentation_files.py`, `test_contributing_policy.py`, `test_pr_identity_policy.py`, `test_example_full_project.py` | `index.md`, `architecture.md`, `api-map.md` |
@@ -124,7 +128,8 @@ Otros documentos de `docs/`: `install.md`, `getting-started.md`,
 ### App (`app.py`)
 
 ```python
-App(cors_allow_origin="", thread_cookie_secret="", thread_cookie_name="wsbuilder-thread")
+App(cors_allow_origin="", thread_cookie_secret="", thread_cookie_name="wsbuilder-thread",
+    ws_allowed_origins=None, redirect_slashes=True)
 ```
 
 Atributos: `router`, `ws_routes`, `startup_hooks`, `metrics`, `security`,
@@ -141,10 +146,14 @@ Los atributos opcionales valen `None` hasta llamar al `enable_*` o `install_*`.
 - `@app.ws(path, subprotocols=(), idle_timeout=0.0, keepalive_interval=0.0,
   pong_timeout=0.0, auto_pong=True, on_close=None, on_error=None,
   on_timeout=None, io_poll_interval=1.0, ping_payload=b"",
-  max_frame_bytes=None, max_message_bytes=None)`; el handler recibe
+  max_frame_bytes=None, max_message_bytes=None, allowed_origins=None,
+  check_origin=None)`; `Origin` se valida en el handshake (por defecto mismo
+  origen o sin `Origin`; 403 si no); el handler recibe
   `(ws, request)`.
 - `app.add_startup(func)`, `app.enable_metrics(path="/api/metrics",
-  stream_path="/api/metrics/stream", app_name=None, max_tracked_labels=None)`,
+  stream_path="/api/metrics/stream", app_name=None, max_tracked_labels=None,
+  access="private", token=None, authorize=None, max_streams=4,
+  max_stream_seconds=300)` (acceso por defecto solo loopback y redes privadas),
   `app.enable_security(policy=None)`, `app.enable_caches(caches=None)`,
   `app.enable_tls(manager=None, ca=None, common_name="localhost",
   dns_names=None, ip_addresses=("127.0.0.1",), rotate=False, attr_name="tls")`,
@@ -163,7 +172,8 @@ Los atributos opcionales valen `None` hasta llamar al `enable_*` o `install_*`.
 - `Request(method, path, query_string, headers, body, client, tls=None,
   version="HTTP/1.1", trailers=None)`; atributos `method` (mayúsculas), `path`,
   `query` (dict de `parse_query_string`, máx. 1024 campos), `headers`, `body`
-  (bytes), `client`, `tls`, `version`, `trailers`, `app`; métodos `text()` y
+  (bytes), `client`, `tls`, `version`, `trailers`, `path_params` (segmentos
+  `{name}`, `{name:int}`, `{name:path}` de la ruta), `app`; métodos `text()` y
   `json()` (devuelve `None` si no es JSON válido).
 - `Response(status=200, body=b"", headers=None, reason=None, stream=None)`; el
   estado debe estar en 100–599. `headers` es un dict con un valor por nombre; un
@@ -521,12 +531,12 @@ La demo expone `/`, `/monitor`, `/thread-demo`, `/api/health`, `/api/metrics`,
 
 | Workflow | Función |
 | --- | --- |
-| [package-build.yml](.github/workflows/package-build.yml) | Lint, build, Twine, tests e instalación de prueba del wheel sin extras (comprueba `from wsbuilder import *` y los nombres TLS ausentes) en Python 3.11–3.14 |
-| [main-only-from-develop.yml](.github/workflows/main-only-from-develop.yml) | Job `enforce-source`: valida autor, rama de origen e identidades de las PRs a `main` |
+| [package-build.yml](.github/workflows/package-build.yml) | Lint, build, Twine, tests con cobertura, mypy informativo e instalación de prueba del wheel sin extras (comprueba `from wsbuilder import *` y los nombres TLS ausentes) en Python 3.11–3.14 |
+| [pr-policy.yml](.github/workflows/pr-policy.yml) | Job `enforce-source`: valida autor, rama de origen e identidades de las PRs a `main` |
 | [codeql.yml](.github/workflows/codeql.yml) | Análisis CodeQL de Python |
 | [docs-pages.yml](.github/workflows/docs-pages.yml) | Construye y publica el sitio MkDocs para cambios pertinentes en `main` |
-| [release-from-main.yml](.github/workflows/release-from-main.yml) | Job `test` de solo lectura; el job `create-release` (único con permisos de escritura) calcula la versión, crea `release/vX.Y.Z`, tag y GitHub Release, y abre la PR de la siguiente versión `.devN` |
-| [publish-packages.yml](.github/workflows/publish-packages.yml) | Valida y publica los paquetes de release; `id-token: write` solo en el job de PyPI y `contents: write` solo en el de GitHub Release |
+| [release-from-main.yml](.github/workflows/release-from-main.yml) | Job `test` de solo lectura; el job `create-release` (único con permisos de escritura) calcula la versión, etiqueta `vX.Y.Z` el commit probado de `main`, crea la GitHub Release (con la sección Unreleased de CHANGELOG.md) y lanza la publicación; solo publica si cambian archivos que se distribuyen (`src/`, `pyproject.toml`, `README.md`, `MANIFEST.in`, `LICENSE`) |
+| [publish-packages.yml](.github/workflows/publish-packages.yml) | Solo por `workflow_dispatch` sobre un tag: valida que la versión construida coincide con el tag y publica; `id-token: write` solo en el job de PyPI y `contents: write` solo en el de GitHub Release |
 | [sync-rulesets.yml](.github/workflows/sync-rulesets.yml) | Sincroniza `.github/rulesets/*.json` con las reglas del repositorio |
 
 La navegación del sitio vive en [mkdocs.yml](mkdocs.yml); la documentación de
@@ -551,13 +561,14 @@ comentario.
 - `enforce-source` comprueba cuenta, rama e identidades. La protección de `main`
   también exige revisión y comprobaciones actualizadas; consultar las reglas
   vigentes antes de atribuir un bloqueo a un conflicto de código.
-- La versión está en `pyproject.toml` y `src/wsbuilder/__init__.py`; ambos valores
-  deben coincidir. `main` declara una versión de desarrollo con sufijo `.devN`.
-  Un cambio que solo ajusta las declaraciones de versión respecto al último tag
-  no genera otra release. No cambiar versiones ni crear tags manualmente por
-  una tarea que no lo requiera.
+- La versión no se escribe en ningún archivo: `setuptools-scm` la deriva de los
+  tags de git (`dynamic = ["version"]`). Un tag `vX.Y.Z` construye `X.Y.Z`; cada
+  commit posterior, `X.Y.(Z+1).devN+g<hash>`. Los tags los crea
+  `release-from-main.yml` sobre commits de `main`; no crear tags manualmente por
+  una tarea que no lo requiera. Las PRs que cambian comportamiento añaden su
+  entrada en la sección `Unreleased` de [CHANGELOG.md](CHANGELOG.md).
 - Mantener fuera de los commits los archivos ignorados y artefactos como `dist/`,
   `build/`, `site/`, caches, bytecode y entornos virtuales. El contenido del sdist
   se controla con [MANIFEST.in](MANIFEST.in).
-- Reportar vulnerabilidades por un canal privado, como indica la política de
-  contribución.
+- Reportar vulnerabilidades en privado, como indica
+  [.github/SECURITY.md](.github/SECURITY.md).

@@ -1,5 +1,13 @@
 # IA y Prediccion
 
+!!! warning "Experimental"
+    Los modulos de IA y modelos de lenguaje (`ia`, `ia_lm`, `ia_text`,
+    `ia_audio`, `predicts`, `llm`, `ndjson_model`) son experimentales: su API y
+    sus formatos pueden cambiar entre versiones menores sin periodo de
+    transicion, a diferencia del nucleo HTTP/WebSocket. Fija la version
+    (`wsbuilder==X.Y.*`) si dependes de ellos y revisa el
+    [registro de cambios](changelog.md) al actualizar.
+
 ## `DataSet`
 
 `DataSet` es el contenedor basico para pares `X` y `Y`.

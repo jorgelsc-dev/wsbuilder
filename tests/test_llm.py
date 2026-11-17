@@ -469,7 +469,8 @@ class TestInstallLlm(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, response.headers.get("Content-Type"), response.read()
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.headers.get("Content-Type"), exc.read()
+            with exc:
+                return exc.code, exc.headers.get("Content-Type"), exc.read()
 
     def test_listing_and_info(self):
         status, _type, body = self.call("GET", "/api/llm/models")

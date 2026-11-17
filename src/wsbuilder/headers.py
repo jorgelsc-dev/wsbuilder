@@ -1,6 +1,10 @@
 import re
 
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_LINE_BREAK_RE = re.compile(r"[\r\n\x00]")
+# RFC 9110 section 5.5: a field value is VCHAR, obs-text, SP and HTAB, so the
+# C0 controls other than HTAB and DEL are refused.
+_CONTROL_RE = re.compile(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 _LOWER_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
@@ -19,8 +23,8 @@ def field_value_problem(value):
     RFC 9113 section 8.2.1 and RFC 9114 section 4.2: no CR, LF or NUL, and no
     leading or trailing space or tab.
     """
-    text = str(value)
-    if any(char in text for char in ("\r", "\n", "\x00")):
+    text = value if type(value) is str else str(value)
+    if _LINE_BREAK_RE.search(text):
         return "header value contains CR, LF or NUL"
     if text[:1] in (" ", "\t") or text[-1:] in (" ", "\t"):
         return "header value has leading or trailing whitespace"
@@ -64,10 +68,10 @@ def validate_header_name(name):
 
 
 def validate_header_value(value):
-    text = str(value)
-    if any(char in text for char in ("\r", "\n", "\x00")):
+    text = value if type(value) is str else str(value)
+    if _LINE_BREAK_RE.search(text):
         raise ValueError("HTTP header values must not contain CR, LF or NUL")
-    if any(ord(char) < 32 and char != "\t" for char in text):
+    if _CONTROL_RE.search(text):
         raise ValueError("HTTP header values must not contain control characters")
     return text
 
