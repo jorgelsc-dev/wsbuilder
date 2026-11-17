@@ -13,6 +13,7 @@ from wsbuilder.http2 import (
     ERROR_INTERNAL_ERROR,
     ERROR_NO_ERROR,
     ERROR_PROTOCOL_ERROR,
+    ERROR_REFUSED_STREAM,
     FLAG_ACK,
     FLAG_END_HEADERS,
     FLAG_END_STREAM,
@@ -60,6 +61,22 @@ class Pipe:
 
     def sendall(self, payload):
         self.sent.extend(payload)
+
+
+class StagedPipe(Pipe):
+    """A Pipe that releases each stage only after its event is set."""
+
+    def __init__(self, stages):
+        super().__init__(b"")
+        self.stages = list(stages)
+
+    def recv(self, size):
+        if not self.data and self.stages:
+            payload, ready = self.stages.pop(0)
+            if ready is not None and not ready.wait(5):
+                raise AssertionError("stage precondition never happened")
+            self.data.extend(payload)
+        return super().recv(size)
 
 
 def frames_in(payload):
@@ -911,12 +928,18 @@ class TestAbuseLimits(ConnectionHarness):
     def setUp(self):
         super().setUp()
         self.calls = 0
+        self.calls_lock = threading.Lock()
+        self.two_running = threading.Event()
         self.gate = threading.Event()
+        self.addCleanup(self.gate.set)
 
         @self.app.api("/slow", methods=("GET",))
         def slow(_request):
-            self.calls += 1
-            self.gate.wait(2)
+            with self.calls_lock:
+                self.calls += 1
+                if self.calls >= 2:
+                    self.two_running.set()
+            self.gate.wait(5)
             return {"ok": True}
 
     def goaway_codes(self, frames):
@@ -941,20 +964,47 @@ class TestAbuseLimits(ConnectionHarness):
         self.assertNotIn(ERROR_PROTOCOL_ERROR, self.goaway_codes(frames))
 
     def test_rapid_reset_ends_the_connection(self):
-        frames = self.run_connection(*self.rapid_reset("/hello", 1000))
+        # Handlers block on the gate, so every reset lands on a stream that is
+        # still pending (a fast handler could finish first and its reset would
+        # rightly not count). max_streams is raised so none is refused.
+        pairs = Http2Connection.MAX_EARLY_RESETS + 50
+        try:
+            frames = self.run_connection(*self.rapid_reset("/slow", pairs), max_streams=pairs + 1)
+        finally:
+            self.gate.set()
         self.assertIn(ERROR_ENHANCE_YOUR_CALM, self.goaway_codes(frames))
 
     def test_reset_streams_keep_their_slot_until_the_handler_ends(self):
-        chunks = []
-        for index in range(5):
-            stream_id = 1 + 2 * index
-            chunks.append(self.headers_frame(stream_id, self.request("/slow")))
-            chunks.append(Frame(FRAME_RST_STREAM, 0, stream_id, struct.pack(">I", 8)).serialize())
-        chunks.append(self.headers_frame(11, self.request("/slow")))
-        threading.Timer(0.2, self.gate.set).start()
-        frames = self.run_connection(*chunks, max_streams=2)
-        refused = [f.stream_id for f in frames if f.type == FRAME_RST_STREAM]
-        self.assertTrue(refused, "streams over the limit must be refused while work is pending")
+        prologue = CONNECTION_PREFACE + Frame(FRAME_SETTINGS, 0, 0, b"").serialize()
+        opening = self.headers_frame(1, self.request("/slow")) + self.headers_frame(
+            3, self.request("/slow")
+        )
+        resets = b"".join(
+            Frame(FRAME_RST_STREAM, 0, stream_id, struct.pack(">I", 8)).serialize()
+            for stream_id in (1, 3)
+        )
+        late = self.headers_frame(5, self.request("/slow")) + self.headers_frame(
+            7, self.request("/slow")
+        )
+        # The resets are only delivered once both handlers are running, so
+        # the outcome does not depend on thread scheduling.
+        pipe = StagedPipe(
+            [(prologue + opening, None), (resets + late, self.two_running)]
+        )
+        try:
+            Http2Connection(
+                pipe, self.app, client_address=("127.0.0.1", 1234), max_streams=2
+            ).serve()
+        finally:
+            self.gate.set()
+        frames = frames_in(pipe.sent)
+        refused = {
+            f.stream_id: struct.unpack(">I", f.payload)[0]
+            for f in frames
+            if f.type == FRAME_RST_STREAM
+        }
+        self.assertEqual(refused, {5: ERROR_REFUSED_STREAM, 7: ERROR_REFUSED_STREAM})
+        self.assertEqual(self.calls, 2)
 
     def test_a_ping_flood_ends_the_connection(self):
         ping = Frame(FRAME_PING, 0, 0, b"12345678").serialize()
