@@ -9,6 +9,18 @@ next pull request moves those entries under the new version heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- Releases can no longer silently miss PyPI: a re-run of `release-from-main`
+  on an already tagged commit resumes that release instead of skipping it,
+  `publish-packages` fails unless PyPI serves the new version, and the new
+  `pypi-sync-check` workflow (daily and after every release) restarts the
+  publication when the newest tag is missing from PyPI.
+- Two HTTP/2 abuse tests no longer depend on thread scheduling; a failure there
+  could block a release, since the release job runs the suite first.
+
+## [1.6.0] - 2026-11-17
+
 ### Security
 
 - HTTP/2: streams reset by the client keep their `MAX_CONCURRENT_STREAMS` slot

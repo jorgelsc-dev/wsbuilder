@@ -1,0 +1,67 @@
+name: pypi-sync-check
+
+# Safety net: makes sure the newest release tag is installable from PyPI.
+# If it is not (a failed or skipped publish run), the publish workflow is
+# started again on that tag and this run fails, so the maintainer is notified.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  workflow_run:
+    workflows: [release-from-main, publish-packages]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-sync-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compare the newest tag with PyPI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # After a publish run ends, only report: re-dispatching from there
+          # would loop for ever if publishing keeps failing (a bad token).
+          REPORT_ONLY: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name == 'publish-packages' }}
+        run: |
+          set -euo pipefail
+          tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+          if [ -z "$tag" ]; then
+            echo "No release tag yet."
+            exit 0
+          fi
+          version="${tag#v}"
+          if curl -fsS "https://pypi.org/pypi/wsbuilder/${version}/json" -o /dev/null; then
+            echo "PyPI serves wsbuilder ${version} (${tag}); nothing to do."
+            exit 0
+          fi
+
+          # A publish run for this tag may still be going (workflow_run fires
+          # as soon as release-from-main ends); do not start a second one.
+          active="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow publish-packages.yml --branch "$tag" \
+            --json status --jq '[.[] | select(.status != "completed")] | length')"
+          if [ "${active:-0}" -gt 0 ]; then
+            echo "A publish run for ${tag} is in progress; checking again later."
+            exit 0
+          fi
+
+          if [ "$REPORT_ONLY" = "true" ]; then
+            echo "::error::publish-packages finished but wsbuilder ${version} (${tag}) is not on PyPI. Check that run; the daily check will retry."
+            exit 1
+          fi
+          echo "::error::${tag} is tagged but wsbuilder ${version} is not on PyPI; restarting publish-packages."
+          gh workflow run publish-packages.yml --repo "$GITHUB_REPOSITORY" --ref "$tag"
+          exit 1
