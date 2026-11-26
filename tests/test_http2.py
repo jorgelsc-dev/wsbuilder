@@ -941,7 +941,12 @@ class TestAbuseLimits(ConnectionHarness):
         self.assertNotIn(ERROR_PROTOCOL_ERROR, self.goaway_codes(frames))
 
     def test_rapid_reset_ends_the_connection(self):
-        frames = self.run_connection(*self.rapid_reset("/hello", 1000))
+        # The handlers block on the gate, so every RST_STREAM cancels a stream
+        # that is still in flight however slowly the frames are read.
+        try:
+            frames = self.run_connection(*self.rapid_reset("/slow", 1000), max_streams=1000)
+        finally:
+            self.gate.set()
         self.assertIn(ERROR_ENHANCE_YOUR_CALM, self.goaway_codes(frames))
 
     def test_reset_streams_keep_their_slot_until_the_handler_ends(self):
@@ -951,8 +956,12 @@ class TestAbuseLimits(ConnectionHarness):
             chunks.append(self.headers_frame(stream_id, self.request("/slow")))
             chunks.append(Frame(FRAME_RST_STREAM, 0, stream_id, struct.pack(">I", 8)).serialize())
         chunks.append(self.headers_frame(11, self.request("/slow")))
-        threading.Timer(0.2, self.gate.set).start()
-        frames = self.run_connection(*chunks, max_streams=2)
+        # Hold the handlers until the connection is done, so the reset streams
+        # are still running when the later streams arrive.
+        try:
+            frames = self.run_connection(*chunks, max_streams=2)
+        finally:
+            self.gate.set()
         refused = [f.stream_id for f in frames if f.type == FRAME_RST_STREAM]
         self.assertTrue(refused, "streams over the limit must be refused while work is pending")
 

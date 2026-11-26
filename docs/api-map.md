@@ -124,6 +124,7 @@ completa en [RPC entre servicios](rpc.md).
 | Ejecucion | `LanguageModel` (`native`, `from_file`, `from_openai`), `OpenAICompatibleBackend`, `ModelStore(loader=...)` |
 | HTTP | `install_llm`, `App.enable_llm` |
 | Formato NDJSON | `ModelReader`, `ModelWriter`, `ModelTensor`, `ModelFormatError`, `MODEL_FORMAT`, `is_model_file`, `read_model_header` |
+| Pesos safetensors y GGUF | `open_weights`, `detect_weights_format`, `SafetensorsReader`, `ShardedSafetensors`, `GGUFReader`, `WeightTensor`, `WeightsFormatError` |
 
 Guia completa en [Modelos de lenguaje](llm.md).
 

@@ -2,6 +2,8 @@ import hashlib
 import http.server
 import json
 import os
+import shutil
+import struct
 import tempfile
 import threading
 import time
@@ -22,7 +24,7 @@ from wsbuilder import (
     huggingface_url,
     install_llm,
 )
-from wsbuilder.llm import detect_model_format
+from wsbuilder.llm import detect_model_format, summarize_model_file
 
 
 def _model_bytes(name="tiny"):
@@ -30,6 +32,29 @@ def _model_bytes(name="tiny"):
     writer.add_metadata("context_length", 2048)
     writer.add_tensor("token_embd.weight", [0.25] * 32, shape=(8, 4), dtype="F32")
     return writer.to_bytes()
+
+
+def _gguf_bytes(architecture="qwen3", name="Tiny GGUF"):
+    """A GGUF v3 file with two metadata strings and one 2x2 F32 tensor."""
+
+    def text(value):
+        raw = value.encode()
+        return struct.pack("<Q", len(raw)) + raw
+
+    out = b"GGUF" + struct.pack("<IQQ", 3, 1, 2)
+    for key, value in (("general.architecture", architecture), ("general.name", name)):
+        out += text(key) + struct.pack("<I", 8) + text(value)
+    out += text("output.weight") + struct.pack("<IQQIQ", 2, 2, 2, 0, 0)
+    out += b"\x00" * (-len(out) % 32)
+    return out + struct.pack("<4f", 1, 2, 3, 4)
+
+
+def _safetensors_bytes():
+    header = json.dumps({
+        "__metadata__": {"format": "pt"},
+        "embed.weight": {"dtype": "F32", "shape": [2, 3], "data_offsets": [0, 24]},
+    }).encode()
+    return struct.pack("<Q", len(header)) + header + struct.pack("<6f", *range(6))
 
 
 def _write(directory, name, data):
@@ -322,6 +347,51 @@ class TestStore(HubFixture):
         self.assertEqual(detect_model_format(_write(self.directory, "c", b"{}")), "unknown")
         self.assertEqual(detect_model_format(_write(self.directory, "d", b"\x00GGUF")), "unknown")
         self.assertEqual(detect_model_format(_write(self.directory, "e", b"")), "unknown")
+        self.assertEqual(detect_model_format(_write(self.directory, "f", _gguf_bytes())), "gguf")
+        self.assertEqual(
+            detect_model_format(_write(self.directory, "g", _safetensors_bytes())), "safetensors"
+        )
+
+    def test_weight_files_are_summarized(self):
+        summary = summarize_model_file(_write(self.directory, "m.gguf", _gguf_bytes()))
+        self.assertEqual((summary["format"], summary["architecture"], summary["name"]),
+                         ("gguf", "qwen3", "Tiny GGUF"))
+        self.assertEqual((summary["parameters"], summary["tensors"]), (4, 1))
+        summary = summarize_model_file(_write(self.directory, "m.safetensors", _safetensors_bytes()))
+        self.assertEqual((summary["format"], summary["parameters"]), ("safetensors", 6))
+        self.assertEqual(summary["metadata"], {"format": "pt"})
+
+    def test_gguf_and_safetensors_files_are_imported(self):
+        record = self.store.import_file(_write(self.directory, "tiny.gguf", _gguf_bytes()))
+        self.assertEqual((record.format, record.name), ("gguf", "Tiny GGUF"))
+        self.assertEqual(record.summary["architecture"], "qwen3")
+        self.assertEqual(json.loads(json.dumps(record.to_dict()))["format"], "gguf")
+        with self.store.open(record.id) as reader:
+            self.assertEqual(reader.tensor("output.weight").rows(), [[1, 2], [3, 4]])
+        record = self.store.import_file(_write(self.directory, "w.safetensors", _safetensors_bytes()))
+        self.assertEqual(record.format, "safetensors")
+        self.assertEqual(record.summary["parameters"], 6)
+        with self.store.open(record.id) as reader:
+            self.assertEqual(reader.tensor("embed.weight").shape, (2, 3))
+        self.assertEqual({item.format for item in self.store.list()}, {"gguf", "safetensors"})
+
+    def test_malformed_weight_files_are_refused(self):
+        with self.assertRaises(ValueError):
+            self.store.import_file(_write(self.directory, "cut.gguf", _gguf_bytes()[:-8]))
+        with self.assertRaises(ValueError):
+            self.store.import_file(_write(self.directory, "cut.safetensors", _safetensors_bytes()[:-4]))
+        self.assertEqual(self.store.list(), [])
+        kept = self.store.import_file(_write(self.directory, "cut2.gguf", b"GGUF" + b"\x00" * 4),
+                                      require_known_format=False)
+        self.assertEqual((kept.format, kept.summary["format"]), ("unknown", "unknown"))
+
+    def test_gguf_download_into_the_store(self):
+        _HubHandler.files["tiny.gguf"] = data = _gguf_bytes()
+        record = self.store.download_huggingface(
+            "owner/repo", "tiny.gguf", endpoint=self.endpoint, allow_http=True
+        )
+        self.assertEqual(record.format, "gguf")
+        self.assertEqual(record.sha256, hashlib.sha256(data).hexdigest())
 
 
 # -- backends ---------------------------------------------------------------
@@ -334,6 +404,17 @@ class TestStoreLoader(unittest.TestCase):
         record = store.import_file(_write(directory, "m.ndjson", _model_bytes("m")))
         with self.assertRaises(NotImplementedError):
             store.load(record.id)
+
+    def test_weight_files_cannot_be_run_yet(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        store = ModelStore(os.path.join(directory, "models"))
+        self.addCleanup(store.close)
+        for name, data in (("m.gguf", _gguf_bytes()), ("m.safetensors", _safetensors_bytes())):
+            record = store.import_file(_write(directory, name, data))
+            with self.assertRaises(NotImplementedError) as caught:
+                store.load(record.id)
+            self.assertIn(record.format, str(caught.exception))
 
     def test_a_loader_runs_stored_models_and_is_cached_and_unloaded(self):
         directory = tempfile.mkdtemp()

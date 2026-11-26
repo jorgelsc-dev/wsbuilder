@@ -130,6 +130,15 @@ from .orm import (
 from .predicts import Predictor
 from .rpc import RpcClient, RpcCodec, RpcError, RpcTransportError, rpc_endpoint
 from .security import ACLRule, SecurityDecision, SecurityPolicy, install_security
+from .weights import (
+    GGUFReader,
+    SafetensorsReader,
+    ShardedSafetensors,
+    WeightsFormatError,
+    WeightTensor,
+    detect_weights_format,
+    open_weights,
+)
 
 #: Names that need the optional `tls` extra, and the module serving each.
 _TLS_EXPORT_MODULES = {
@@ -347,6 +356,13 @@ __all__ = [
     "huggingface_files",
     "huggingface_url",
     "install_llm",
+    "GGUFReader",
+    "SafetensorsReader",
+    "ShardedSafetensors",
+    "WeightTensor",
+    "WeightsFormatError",
+    "detect_weights_format",
+    "open_weights",
 ]
 if _TLS_EXTRA_AVAILABLE:
     # Only advertised when importable, so ``from wsbuilder import *`` works
