@@ -7,7 +7,9 @@ of weights. Three independent pieces work with those files:
 * :class:`ModelStore` keeps model files in one directory, each with a JSON
   manifest (name, format, size, SHA-256, source and a metadata summary read
   from the file). Files can be imported from disk, downloaded, exported and
-  removed. Only wsbuilder NDJSON model files are accepted.
+  removed. wsbuilder NDJSON model files are accepted, and so are safetensors
+  and GGUF weight files (read with :mod:`wsbuilder.weights`), which can be
+  stored and inspected but not run yet.
 * :func:`download_file` and :func:`huggingface_files` fetch models from any
   HTTPS URL or from the Hugging Face Hub: resumable, size-limited, verified
   against the SHA-256 the Hub publishes, and never leaking a token across a
@@ -37,6 +39,7 @@ import urllib.request
 import uuid
 
 from .ndjson_model import ModelFormatError, ModelReader, is_model_file
+from .weights import detect_weights_format, open_weights
 
 __all__ = [
     "DEFAULT_HF_ENDPOINT",
@@ -80,15 +83,25 @@ def default_model_root():
 # -- file formats -----------------------------------------------------------
 
 
+_WEIGHT_FORMATS = ("safetensors", "gguf")
+
+
 def detect_model_format(path):
-    """``"ndjson"`` for a wsbuilder model file, else ``"unknown"``."""
-    return "ndjson" if is_model_file(path) else "unknown"
+    """``"ndjson"`` for a wsbuilder model file, ``"safetensors"`` or ``"gguf"`` for
+    those weight files, else ``"unknown"``."""
+    if is_model_file(path):
+        return "ndjson"
+    return detect_weights_format(path) or "unknown"
 
 
 def summarize_model_file(path):
     """A metadata summary of a model file (just its size for other files)."""
-    if detect_model_format(path) == "ndjson":
+    kind = detect_model_format(path)
+    if kind == "ndjson":
         with ModelReader(path) as reader:
+            return reader.summary()
+    if kind in _WEIGHT_FORMATS:
+        with open_weights(path) as reader:
             return reader.summary()
     return {"format": "unknown", "file_size": os.path.getsize(path)}
 
@@ -456,11 +469,18 @@ class ModelStore:
         """Move a staged file into its model directory and write the manifest."""
         kind = detect_model_format(staged_path)
         if require_known_format and kind == "unknown":
-            raise ValueError("not a wsbuilder NDJSON model file (pass require_known_format=False)")
+            raise ValueError(
+                "not a known model file: wsbuilder NDJSON, safetensors or GGUF "
+                "(pass require_known_format=False)"
+            )
         try:
             summary = summarize_model_file(staged_path)
         except (ModelFormatError, ValueError) as exc:
-            raise ValueError(f"the model file is malformed: {exc}") from exc
+            if require_known_format:
+                raise ValueError(f"the model file is malformed: {exc}") from exc
+            # Kept as an opaque file, like any other unknown one.
+            kind = "unknown"
+            summary = {"format": "unknown", "file_size": os.path.getsize(staged_path)}
         digest = sha256 or _sha256_of(staged_path)
         with self._lock:
             model_id = self._new_id(name or summary.get("name") or filename, model_id)
@@ -606,8 +626,15 @@ class ModelStore:
     # -- running -------------------------------------------------------
 
     def open(self, model_id):
-        """A :class:`~wsbuilder.ndjson_model.ModelReader` on a stored model."""
-        return ModelReader(self.get(model_id).path)
+        """A reader on a stored model.
+
+        :class:`~wsbuilder.ndjson_model.ModelReader` for NDJSON models; for
+        safetensors and GGUF files, the reader of :func:`wsbuilder.weights.open_weights`.
+        """
+        record = self.get(model_id)
+        if record.format in _WEIGHT_FORMATS:
+            return open_weights(record.path)
+        return ModelReader(record.path)
 
     def load_network(self, model_id, **options):
         """A stored ``wsbuilder.dense`` model as a :class:`~wsbuilder.ia.NeuralNetwork`."""
@@ -665,6 +692,11 @@ def _native_loader(record, **options):
     from .ia_lm import BYTELM_ARCHITECTURE, ByteLanguageModel, NativeBackend
 
     architecture = record.summary.get("architecture")
+    if record.format in _WEIGHT_FORMATS:
+        raise NotImplementedError(
+            f"{record.id!r} is a {record.format} weights file (architecture {architecture!r}); "
+            f"wsbuilder can read its tensors with wsbuilder.weights but cannot run it yet"
+        )
     if record.format != "ndjson" or architecture != BYTELM_ARCHITECTURE:
         raise NotImplementedError(
             f"{record.id!r} ({record.format}, architecture {architecture!r}) is not a language "

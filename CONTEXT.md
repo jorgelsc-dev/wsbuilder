@@ -61,6 +61,7 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   quic/                 address, client, connection, crypto, frames, packet, recovery, tls, varint
   rpc.py codec.py       RPC entre servicios (App.rpc, RpcClient) y codec CBOR (RFC 8949)
   ndjson_model.py llm.py formato único de modelos (NDJSON); LLM: ModelStore, descargas, backends, install_llm
+  weights.py            lectores safetensors/GGUF con mmap (solo lectura, stdlib)
   ia_lm.py              motor de lenguaje nativo (ByteLanguageModel, NativeBackend)
   server.py             HTTPServer (TCP, TLS/ALPN, límites, keep-alive, apagado)
   ws.py                 WebSocket, frames, handshake, errores WebSocket*
@@ -106,7 +107,7 @@ tests, a `tests/`; los de docs, a `docs/`.
 | HTTP/3 y WebSocket sobre HTTP/3 | `http3.py`, `http3_server.py`, `http3_websocket.py`, `qpack.py` | `test_http3.py`, `test_http3_server.py`, `test_http3_streaming.py`, `test_http3_streaming_udp.py` | `http-versions.md` |
 | Transporte QUIC | `quic/` | `test_quic_protocol.py`, `test_quic_crypto.py`, `test_quic_tls.py`, `test_quic_recovery.py`, `test_quic_address.py` | `http-versions.md` |
 | Cliente QUIC/HTTP/3 y mTLS en QUIC | `quic/client.py`, `quic/tls.py`, `http3_client.py` | `test_quic_client.py` | `rpc.md` |
-| Modelos de lenguaje, motor nativo y formato NDJSON | `llm.py`, `ia_lm.py`, `ndjson_model.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_ndjson_model.py` | `llm.md`, `ia.md` |
+| Modelos de lenguaje, motor nativo, formato NDJSON y lectores de pesos | `llm.py`, `ia_lm.py`, `ndjson_model.py`, `weights.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_ndjson_model.py`, `test_weights.py` | `llm.md`, `ia.md` |
 | RPC entre servicios y codec CBOR | `rpc.py`, `codec.py`, `app.py` (`App.rpc`) | `test_rpc.py`, `test_codec.py`, `test_optional_extras.py` | `rpc.md` |
 | WebSocket y frames | `ws.py` | `test_ws.py`, `test_server.py` | `websocket.md` |
 | SQLite, ORM y réplicas | `orm.py`, `db_replicas.py` | `test_orm.py`, `test_orm_replicas.py` | `data-orm.md`, `persistence.md` |
@@ -357,10 +358,11 @@ console_level="warning")` con `log(level, event, message="", exc=None,
 - LLM (`llm.py`): `ModelStore(root=None, loader=None)` (por defecto
   `$WSBUILDER_MODELS` o `~/.cache/wsbuilder/models`) guarda cada modelo en
   `<raíz>/<id>/` con `manifest.json` (sin índice compartido; escrituras
-  atómicas). Solo acepta modelos NDJSON de wsbuilder (`require_known_format=False`
-  guarda otros como `unknown`). Métodos: `import_file`, `download`,
-  `download_huggingface` (SHA-256 del listado del Hub), `list`, `get`, `open`
-  (`ModelReader`), `load_network` (`NeuralNetwork`), `export`, `verify`,
+  atómicas). Acepta modelos NDJSON de wsbuilder y archivos de pesos safetensors
+  y GGUF (`require_known_format=False` guarda otros como `unknown`). Métodos:
+  `import_file`, `download`, `download_huggingface` (SHA-256 del listado del
+  Hub), `list`, `get`, `open` (`ModelReader`, o el lector de `weights.py` para
+  safetensors/GGUF), `load_network` (`NeuralNetwork`), `export`, `verify`,
   `rename`, `remove`, `add` (guarda un `ByteLanguageModel`/`NeuralNetwork`),
   `load` (cachea un `LanguageModel` por id: los `wsbuilder.bytelm` corren con
   el motor nativo; otras arquitecturas lanzan `NotImplementedError`, 501 por
@@ -385,6 +387,14 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   termina en `<|assistant|>`. `NativeBackend` lo adapta a `LanguageModel`;
   `submit_lm_training_task` entrena con `TaskManager`. Python puro: tamaños
   pequeños.
+- Pesos externos (`weights.py`): `open_weights`, `detect_weights_format`,
+  `SafetensorsReader`, `ShardedSafetensors` (`*.index.json`, rutas relativas sin
+  `..`), `GGUFReader` (v2/v3 little-endian, `.metadata`, `.architecture`; `shape`
+  en orden fila-mayor, al revés que `ne` de GGUF), `WeightTensor` (`raw()`
+  memoryview sin copia, `to_array()`, `values()`, `rows()`), `WeightsFormatError`.
+  Convierte F32/F16/BF16/F64/Q8_0/Q4_0; otros tipos cuantizados solo `raw()`.
+  `summary()` usa las claves de `ModelReader.summary()` y resume arrays largos.
+  Es la base para ejecutar arquitecturas externas (Qwen3) en fases siguientes.
 - Formato de modelos (`ndjson_model.py`): único formato de modelo y pesos del
   proyecto. Archivo NDJSON: línea 1 `{"format": "wsbuilder-model", "version": 1,
   "architecture", "name", "metadata", "tensor_count"}`; cada línea siguiente un

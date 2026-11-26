@@ -2,7 +2,7 @@
 
 !!! warning "Experimental"
     Los modulos de IA y modelos de lenguaje (`ia`, `ia_lm`, `ia_text`,
-    `ia_audio`, `predicts`, `llm`, `ndjson_model`) son experimentales: su API y
+    `ia_audio`, `predicts`, `llm`, `ndjson_model`, `weights`) son experimentales: su API y
     sus formatos pueden cambiar entre versiones menores sin periodo de
     transicion, a diferencia del nucleo HTTP/WebSocket. Fija la version
     (`wsbuilder==X.Y.*`) si dependes de ellos y revisa el
@@ -19,6 +19,7 @@ motor externo.
 | `ByteLanguageModel` | Modelo de lenguaje nativo: se entrena, genera texto y se guarda en NDJSON | Ninguna |
 | `LanguageModel` + `NativeBackend` | Conversar con un modelo nativo (`chat`, `generate`, streaming) | Ninguna |
 | `ModelWriter` / `ModelReader` | Escribir y leer el formato de modelos de wsbuilder: un unico archivo NDJSON con el modelo y sus pesos | Ninguna |
+| `open_weights` | Leer pesos en safetensors o GGUF (mmap, sin copiar) | Ninguna |
 | `ModelStore` | Directorio de modelos: importar, descargar, exportar, verificar y borrar | Ninguna |
 | `download_file`, `huggingface_files` | Descargas reanudables y verificadas con SHA-256 | Ninguna |
 | `LanguageModel` + `OpenAICompatibleBackend` | Opcional: usar un modelo que ya sirve otro programa por HTTP (API de OpenAI) | Ninguna |
@@ -86,8 +87,10 @@ Opciones de generacion: `max_tokens` (en bytes, 256 por defecto),
 ## El formato de modelos: NDJSON
 
 wsbuilder usa un solo formato para los modelos y sus pesos: un archivo
-**NDJSON** (JSON con un objeto por linea, extension `.ndjson`). No se aceptan
-GGUF, safetensors ni otros formatos.
+**NDJSON** (JSON con un objeto por linea, extension `.ndjson`). Los pesos en
+safetensors o GGUF se pueden leer e importar al almacen (ver
+[Leer pesos safetensors y GGUF](#leer-pesos-safetensors-y-gguf)), pero todavia
+no se pueden ejecutar.
 
 - **Linea 1, el modelo.** Formato, version, arquitectura, nombre, metadatos
   libres y el numero de tensores que siguen.
@@ -131,6 +134,50 @@ with ModelReader("demo.ndjson") as model:
 - **Portable.** Es texto plano: cualquier lenguaje con un parser JSON puede
   leerlo linea a linea, y `head -1 modelo.ndjson` muestra el modelo.
 
+## Leer pesos safetensors y GGUF
+
+`wsbuilder.weights` lee los pesos publicados en los dos formatos mas comunes
+sin dependencias: **safetensors** (Hugging Face, tambien repartido en varios
+archivos con `model.safetensors.index.json`) y **GGUF** versiones 2 y 3
+(llama.cpp). El archivo se abre con `mmap` de solo lectura y cada tensor se lee
+cuando se pide.
+
+```python
+from wsbuilder import open_weights
+
+with open_weights("qwen3-0.6b-q8_0.gguf") as weights:   # o .safetensors / .index.json
+    weights.format, weights.architecture                 # "gguf", "qwen3"
+    weights.metadata["qwen3.block_count"]
+    weights.summary()                                    # JSON acotado: tensores, dtypes...
+    embd = weights.tensor("token_embd.weight")
+    embd.shape, embd.dtype                               # orden por filas, "Q8_0"
+    embd.raw()                                           # memoryview de solo lectura, sin copia
+    embd.to_array()                                      # array("f") descuantizado
+```
+
+- **Lectores.** `SafetensorsReader`, `ShardedSafetensors` y `GGUFReader`
+  comparten interfaz: `tensor(nombre)`, `names()`, `in`, `len()`,
+  `parameter_count`, `metadata`, `summary()` y `close()` (idempotente, tambien
+  como `with`). `detect_weights_format(path)` devuelve `"safetensors"`,
+  `"gguf"` o `None` leyendo solo la cabecera.
+- **Tensores.** `WeightTensor` expone `name`, `shape` (orden por filas: en GGUF
+  se invierten las dimensiones, que el formato guarda de la mas interna a la
+  mas externa), `dtype`, `element_count`, `nbytes`, `raw()`, `to_array()`,
+  `values()` y `rows()`.
+- **Tipos.** Se convierten `F64`, `F32`, `F16`, `BF16` y los enteros (`I8` a
+  `I64`, `U8` a `U64`, `BOOL`); de los tipos cuantizados de GGUF se
+  descuantizan `Q8_0` y `Q4_0`. El resto (`Q4_K`, `Q6_K`, `F8_*`...) solo da
+  sus bytes con `raw()`; `to_array()` lanza `NotImplementedError`.
+- **Entrada no confiable.** Antes de devolver el lector se comprueban
+  cabeceras, conteos (`max_tensors`, `max_kv`), longitudes de cadenas
+  (`max_string_bytes`), formas, tamanos, alineacion, limites y solapes; un
+  archivo invalido lanza `WeightsFormatError` (subclase de `ValueError`). En
+  un indice se rechazan rutas absolutas y `..`.
+- **Cierre.** Las vistas de `raw()` siguen siendo validas tras `close()`; el
+  mapeo se libera al soltar la ultima (`view.release()` o `with`).
+- **Resumen.** En `summary()` los arreglos largos (como el vocabulario de un
+  GGUF) aparecen como `{"type": "array", "item_type": ..., "length": n}`.
+
 ## Guardar modelos: el almacen
 
 ```python
@@ -155,10 +202,13 @@ store.remove(record.id)
   formato, tamano, SHA-256, origen y un resumen de sus metadatos. Como no hay
   un indice compartido, no hay nada comun que se pueda corromper. Las
   escrituras pasan por archivos temporales y `os.replace`.
-- Solo se aceptan modelos NDJSON de wsbuilder. Otros archivos se rechazan
-  salvo que se pase `require_known_format=False` (quedan guardados con formato
-  `unknown`, pero no se pueden abrir). Un archivo malformado nunca entra al
-  almacen.
+- Se aceptan modelos NDJSON de wsbuilder y archivos de pesos safetensors y
+  GGUF (formato `safetensors` o `gguf`; `store.open()` devuelve su lector y
+  `store.load()` lanza `NotImplementedError`). Otros archivos se rechazan salvo
+  que se pase `require_known_format=False` (quedan guardados con formato
+  `unknown`, pero no se pueden abrir). Con la opcion por defecto un archivo
+  malformado nunca entra al almacen; con `require_known_format=False` se guarda
+  como `unknown`.
 - `import_file(..., move=True)` mueve el archivo en vez de copiarlo.
 
 El resumen incluye `name`, `architecture`, `parameters`, `tensors`, `dtypes`
