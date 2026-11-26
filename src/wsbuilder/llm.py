@@ -1,15 +1,19 @@
 """Language models: import, store, download and run them.
 
-Every model in wsbuilder is one NDJSON file (see :mod:`wsbuilder.ndjson_model`):
-the first line describes the model and each following line holds one tensor
-of weights. Three independent pieces work with those files:
+Models are wsbuilder NDJSON files (see :mod:`wsbuilder.ndjson_model`): the
+first line describes the model and each following line holds one tensor of
+weights. Graph models (:mod:`wsbuilder.graph`) are a ``model.json`` plus the
+weights and tokenizer files it references. Three independent pieces work
+with them:
 
-* :class:`ModelStore` keeps model files in one directory, each with a JSON
+* :class:`ModelStore` keeps models in one directory, each with a JSON
   manifest (name, format, size, SHA-256, source and a metadata summary read
-  from the file). Files can be imported from disk, downloaded, exported and
-  removed. wsbuilder NDJSON model files are accepted, and so are safetensors
-  and GGUF weight files (read with :mod:`wsbuilder.weights`), which can be
-  stored and inspected but not run yet.
+  from the files). Models can be imported from disk, downloaded, converted,
+  exported and removed. wsbuilder NDJSON model files and graph models are
+  accepted, and so are safetensors and GGUF weight files (read with
+  :mod:`wsbuilder.weights`), which can be stored and inspected, and GGUF
+  files of a supported architecture converted to graphs
+  (:meth:`ModelStore.convert`, :meth:`ModelStore.download_huggingface_model`).
 * :func:`download_file` and :func:`huggingface_files` fetch models from any
   HTTPS URL or from the Hugging Face Hub: resumable, size-limited, verified
   against the SHA-256 the Hub publishes, and never leaking a token across a
@@ -65,6 +69,11 @@ _CHUNK = 1024 * 1024
 _MANIFEST = "manifest.json"
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_OID = re.compile(r"^[0-9a-f]{40}$")
+#: Files of a Hugging Face repository that a graph conversion reads.
+_HF_CONFIG_FILES = ("config.json", "tokenizer.json")
+_HF_OPTIONAL_FILES = ("generation_config.json", "tokenizer_config.json")
+_HF_SHARD = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.safetensors$")
 
 
 class DownloadError(OSError):
@@ -124,6 +133,130 @@ def _safe_filename(name):
     if base in ("", ".", "..") or base.startswith("."):
         raise ValueError(f"unsafe file name {name!r}")
     return base
+
+
+def _now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+# -- graph models (model.json + the files it references) -------------------
+
+_GRAPH_SPEC = "model.json"
+_RESERVED_NAMES = frozenset((_GRAPH_SPEC, _MANIFEST))
+
+
+def _relative_name(value, what):
+    """A ``model.json`` file reference as a normalized ``a/b`` name; refuses escapes."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{what} must be a relative file name")
+    parts = value.replace("\\", "/").split("/")
+    if (os.path.isabs(value) or os.path.splitdrive(value)[0]
+            or any(part in ("", ".", "..") or part.startswith(".") for part in parts)):
+        raise ValueError(f"{what} {value!r} must be a plain path inside the model directory")
+    name = "/".join(parts)
+    if name.casefold() in _RESERVED_NAMES:
+        raise ValueError(f"{what} {value!r} uses a reserved file name")
+    return name
+
+
+def _graph_references(spec):
+    """The files a ``model.json`` references, as relative names (weights first)."""
+    names = [_relative_name(spec.get("weights"), "weights")]
+    tokenizer = spec.get("tokenizer")
+    if tokenizer is not None:
+        names.append(_relative_name(tokenizer.get("file"), "tokenizer.file"))
+    if len({name.casefold() for name in names}) != len(names):
+        raise ValueError("model.json references the same file twice")
+    return names
+
+
+def _inside(directory, name):
+    """``directory/name`` when its real path stays inside ``directory``, else ValueError."""
+    path = os.path.join(directory, *name.split("/"))
+    root = os.path.realpath(directory)
+    if os.path.commonpath([root, os.path.realpath(path)]) != root:
+        raise ValueError(f"{name!r} points outside the model directory")
+    return path
+
+
+def _graph_spec_path(path):
+    path = os.path.abspath(os.fspath(path))
+    if os.path.isdir(path):
+        path = os.path.join(path, _GRAPH_SPEC)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+    return path
+
+
+def _summarize_graph(directory):
+    """Validate a graph model directory without running it and summarize it.
+
+    Reads ``model.json`` (:func:`wsbuilder.graph.read_graph_spec`), opens the
+    weights with :class:`~wsbuilder.ndjson_model.ModelReader` (which checks
+    every tensor record), checks that the graph's tensors exist and that the
+    tokenizer loads. Returns ``(summary, size, sha256 of model.json)``.
+    """
+    from .bpe import BPETokenizer
+    from .graph import read_graph_spec
+    from .graph_convert import _graph_tensors
+
+    spec_path = os.path.join(directory, _GRAPH_SPEC)
+    spec = read_graph_spec(spec_path)
+    references = _graph_references(spec)
+    weights_path = _inside(directory, references[0])
+    try:
+        with ModelReader(weights_path) as reader:
+            weights = reader.summary()
+            names = set(reader.names())
+    except ModelFormatError as exc:
+        raise ValueError(f"the weights file {references[0]!r} is malformed: {exc}") from exc
+    blocks = spec["graph"].get("blocks")
+    count = blocks.get("count") if isinstance(blocks, dict) else None
+    # Every block needs its own tensors: a larger count is bogus, and expanding
+    # it would exhaust memory or CPU before any name is checked.
+    if type(count) is not int or not 0 <= count <= len(names):
+        raise ValueError(f"graph.blocks.count must be an integer between 0 and the "
+                         f"{len(names)} tensors of the weights")
+    try:
+        used = _graph_tensors(spec["graph"])
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("model.json has a malformed graph") from exc
+    missing = [name for name in used if name not in names]
+    if missing:
+        raise ValueError(f"the weights have no tensor {missing[0]!r} used by the graph")
+    if len(references) > 1:
+        try:
+            BPETokenizer.from_file(_inside(directory, references[1]))
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f"the tokenizer {references[1]!r} is malformed: {exc}") from exc
+    files = {}
+    for name in [_GRAPH_SPEC, *references]:
+        path = _inside(directory, name)
+        files[name] = {"size": os.path.getsize(path), "sha256": _sha256_of(path)}
+    summary = {
+        "format": "graph",
+        "name": spec.get("name") or weights.get("name"),
+        "architecture": spec.get("architecture") or weights.get("architecture"),
+        "parameters": weights.get("parameters"),
+        "tensors": weights.get("tensors"),
+        "dtypes": weights.get("dtypes"),
+        "config": spec.get("config") or {},
+        "generation": spec.get("generation") or {},
+        "chat_template": spec.get("chat_template"),
+        "weights": references[0],
+        "tokenizer": references[1] if len(references) > 1 else None,
+        "files": files,
+    }
+    return summary, sum(info["size"] for info in files.values()), files[_GRAPH_SPEC]["sha256"]
+
+
+def _git_blob_sha1(path):
+    """The git object id of a file (what the Hub lists for files outside LFS)."""
+    digest = hashlib.sha1(f"blob {os.path.getsize(path)}\0".encode(), usedforsecurity=False)
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(_CHUNK), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 # -- downloads --------------------------------------------------------------
@@ -281,7 +414,10 @@ def huggingface_files(repo, *, revision="main", endpoint=None, token=None, timeo
 
     ``sha256`` is the LFS object id the Hub publishes for large files (every
     model weight file); pass it to :func:`download_file` to verify the bytes.
-    ``suffix`` filters by extension, e.g. ``".ndjson"``.
+    Small files kept outside LFS (``config.json``...) have ``sha256`` None
+    and, when the Hub lists it, their git blob id as ``oid`` (SHA-1 of
+    ``b"blob <size>\\0" + content``). ``suffix`` filters by extension, e.g.
+    ``".ndjson"``.
     """
     endpoint = (endpoint or os.environ.get("HF_ENDPOINT") or DEFAULT_HF_ENDPOINT).rstrip("/")
     repo = str(repo).strip("/")
@@ -310,11 +446,13 @@ def huggingface_files(repo, *, revision="main", endpoint=None, token=None, timeo
             continue
         lfs = entry.get("lfs") if isinstance(entry.get("lfs"), dict) else {}
         oid = str(lfs.get("oid") or "").lower()
+        git_oid = str(entry.get("oid") or "").lower()
         files.append(
             {
                 "path": path,
                 "size": int(lfs.get("size") or entry.get("size") or 0),
                 "sha256": oid if _SHA256.match(oid) else None,
+                "oid": git_oid if _GIT_OID.match(git_oid) else None,
             }
         )
     return files
@@ -387,11 +525,11 @@ class ModelStore:
     """A directory of model files, one sub-directory per model.
 
     ``root`` defaults to :func:`default_model_root`. Every model directory
-    holds the NDJSON model file and a ``manifest.json``; there is no shared
-    index to corrupt, and writes go through temporary files and
-    ``os.replace``.
+    holds the model file (or, for a graph model, ``model.json`` and the files
+    it references) and a ``manifest.json``; there is no shared index to
+    corrupt, and writes go through temporary files and ``os.replace``.
 
-    :meth:`load` runs stored ``wsbuilder.bytelm`` models natively. A custom
+    :meth:`load` runs stored ``wsbuilder.bytelm`` and graph models natively. A custom
     ``loader(record, **options)`` returning a :class:`LanguageModel` (or any
     object with its interface) replaces that for every model.
     """
@@ -439,8 +577,8 @@ class ModelStore:
             return None
         return record
 
-    def _write_manifest(self, record):
-        manifest = os.path.join(record.directory, _MANIFEST)
+    def _write_manifest(self, record, directory=None):
+        manifest = os.path.join(directory or record.directory, _MANIFEST)
         temporary = manifest + f".tmp-{uuid.uuid4().hex}"
         with open(temporary, "w", encoding="utf-8") as handle:
             json.dump(record.to_dict(), handle, ensure_ascii=False, indent=2)
@@ -482,35 +620,64 @@ class ModelStore:
             kind = "unknown"
             summary = {"format": "unknown", "file_size": os.path.getsize(staged_path)}
         digest = sha256 or _sha256_of(staged_path)
-        with self._lock:
-            model_id = self._new_id(name or summary.get("name") or filename, model_id)
-            directory = os.path.join(self.root, model_id)
-            os.makedirs(directory)
-            final = os.path.join(directory, filename)
-            os.replace(staged_path, final)
-            record = ModelRecord(
-                id=model_id,
-                name=name or summary.get("name") or os.path.splitext(filename)[0],
-                filename=filename,
-                format=kind,
-                size=os.path.getsize(final),
-                sha256=digest,
-                source=source,
-                created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                summary=summary,
-                root=self.root,
-            )
+
+        def populate(record):
+            os.makedirs(record.directory)
+            os.replace(staged_path, record.path)
             self._write_manifest(record)
+
+        return self._commit(
+            populate, id_hint=name or summary.get("name") or filename,
+            name=name or summary.get("name") or os.path.splitext(filename)[0], model_id=model_id,
+            filename=filename, format=kind, size=os.path.getsize(staged_path), sha256=digest,
+            source=source, summary=summary,
+        )
+
+    def _commit(self, populate, *, id_hint, name, model_id, **fields):
+        """Pick the id, then ``populate(record)`` fills its directory, under the lock."""
+        with self._lock:
+            model_id = self._new_id(id_hint, model_id)
+            record = ModelRecord(id=model_id, name=str(name), created_at=_now(), root=self.root,
+                                 **fields)
+            populate(record)
         return record
+
+    def _register_graph(self, staged_dir, *, name, model_id, source):
+        """Validate a staged graph directory and move it, manifest included, into place.
+
+        The manifest is written inside ``staged_dir`` first, so the model
+        appears complete with one ``os.replace`` of the directory.
+        """
+        summary, size, digest = _summarize_graph(staged_dir)
+
+        def populate(record):
+            self._write_manifest(record, directory=staged_dir)
+            os.replace(staged_dir, record.directory)
+
+        label = name or summary.get("name") or "graph-model"
+        return self._commit(populate, id_hint=label, name=label, model_id=model_id,
+                            filename=_GRAPH_SPEC, format="graph", size=size, sha256=digest,
+                            source=source, summary=summary)
 
     def _staging_path(self, filename):
         staging = os.path.join(self.root, ".staging")
         os.makedirs(staging, exist_ok=True)
         return os.path.join(staging, f"{uuid.uuid4().hex}-{filename}")
 
+    def _staging_dir(self, label):
+        path = self._staging_path(label)
+        os.makedirs(path)
+        return path
+
     def import_file(self, path, *, name=None, model_id=None, move=False, require_known_format=True):
-        """Copy (or move) a model file from disk into the store."""
+        """Copy (or move) a model file from disk into the store.
+
+        A ``model.json`` graph, or a directory holding one, is imported with
+        :meth:`import_graph`.
+        """
         source = os.path.abspath(os.fspath(path))
+        if os.path.isdir(source) or os.path.basename(source) == _GRAPH_SPEC:
+            return self.import_graph(source, name=name, model_id=model_id, move=move)
         if not os.path.isfile(source):
             raise FileNotFoundError(source)
         filename = _safe_filename(os.path.basename(source))
@@ -586,12 +753,241 @@ class ModelStore:
         self._write_manifest(record)
         return record
 
+    # -- graph models --------------------------------------------------
+
+    def import_graph(self, path, *, name=None, model_id=None, move=False, source=None):
+        """Import a graph model: a ``model.json`` or the directory holding it.
+
+        Only ``model.json`` and the files it references (weights and
+        tokenizer, under their relative names) are copied, or moved with
+        ``move=True``; references that leave the directory, also through a
+        symlink, are refused. The copy is validated without running the model
+        (graph spec, every tensor record of the weights, the graph's tensor
+        names, the tokenizer), each file's SHA-256 goes into the summary, and
+        the model directory appears in the store with one ``os.replace``.
+        """
+        from .graph import read_graph_spec
+
+        spec_path = _graph_spec_path(path)
+        base_dir = os.path.dirname(spec_path)
+        references = _graph_references(read_graph_spec(spec_path))
+        sources = [(_GRAPH_SPEC, spec_path)]
+        for reference in references:
+            file_path = _inside(base_dir, reference)
+            if not os.path.isfile(file_path):
+                raise FileNotFoundError(file_path)
+            sources.append((reference, file_path))
+        staged_dir = self._staging_dir("graph")
+        moved = []
+        try:
+            for reference, file_path in sources:
+                target = os.path.join(staged_dir, *reference.split("/"))
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if move and not os.path.islink(file_path):
+                    shutil.move(file_path, target)
+                    moved.append((target, file_path))
+                else:
+                    shutil.copyfile(file_path, target)
+            record = self._register_graph(staged_dir, name=name, model_id=model_id,
+                                          source=source or f"file:{spec_path}")
+        except BaseException:
+            for target, file_path in reversed(moved):
+                if os.path.exists(target):
+                    shutil.move(target, file_path)
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            raise
+        if move:
+            for _reference, file_path in sources:
+                if os.path.islink(file_path):
+                    os.unlink(file_path)
+        return record
+
+    def convert(self, source, *, name=None, model_id=None, dtype=None):
+        """Convert a model to the graph format and store it; returns the new record.
+
+        ``source`` is the id of a stored GGUF model, or a local path: a
+        Hugging Face model directory (``config.json``, safetensors,
+        ``tokenizer.json``) or a ``.gguf`` file. A string that names a stored
+        model is taken as an id first. A stored safetensors file cannot be
+        converted on its own (it has no ``config.json`` or tokenizer):
+        convert its Hugging Face directory instead. ``dtype`` is passed to
+        :func:`~wsbuilder.graph_convert.convert_to_graph`; an architecture it
+        does not support raises its ``NotImplementedError``.
+        """
+        label = None
+        if isinstance(source, str) and source in self:
+            record = self.get(source)
+            if record.format == "graph":
+                raise ValueError(f"{record.id!r} is already a graph model")
+            if record.format == "safetensors":
+                raise ValueError(
+                    f"{record.id!r} is a lone safetensors file without config.json or "
+                    f"tokenizer.json; convert the Hugging Face model directory instead"
+                )
+            if record.format != "gguf":
+                raise ValueError(f"{record.id!r} ({record.format}) cannot be converted; "
+                                 f"only GGUF files and Hugging Face directories can")
+            path, origin, label = record.path, record.id, record.name
+        else:
+            path = os.path.abspath(os.fspath(source))
+            if not os.path.exists(path):
+                raise FileNotFoundError(path)
+            origin = path
+        return self._convert_path(path, name=name, model_id=model_id, dtype=dtype,
+                                  source=f"convert:{origin}", graph_name=name or label)
+
+    def _convert_path(self, path, *, name, model_id, dtype, source, graph_name=None):
+        from .graph_convert import convert_to_graph
+
+        staged_dir = self._staging_dir("convert")
+        try:
+            convert_to_graph(path, staged_dir, dtype=dtype, name=graph_name)
+            return self._register_graph(staged_dir, name=name, model_id=model_id, source=source)
+        except BaseException:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            raise
+
+    def download_huggingface_model(self, repo, *, revision="main", name=None, model_id=None,
+                                   token=None, endpoint=None, dtype=None, verify=True,
+                                   allow_http=False, progress=None, cancel_event=None,
+                                   timeout=60.0, max_bytes=DEFAULT_MAX_DOWNLOAD_BYTES):
+        """Download a Hugging Face model repository, convert it and store it as a graph.
+
+        Only what the conversion reads is fetched: ``config.json``,
+        ``tokenizer.json``, ``generation_config.json`` and
+        ``tokenizer_config.json`` when present, and ``model.safetensors`` or
+        ``model.safetensors.index.json`` with its shards. Every file is
+        checked against the Hub's listing: LFS files by their SHA-256, the
+        others by their git blob id; a file without either is refused unless
+        ``verify=False``. ``max_bytes`` caps the whole download and
+        ``progress(done, total)`` reports bytes over all files. The download
+        goes to a temporary directory under the store, deleted at the end
+        whatever happens.
+        """
+        token = token or os.environ.get("HF_TOKEN")
+        listing = huggingface_files(repo, revision=revision, endpoint=endpoint, token=token,
+                                    allow_http=allow_http)
+        by_path = {entry["path"]: entry for entry in listing}
+        for required in _HF_CONFIG_FILES:
+            if required not in by_path:
+                raise DownloadError(f"{repo}@{revision} has no {required}")
+        if "model.safetensors.index.json" in by_path:
+            weights = ["model.safetensors.index.json"]
+        elif "model.safetensors" in by_path:
+            weights = ["model.safetensors"]
+        else:
+            raise DownloadError(f"{repo}@{revision} has no model.safetensors or "
+                                f"model.safetensors.index.json")
+        wanted = list(_HF_CONFIG_FILES) + [f for f in _HF_OPTIONAL_FILES if f in by_path] + weights
+        state = {"done": 0, "total": sum(by_path[f]["size"] for f in wanted)}
+        download_dir = self._staging_dir("hf")
+
+        def fetch(filename):
+            if cancel_event is not None and cancel_event.is_set():
+                raise DownloadError("download cancelled")
+            entry = by_path[filename]
+            sha256 = entry["sha256"] if verify else None
+            if verify and sha256 is None and entry.get("oid") is None:
+                raise DownloadError(f"the Hub publishes no checksum for {filename!r}; "
+                                    f"pass verify=False")
+            start = state["done"]
+            remaining = max_bytes - start
+            if remaining <= 0 or entry["size"] > remaining:
+                raise DownloadError(f"the model exceeds max_bytes={max_bytes}")
+
+            def report(done, _total):
+                state["done"] = start + done
+                if progress is not None:
+                    progress(state["done"], state["total"])
+
+            target = os.path.join(download_dir, filename)
+            download_file(
+                huggingface_url(repo, filename, revision=revision, endpoint=endpoint), target,
+                sha256=sha256, token=token, progress=report, timeout=timeout,
+                max_bytes=remaining, allow_http=allow_http, cancel_event=cancel_event,
+            )
+            if verify and sha256 is None and _git_blob_sha1(target) != entry["oid"]:
+                os.unlink(target)
+                raise DownloadError(f"checksum mismatch for {filename!r}")
+            state["done"] = start + os.path.getsize(target)
+            return target
+
+        try:
+            for filename in wanted:
+                fetch(filename)
+            if weights[0].endswith(".index.json"):
+                shards = self._hf_shards(os.path.join(download_dir, weights[0]), by_path)
+                state["total"] += sum(by_path[shard]["size"] for shard in shards)
+                for shard in shards:
+                    fetch(shard)
+            if cancel_event is not None and cancel_event.is_set():
+                raise DownloadError("download cancelled")
+            label = name or repo.split("/")[-1]
+            return self._convert_path(download_dir, name=name, model_id=model_id, dtype=dtype,
+                                      source=f"hf:{repo}@{revision}", graph_name=label)
+        finally:
+            shutil.rmtree(download_dir, ignore_errors=True)
+
+    @staticmethod
+    def _hf_shards(index_path, by_path):
+        """The shard files of a ``model.safetensors.index.json``, checked against the listing."""
+        with open(index_path, "rb") as handle:
+            try:
+                index = json.loads(handle.read(64 * 1024 * 1024).decode("utf-8"))
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise DownloadError("model.safetensors.index.json is not valid JSON") from exc
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise DownloadError("model.safetensors.index.json has no weight_map")
+        shards = []
+        for shard in dict.fromkeys(weight_map.values()):
+            if not isinstance(shard, str) or not _HF_SHARD.match(shard) or ".." in shard:
+                raise DownloadError(f"refusing shard file name {shard!r}")
+            if shard not in by_path:
+                raise DownloadError(f"shard {shard!r} is not in the repository")
+            shards.append(shard)
+        return shards
+
     # -- other operations ----------------------------------------------
 
+    def _graph_files(self, record):
+        """``[(relative name, path, info)]`` of a stored graph; ValueError if the list is bad."""
+        files = record.summary.get("files")
+        if not isinstance(files, dict) or _GRAPH_SPEC not in files:
+            raise ValueError(f"{record.id!r} has no file list")
+        out = []
+        for name, info in files.items():
+            if name != _GRAPH_SPEC:
+                name = _relative_name(name, "file")
+            if not isinstance(info, dict):
+                raise ValueError(f"{record.id!r} has a malformed file list")
+            out.append((name, _inside(record.directory, name), info))
+        return out
+
     def export(self, model_id, destination):
-        """Copy a stored model file out of the store; returns the new path."""
+        """Copy a stored model out of the store; returns the new path.
+
+        A graph model is copied as a directory (``model.json`` and the files
+        it references) to ``destination``, which must not exist; the copy is
+        assembled in a temporary sibling directory and renamed into place.
+        """
         record = self.get(model_id)
         target = os.fspath(destination)
+        if record.format == "graph":
+            target = os.path.abspath(target)
+            if os.path.lexists(target):
+                raise FileExistsError(target)
+            temporary = f"{target}.tmp-{uuid.uuid4().hex}"
+            try:
+                for name, path, _info in self._graph_files(record):
+                    copy = os.path.join(temporary, *name.split("/"))
+                    os.makedirs(os.path.dirname(copy), exist_ok=True)
+                    shutil.copyfile(path, copy)
+                os.rename(temporary, target)
+            except BaseException:
+                shutil.rmtree(temporary, ignore_errors=True)
+                raise
+            return target
         if os.path.isdir(target):
             target = os.path.join(target, record.filename)
         if os.path.exists(target):
@@ -602,8 +998,22 @@ class ModelStore:
         return target
 
     def verify(self, model_id):
-        """Recompute the SHA-256; True when the file is unchanged."""
+        """Recompute the SHA-256; True when the file is unchanged.
+
+        For a graph model every file of its summary must exist with the
+        recorded size and SHA-256.
+        """
         record = self.get(model_id)
+        if record.format == "graph":
+            try:
+                files = self._graph_files(record)
+            except ValueError:
+                return False
+            for _name, path, info in files:
+                if (not os.path.isfile(path) or os.path.getsize(path) != info.get("size")
+                        or _sha256_of(path) != info.get("sha256")):
+                    return False
+            return record.sha256 == record.summary["files"][_GRAPH_SPEC].get("sha256")
         return record.sha256 is not None and _sha256_of(record.path) == record.sha256
 
     def rename(self, model_id, name):
@@ -628,12 +1038,17 @@ class ModelStore:
     def open(self, model_id):
         """A reader on a stored model.
 
-        :class:`~wsbuilder.ndjson_model.ModelReader` for NDJSON models; for
-        safetensors and GGUF files, the reader of :func:`wsbuilder.weights.open_weights`.
+        :class:`~wsbuilder.ndjson_model.ModelReader` for NDJSON models and for
+        the weights file of a graph model (its ``model.json`` is ``record.path``;
+        :meth:`load` runs it); for safetensors and GGUF files, the reader of
+        :func:`wsbuilder.weights.open_weights`.
         """
         record = self.get(model_id)
         if record.format in _WEIGHT_FORMATS:
             return open_weights(record.path)
+        if record.format == "graph":
+            return ModelReader(_inside(record.directory,
+                                       _relative_name(record.summary.get("weights"), "weights")))
         return ModelReader(record.path)
 
     def load_network(self, model_id, **options):
@@ -645,8 +1060,11 @@ class ModelStore:
     def load(self, model_id, **backend_options):
         """A :class:`LanguageModel` for a stored model.
 
-        ``wsbuilder.bytelm`` models run natively; ``backend_options`` are
-        their default generation options (``temperature``, ``max_tokens``...).
+        ``wsbuilder.bytelm`` models run natively and graph models with
+        :meth:`LanguageModel.from_graph` (``accel`` and ``max_context`` are
+        passed to :class:`~wsbuilder.graph.GraphModel`); the other
+        ``backend_options`` are default generation options (``temperature``,
+        ``max_tokens``...).
         Loaded models are cached per id; :meth:`unload` releases one.
         Raises ``NotImplementedError`` for a model no backend can run.
         """
@@ -692,10 +1110,22 @@ def _native_loader(record, **options):
     from .ia_lm import BYTELM_ARCHITECTURE, ByteLanguageModel, NativeBackend
 
     architecture = record.summary.get("architecture")
+    if record.format == "graph":
+        accel = options.pop("accel", None)
+        max_context = options.pop("max_context", None)
+        return LanguageModel.from_graph(record.path, name=record.id, accel=accel,
+                                        max_context=max_context, **options)
     if record.format in _WEIGHT_FORMATS:
+        from .graph_convert import ARCHITECTURES
+
+        hint = "wsbuilder can read its tensors with wsbuilder.weights but cannot run it as is"
+        if architecture in ARCHITECTURES:
+            hint += (f"; convert it to a graph model with store.convert({record.id!r})"
+                     if record.format == "gguf" else
+                     "; convert its Hugging Face directory with store.convert(path)")
         raise NotImplementedError(
             f"{record.id!r} is a {record.format} weights file (architecture {architecture!r}); "
-            f"wsbuilder can read its tensors with wsbuilder.weights but cannot run it yet"
+            f"{hint}"
         )
     if record.format != "ndjson" or architecture != BYTELM_ARCHITECTURE:
         raise NotImplementedError(
@@ -958,7 +1388,11 @@ def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_downlo
     Routes under ``prefix``: ``GET models``, ``GET model?id=``, ``POST chat``
     (``{"model", "messages", "stream"}``; streaming answers as NDJSON),
     ``POST generate``, and when allowed ``POST download``, ``POST import``,
-    ``POST delete``, ``POST train`` and ``GET tasks?id=``. With ``openai_path`` (``"/v1"``),
+    ``POST convert``, ``POST delete``, ``POST train`` and ``GET tasks?id=``.
+    ``import`` also takes a graph ``model.json`` or its directory; ``convert``
+    (``{"source", "name", "dtype"}``, with ``allow_import``) and ``download``
+    with ``{"repo", "convert": true}`` (a whole Hub repository, see
+    :meth:`ModelStore.download_huggingface_model`) run as tasks. With ``openai_path`` (``"/v1"``),
     ``POST /v1/chat/completions`` and ``GET /v1/models`` speak the OpenAI API
     so existing clients can point at the app.
 
@@ -1009,7 +1443,9 @@ def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_downlo
     def list_models(_request):
         stored = [record.to_dict() for record in store.list()]
         for record in stored:
-            record["summary"].pop("chat_template", None)
+            if record["format"] != "graph":
+                # GGUF files carry their whole Jinja template; graphs name theirs.
+                record["summary"].pop("chat_template", None)
         return {"models": stored, "remote": sorted(extra)}
 
     @app.api(f"{base}/model", methods=("GET",))
@@ -1066,11 +1502,22 @@ def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_downlo
                 payload = body_of(request)
             except ValueError as exc:
                 return error(400, str(exc))
-            if payload.get("repo"):
-                url = huggingface_url(payload["repo"], str(payload.get("filename") or ""),
-                                      revision=str(payload.get("revision") or "main"))
-            else:
-                url = str(payload.get("url") or "")
+            whole_repo = bool(payload.get("repo") and payload.get("convert"))
+            if whole_repo and payload.get("filename"):
+                return error(400, "convert downloads a whole repository; omit filename")
+            try:
+                if payload.get("repo"):
+                    url = huggingface_url(
+                        payload["repo"],
+                        "config.json" if whole_repo else str(payload.get("filename") or ""),
+                        revision=str(payload.get("revision") or "main"))
+                else:
+                    url = str(payload.get("url") or "")
+            except ValueError as exc:
+                return error(400, str(exc))
+            dtype = payload.get("dtype")
+            if dtype is not None and not isinstance(dtype, str):
+                return error(400, "dtype must be a string")
             host = (urllib.parse.urlsplit(url).hostname or "").lower()
             if hosts and host not in hosts:
                 return error(403, f"downloads from {host or 'that URL'} are not allowed")
@@ -1083,7 +1530,13 @@ def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_downlo
                     progress["done"], progress["total"] = done, total
                     handle.metadata["progress"] = dict(progress)
 
-                if payload.get("repo"):
+                if whole_repo:
+                    record = store.download_huggingface_model(
+                        payload["repo"], revision=str(payload.get("revision") or "main"),
+                        name=payload.get("name"), dtype=dtype, progress=report,
+                        cancel_event=handle.cancel_event,
+                    )
+                elif payload.get("repo"):
                     record = store.download_huggingface(
                         payload["repo"], str(payload.get("filename")),
                         revision=str(payload.get("revision") or "main"), name=payload.get("name"),
@@ -1132,7 +1585,7 @@ def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_downlo
                                    metadata={"name": spec["name"], "epochs": spec["epochs"]})
             return Response.json({"task": task.id}, status=202)
 
-    if allow_download or allow_train:
+    if allow_download or allow_train or allow_import:
 
         @app.api(f"{base}/tasks", methods=("GET",))
         def task_status(request):
@@ -1156,6 +1609,29 @@ def install_llm(app, store=None, *, prefix="/api/llm", models=None, allow_downlo
             except (ValueError, FileNotFoundError, FileExistsError) as exc:
                 return error(400, str(exc))
             return Response.json(record.to_dict(), status=201)
+
+        @app.api(f"{base}/convert", methods=("POST",))
+        def convert_model(request):
+            try:
+                payload = body_of(request)
+            except ValueError as exc:
+                return error(400, str(exc))
+            source = payload.get("source")
+            name = payload.get("name")
+            dtype = payload.get("dtype")
+            if not isinstance(source, str) or not source:
+                return error(400, "send the source: a stored model id or a local path")
+            if name is not None and not isinstance(name, str):
+                return error(400, "name must be a string")
+            if dtype is not None and not isinstance(dtype, str):
+                return error(400, "dtype must be a string")
+
+            def job(_handle):
+                return store.convert(source, name=name, dtype=dtype).to_dict()
+
+            task = app.tasks.spawn(job, name="llm-convert", group="llm", pass_handle=True,
+                                   metadata={"source": source})
+            return Response.json({"task": task.id}, status=202)
 
     if allow_delete:
 

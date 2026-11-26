@@ -66,6 +66,14 @@ next pull request moves those entries under the new version heading.
   `native` and falls back to `python`. The compiled library is cached in
   `WSBUILDER_CACHE` (owner-only directory, SHA-256 checked); the wheel stays
   pure Python.
+- `ModelStore` keeps graph models: `import_graph` (a `model.json` or its
+  directory; only referenced files are copied, atomically), `convert` (a
+  stored GGUF or a local Hugging Face directory or GGUF), and
+  `download_huggingface_model` (config, tokenizer and safetensors only, each
+  file verified, then converted). `load` runs them with the accelerator,
+  `verify` checks every file and `export` copies the directory. The LLM HTTP
+  API gains `POST convert` and `download` with `"convert": true`;
+  `huggingface_files` also returns each file's git `oid`.
 
 ### Changed
 

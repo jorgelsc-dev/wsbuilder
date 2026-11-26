@@ -22,7 +22,7 @@ motor externo.
 | `ModelWriter` / `ModelReader` | Escribir y leer el formato de modelos de wsbuilder: un unico archivo NDJSON con el modelo y sus pesos | Ninguna |
 | `open_weights` | Leer pesos en safetensors o GGUF (mmap, sin copiar) | Ninguna |
 | `convert_to_graph` + `GraphModel` | Convertir Qwen3, Qwen2, Llama o Mistral (Hugging Face o GGUF) a `model.json` + pesos NDJSON y ejecutarlos | Ninguna |
-| `ModelStore` | Directorio de modelos: importar, descargar, exportar, verificar y borrar | Ninguna |
+| `ModelStore` | Directorio de modelos: importar, descargar, convertir a grafo, ejecutar, exportar, verificar y borrar | Ninguna |
 | `download_file`, `huggingface_files` | Descargas reanudables y verificadas con SHA-256 | Ninguna |
 | `LanguageModel` + `OpenAICompatibleBackend` | Opcional: usar un modelo que ya sirve otro programa por HTTP (API de OpenAI) | Ninguna |
 | `install_llm` / `App.enable_llm` | Exponer los modelos por HTTP | Ninguna |
@@ -291,9 +291,12 @@ detiene con `finish_reason="length"` al llegar al limite.
   (`complete`, `chat`, `close`; `usage` cuenta tokens) y
   `LanguageModel.from_graph(path)` lo envuelve. Las filas de logits que el
   tokenizador no sabe decodificar (relleno del vocabulario) nunca se eligen.
-- `ModelStore.load()` todavia no carga modelos de grafo: un safetensors o GGUF
-  suelto del almacen sigue lanzando `NotImplementedError`; conviertelo con
-  `convert_to_graph` y usa `LanguageModel.from_graph`.
+- `ModelStore` guarda y ejecuta modelos de grafo: `store.convert()`,
+  `store.import_graph()` y `store.download_huggingface_model()` los registran y
+  `store.load(id)` los ejecuta (ver [Modelos de grafo en el
+  almacen](#modelos-de-grafo-en-el-almacen)). Un safetensors o GGUF suelto del
+  almacen sigue lanzando `NotImplementedError`, con la sugerencia de
+  convertirlo.
 
 ### Aceleracion
 
@@ -475,10 +478,71 @@ store.remove(record.id)
   `unknown`, pero no se pueden abrir). Con la opcion por defecto un archivo
   malformado nunca entra al almacen; con `require_known_format=False` se guarda
   como `unknown`.
-- `import_file(..., move=True)` mueve el archivo en vez de copiarlo.
+- `import_file(..., move=True)` mueve el archivo en vez de copiarlo. Si
+  recibe un `model.json` o un directorio, lo importa como modelo de grafo
+  (`import_graph`).
 
 El resumen incluye `name`, `architecture`, `parameters`, `tensors`, `dtypes`
 (valores por tipo), `metadata` y `file_size`.
+
+### Modelos de grafo en el almacen
+
+Un modelo de grafo (`model.json` mas los pesos y el tokenizador que referencia)
+se guarda con formato `graph`, para cualquier arquitectura convertida:
+
+```python
+from wsbuilder import ModelStore
+
+store = ModelStore()
+record = store.convert("Qwen3-0.6B")             # directorio de Hugging Face o archivo .gguf
+gguf = store.import_file("qwen3-0.6b-q8_0.gguf")
+graph = store.convert(gguf.id, dtype="F16")      # un GGUF ya guardado, por su id
+local = store.import_graph("qwen3-graph/")       # un model.json o su directorio
+hub = store.download_huggingface_model("Qwen/Qwen3-0.6B")   # descarga, convierte y guarda
+
+bot = store.load(record.id, accel="auto", max_context=2048, temperature=0.7)
+print(bot.chat("Hola"))
+store.export(record.id, "/backup/qwen3")         # copia el directorio completo
+store.verify(record.id)                          # comprueba todos los archivos
+```
+
+- **Contenido.** El directorio del modelo tiene `model.json`, los archivos que
+  referencia (con su nombre relativo) y `manifest.json`. `record.filename` es
+  `model.json`, `record.size` la suma de todos los archivos y `record.sha256`
+  el del `model.json`. El resumen tiene `architecture`, `name`, `config`,
+  `generation`, `chat_template`, `parameters`, `tensors`, `dtypes`, `weights`,
+  `tokenizer` y `files` (`{nombre: {"size", "sha256"}}` de cada archivo).
+- **`import_graph(path, name=None, model_id=None, move=False)`.** Copia (o
+  mueve) solo `model.json` y los archivos que referencia; rechaza referencias
+  absolutas, con `..`, a nombres reservados (`model.json`, `manifest.json`),
+  repetidas o que salen del directorio por un enlace simbolico. Valida la copia
+  sin ejecutar el modelo: el `model.json`, cada registro de los pesos, que
+  existan los tensores del grafo y que el tokenizador cargue. El directorio
+  aparece en el almacen con un unico `os.replace` (manifiesto incluido); un
+  fallo no deja nada en el almacen ni en `.staging`, y con `move=True`
+  devuelve los archivos a su sitio.
+- **`convert(source, name=None, model_id=None, dtype=None)`.** `source` es el
+  id de un GGUF guardado o una ruta local (directorio de Hugging Face o
+  `.gguf`); un texto que coincide con un id se toma como id. Un safetensors
+  suelto del almacen no tiene `config.json` ni tokenizador: lanza
+  `ValueError` (convierte su directorio de Hugging Face). Una arquitectura no
+  soportada lanza el `NotImplementedError` del conversor. El origen queda como
+  `convert:<id o ruta>`.
+- **`download_huggingface_model(repo, revision="main", dtype=None, ...)`.**
+  Descarga solo `config.json`, `tokenizer.json`, `generation_config.json` y
+  `tokenizer_config.json` si existen, y `model.safetensors` o
+  `model.safetensors.index.json` con sus shards (nombres simples
+  `*.safetensors` que esten en el listado). Cada archivo se verifica con el
+  listado del Hub: los de LFS por su SHA-256 y los demas por su id de objeto
+  git (SHA-1 de `blob <tamano>\0` + contenido); sin ninguno de los dos se
+  rechaza salvo `verify=False`. `max_bytes` acota el total y
+  `progress(done, total)` cuenta bytes de todos los archivos. La descarga va a
+  un directorio temporal del almacen que se borra al terminar o fallar; luego
+  se convierte y se guarda con origen `hf:<repo>@<revision>`.
+- **`load(id, accel=None, max_context=None, **opciones)`.** Usa
+  `LanguageModel.from_graph`; `accel` y `max_context` van a `GraphModel` y el
+  resto son opciones de generacion por defecto.
+- **`open(id)`** devuelve el `ModelReader` de los pesos (no ejecuta el modelo).
 
 ## Descargar modelos
 
@@ -583,7 +647,13 @@ Las rutas que modifican el disco del servidor estan desactivadas por defecto:
   o `{"url", "sha256"}`). La descarga corre como tarea en segundo plano y su
   progreso se consulta en `GET /api/llm/tasks?id=`. `download_hosts`
   restringe los hosts permitidos.
-- `allow_import=True` activa `POST /api/llm/import` (`{"path"}`).
+- `allow_download=True` con `{"repo", "convert": true}` (sin `filename`)
+  descarga el repositorio completo con `download_huggingface_model`, lo
+  convierte y lo guarda como grafo; acepta `revision`, `name` y `dtype`.
+- `allow_import=True` activa `POST /api/llm/import` (`{"path"}`; tambien un
+  `model.json` o su directorio) y `POST /api/llm/convert`
+  (`{"source", "name", "dtype"}`, con un id del almacen o una ruta del
+  servidor), que corre como tarea consultable en `GET /api/llm/tasks?id=`.
 - `allow_delete=True` activa `POST /api/llm/delete` (`{"id"}`).
 - `allow_train=True` activa `POST /api/llm/train`: entrena un modelo nativo en
   segundo plano y lo guarda en el almacen. Recibe `{"name", "texts"}` o

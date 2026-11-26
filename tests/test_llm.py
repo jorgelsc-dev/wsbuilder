@@ -232,7 +232,8 @@ class TestDownloads(HubFixture):
         self.assertIsNone(by_path["README.md"]["sha256"])
         data = _HubHandler.files["tiny.ndjson"]
         self.assertEqual(by_path["tiny.ndjson"], {"path": "tiny.ndjson", "size": len(data),
-                                                "sha256": hashlib.sha256(data).hexdigest()})
+                                                "sha256": hashlib.sha256(data).hexdigest(),
+                                                "oid": None})
         only = huggingface_files("owner/repo", endpoint=self.endpoint, allow_http=True, suffix=".ndjson")
         self.assertEqual([entry["path"] for entry in only], ["tiny.ndjson"])
 
