@@ -704,17 +704,25 @@ class BPETokenizer:
             if word:
                 ids.extend(self._bpe("".join(_BYTE_ENCODER[b] for b in word.encode("utf-8"))))
 
-    def encode(self, text, *, add_special_tokens=False, allow_special=True):
+    def encode(self, text, *, add_special_tokens=False, allow_special=True,
+               split_added_tokens=True):
         """Token ids of ``text``.
 
         Added tokens are matched first (leftmost-longest). With
-        ``allow_special=False`` special tokens are encoded as plain text;
-        ``add_special_tokens=True`` adds BOS/EOS when ``add_bos_token``/
-        ``add_eos_token`` are set.
+        ``allow_special=False`` special tokens are encoded as plain text; with
+        ``split_added_tokens=False`` all added tokens are, special or not
+        (e.g. ``<think>``). ``add_special_tokens=True`` adds BOS/EOS when
+        ``add_bos_token``/``add_eos_token`` are set.
+
+        The default ``allow_special=True`` matches Hugging Face, so control
+        tokens written inside the text become control ids. For untrusted text
+        use ``allow_special=False`` or ``split_added_tokens=False``, or
+        ``encode_chat`` for chat prompts.
         """
         if not isinstance(text, str):
             raise TypeError("text must be a string")
-        raw_matcher, normalized_matcher = self._matchers[bool(allow_special)]
+        raw_matcher, normalized_matcher = (self._matchers[bool(allow_special)]
+                                           if split_added_tokens else (None, None))
         by_content = self._added_by_content
         pieces = [text] if text else []
         if raw_matcher is not None:
@@ -735,6 +743,48 @@ class BPETokenizer:
                     self._encode_text(part, ids)
         if add_special_tokens and self.add_eos_token:
             ids.append(self.eos_token_id)
+        return ids
+
+    def encode_chat(self, messages, *, add_generation_prompt=True, enable_thinking=True,
+                    system=None):
+        """Token ids of the Qwen3 chat prompt, safe for untrusted message text.
+
+        Same prompt as ``format_qwen3_chat``, but ``<|im_start|>``/``<|im_end|>``
+        come only from the template: message text is encoded with
+        ``split_added_tokens=False``, so a user cannot inject a system or
+        assistant turn, and no added token (``<think>``, ``<tool_call>``...)
+        written in a message becomes its id. ``<think>``/``</think>`` of the
+        template use their added token ids when the tokenizer has them.
+        ``decode(encode_chat(m)) == format_qwen3_chat(m)`` always; the ids
+        equal ``encode(format_qwen3_chat(m))`` when messages contain no added
+        token strings.
+        """
+        controls = {}
+        for content in (_IM_START, _IM_END):
+            token = self._added_by_content.get(content)
+            if token is None or not token.special:
+                raise ValueError(f"encode_chat needs {content!r} as a special token")
+            controls[content] = token.id
+        ids = []
+        pending = []
+
+        def flush():
+            if pending:
+                # Template text never holds added tokens; message text must not.
+                ids.extend(self.encode("".join(pending), split_added_tokens=False))
+                pending.clear()
+
+        for kind, text in _qwen3_chat_segments(messages, add_generation_prompt,
+                                               enable_thinking, system):
+            if kind == _CONTROL:
+                flush()
+                ids.append(controls[text])
+            elif kind == _MARKER and text in self._added_by_content:
+                flush()
+                ids.append(self._added_by_content[text].id)
+            else:
+                pending.append(text)
+        flush()
         return ids
 
     # -- decoding ---------------------------------------------------------
@@ -803,17 +853,16 @@ def _chat_text(value, name):
     return value
 
 
-def format_qwen3_chat(messages, *, add_generation_prompt=True, enable_thinking=True,
-                      system=None):
-    """Qwen3 ChatML prompt, equivalent to the official template without tools.
+_IM_START = "<|im_start|>"
+_IM_END = "<|im_end|>"
+_THINK = "<think>"
+_END_THINK = "</think>"
+# Segment kinds: control tokens, template think tags, template text, and
+# message text (untrusted: never turned into special tokens by encode_chat).
+_CONTROL, _MARKER, _TEMPLATE, _CONTENT = range(4)
 
-    Assistant turns before the last user message lose their ``<think>`` block;
-    later ones keep it (or ``reasoning_content``). With
-    ``enable_thinking=False`` the generation prompt carries an empty think
-    block. ``system=`` adds a first system message (``ValueError`` if the
-    messages already start with one). Tool messages and tool calls are not
-    supported yet.
-    """
+
+def _qwen3_chat_segments(messages, add_generation_prompt, enable_thinking, system):
     if isinstance(messages, (str, bytes, Mapping)):
         raise TypeError("messages must be a sequence of mappings")
     messages = list(messages)
@@ -841,25 +890,44 @@ def format_qwen3_chat(messages, *, add_generation_prompt=True, enable_thinking=T
                                    and content.endswith("</tool_response>")):
             last_query = index
             break
-    parts = []
+    segments = []
     for index, (role, content, reasoning) in enumerate(items):
-        if role != "assistant":
-            parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
-            continue
-        if reasoning is None:
-            reasoning = ""
-            if "</think>" in content:
-                reasoning = content.split("</think>")[0].rstrip("\n").split("<think>")[-1]
-                reasoning = reasoning.lstrip("\n")
-                content = content.split("</think>")[-1].lstrip("\n")
-        if index > last_query and (index == len(items) - 1 or reasoning):
-            parts.append("<|im_start|>assistant\n<think>\n" + reasoning.strip("\n")
-                         + "\n</think>\n\n" + content.lstrip("\n"))
-        else:
-            parts.append("<|im_start|>assistant\n" + content)
-        parts.append("<|im_end|>\n")
+        segments += [(_CONTROL, _IM_START), (_TEMPLATE, role + "\n")]
+        if role == "assistant":
+            if reasoning is None:
+                reasoning = ""
+                if _END_THINK in content:
+                    reasoning = content.split(_END_THINK)[0].rstrip("\n").split(_THINK)[-1]
+                    reasoning = reasoning.lstrip("\n")
+                    content = content.split(_END_THINK)[-1].lstrip("\n")
+            if index > last_query and (index == len(items) - 1 or reasoning):
+                segments += [(_MARKER, _THINK), (_TEMPLATE, "\n"),
+                             (_CONTENT, reasoning.strip("\n")), (_TEMPLATE, "\n"),
+                             (_MARKER, _END_THINK), (_TEMPLATE, "\n\n")]
+                content = content.lstrip("\n")
+        segments += [(_CONTENT, content), (_CONTROL, _IM_END), (_TEMPLATE, "\n")]
     if add_generation_prompt:
-        parts.append("<|im_start|>assistant\n")
+        segments += [(_CONTROL, _IM_START), (_TEMPLATE, "assistant\n")]
         if not enable_thinking:
-            parts.append("<think>\n\n</think>\n\n")
-    return "".join(parts)
+            segments += [(_MARKER, _THINK), (_TEMPLATE, "\n\n"), (_MARKER, _END_THINK),
+                         (_TEMPLATE, "\n\n")]
+    return segments
+
+
+def format_qwen3_chat(messages, *, add_generation_prompt=True, enable_thinking=True,
+                      system=None):
+    """Qwen3 ChatML prompt, equivalent to the official template without tools.
+
+    Assistant turns before the last user message lose their ``<think>`` block;
+    later ones keep it (or ``reasoning_content``). With
+    ``enable_thinking=False`` the generation prompt carries an empty think
+    block. ``system=`` adds a first system message (``ValueError`` if the
+    messages already start with one). Tool messages and tool calls are not
+    supported yet.
+
+    Message text is pasted as is: ``encode(prompt)`` would turn a
+    ``<|im_end|>`` written by a user into a control token. For untrusted
+    input use ``BPETokenizer.encode_chat`` instead.
+    """
+    return "".join(text for _, text in _qwen3_chat_segments(
+        messages, add_generation_prompt, enable_thinking, system))

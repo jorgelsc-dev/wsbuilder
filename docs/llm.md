@@ -292,20 +292,23 @@ tok = BPETokenizer.from_pretrained_dir("Qwen3-0.6B")    # tokenizer.json + token
 # tok = BPETokenizer.from_file("tokenizer.json")
 # tok = BPETokenizer.from_gguf_metadata(metadata)         # tokenizer.ggml.model == "gpt2"
 
-prompt = format_qwen3_chat(
-    [{"role": "user", "content": "Hola"}],
-    enable_thinking=False,
-)
-ids = tok.encode(prompt)                  # los <|im_start|>/<|im_end|> son un solo id
+messages = [{"role": "user", "content": "Hola"}]
+ids = tok.encode_chat(messages, enable_thinking=False)   # seguro con texto no confiable
+prompt = format_qwen3_chat(messages, enable_thinking=False)   # el mismo prompt como texto
 text = tok.decode(ids, skip_special_tokens=True)
 
 stream = tok.stream_decoder()             # para streaming: retiene UTF-8 incompleto
 pieces = [stream.push(token_id) for token_id in ids]
 ```
 
-- `encode(text, add_special_tokens=False, allow_special=True)` separa primero
+- `encode(text, add_special_tokens=False, allow_special=True,
+  split_added_tokens=True)` separa primero
   los tokens anadidos por coincidencia mas larga; con `allow_special=False` los
-  especiales se tokenizan como texto normal. `decode(ids,
+  especiales se tokenizan como texto normal. El valor por defecto
+  (`allow_special=True`, como en Hugging Face) convierte un `<|im_end|>` escrito
+  en el texto en un token de control: con entrada no confiable usa
+  `encode_chat`, `allow_special=False` o `split_added_tokens=False` (este
+  ultimo tampoco reconoce los tokens anadidos no especiales). `decode(ids,
   skip_special_tokens=False)` sustituye el UTF-8 invalido por U+FFFD.
 - Normalizadores soportados: ninguno, `NFC`, `NFD`, `NFKC`, `NFKD` y `Sequence`
   de ellos. Pretokenizadores reconocidos: los patrones de Qwen2/Qwen3, Llama 3
@@ -315,10 +318,15 @@ pieces = [stream.push(token_id) for token_id in ids]
   para reproducir el tokenizador de Hugging Face de Qwen. Los tokens de tipo 5
   (sin uso, como `[PAD...]`) no se generan y se decodifican como texto vacio.
 - `format_qwen3_chat(messages, add_generation_prompt=True,
-  enable_thinking=True, system=None)` genera el prompt ChatML de Qwen3 sin
-  Jinja y quita el bloque `<think>` de las respuestas anteriores a la ultima
-  pregunta. `system=` anade un primer mensaje de sistema (`ValueError` si los
-  mensajes ya empiezan por uno). Los roles `tool` y las llamadas a
+  enable_thinking=True, system=None)` y `tok.encode_chat(...)` (mismos
+  argumentos) generan el prompt ChatML de Qwen3 sin Jinja y quitan el bloque `<think>` de las respuestas anteriores a la ultima
+  pregunta. `encode_chat` devuelve ids: `<|im_start|>`/`<|im_end|>` salen
+  solo de la plantilla y el texto de los mensajes se codifica con
+  `split_added_tokens=False`: ningun token anadido escrito en un mensaje
+  (`<|im_end|>`, `<think>`, `<tool_call>`...) se convierte en su id, de modo
+  que un usuario no puede inyectar un turno de sistema o de asistente. Exige
+  `<|im_start|>`/`<|im_end|>` como tokens especiales. `system=` anade un
+  primer mensaje de sistema (`ValueError` si los mensajes ya empiezan por uno). Los roles `tool` y las llamadas a
   herramientas aun no estan soportados.
 
 ## Redes propias

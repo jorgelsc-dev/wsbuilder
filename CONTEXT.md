@@ -395,6 +395,9 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   lanza `ValueError` salvo `pretokenizer=`. Merges con heap (rango, posición),
   O(n log n). `format_qwen3_chat` reproduce la plantilla ChatML de Qwen3 sin
   herramientas (`enable_thinking`, quita `<think>` del historial).
+  `encode_chat` es la vía segura para texto no confiable: los marcadores salen
+  solo de la plantilla y el contenido se codifica con `split_added_tokens=False`
+  (`encode` conserva el defecto de HF, que convierte tokens de control del texto).
 - Formato de modelos (`ndjson_model.py`): único formato de modelo y pesos del
   proyecto. Archivo NDJSON: línea 1 `{"format": "wsbuilder-model", "version": 1,
   "architecture", "name", "metadata", "tensor_count"}`; cada línea siguiente un

@@ -41,7 +41,9 @@ next pull request moves those entries under the new version heading.
 - `wsbuilder.bpe`: standard-library byte-level BPE tokenizer that loads
   Hugging Face `tokenizer.json` or GGUF tokenizer metadata, with Qwen2/Qwen3,
   Llama 3 and GPT-2 pre-tokenizers, streaming decode and the Qwen3 chat
-  template (`format_qwen3_chat`).
+  template (`format_qwen3_chat`). `encode_chat` builds the chat prompt from
+  the template's control tokens and encodes message text without matching
+  any added token, so user text cannot inject turns or tool-call markers.
 
 ### Changed
 
