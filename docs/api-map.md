@@ -125,6 +125,7 @@ completa en [RPC entre servicios](rpc.md).
 | Tokenizador BPE | `BPETokenizer` (`from_file`, `from_json`, `from_pretrained_dir`, `from_gguf_metadata`, `encode_chat`), `BPEStreamDecoder`, `format_qwen3_chat` |
 | HTTP | `install_llm`, `App.enable_llm` |
 | Formato NDJSON | `ModelReader`, `ModelWriter`, `ModelTensor`, `ModelFormatError`, `MODEL_FORMAT`, `is_model_file`, `read_model_header` |
+| Pesos safetensors y GGUF | `open_weights`, `detect_weights_format`, `SafetensorsReader`, `ShardedSafetensors`, `GGUFReader`, `WeightTensor`, `WeightsFormatError` |
 
 Guia completa en [Modelos de lenguaje](llm.md).
 
