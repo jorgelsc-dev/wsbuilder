@@ -71,6 +71,7 @@ _MAX_DIM_VALUE = 2**63 - 1
 _LITTLE = sys.byteorder == "little"
 _SUMMARY_LIST_ITEMS = 16
 _SUMMARY_STRING_CHARS = 8192
+_F16_CHUNK = 1 << 16
 
 
 class WeightsFormatError(ValueError):
@@ -228,8 +229,13 @@ def _convert(dtype, view, count):
             f"converting {dtype} tensors is not supported yet; use raw() for the bytes"
         )
     if rule == "f16":
-        # struct handles half floats on every supported Python and byte order.
-        return array.array("f", struct.unpack(f"<{count}e", view))
+        # struct handles half floats on every supported Python and byte order;
+        # unpack in chunks so the temporary tuple of floats stays small.
+        result = array.array("f")
+        for start in range(0, count, _F16_CHUNK):
+            size = min(_F16_CHUNK, count - start)
+            result.extend(struct.unpack_from(f"<{size}e", view, 2 * start))
+        return result
     if rule == "bf16":
         # A bfloat16 is the high half of a float32: put its two bytes there.
         data = bytes(view)

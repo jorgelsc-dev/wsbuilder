@@ -2,7 +2,8 @@
 
 !!! warning "Experimental"
     Los modulos de IA y modelos de lenguaje (`ia`, `ia_lm`, `ia_text`,
-    `ia_audio`, `predicts`, `llm`, `ndjson_model`) son experimentales: su API y
+    `ia_audio`, `predicts`, `llm`, `ndjson_model`, `weights`, `bpe`, `graph`,
+    `graph_convert`) son experimentales: su API y
     sus formatos pueden cambiar entre versiones menores sin periodo de
     transicion, a diferencia del nucleo HTTP/WebSocket. Fija la version
     (`wsbuilder==X.Y.*`) si dependes de ellos y revisa el

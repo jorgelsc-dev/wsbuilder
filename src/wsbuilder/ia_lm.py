@@ -27,6 +27,7 @@ modest and train in a background task (:func:`submit_lm_training_task`).
 """
 
 import codecs
+import heapq
 import math
 import operator
 import random
@@ -38,6 +39,7 @@ __all__ = [
     "ByteLanguageModel",
     "NativeBackend",
     "format_chat",
+    "sample_token",
     "submit_lm_training_task",
 ]
 
@@ -88,6 +90,46 @@ def _softmax_in_place(logits):
     for index in range(len(logits)):
         logits[index] *= inverse
     return logits
+
+
+def sample_token(probabilities, rng, *, temperature=1.0, top_k=None, top_p=None, recent=(),
+                 repeat_penalty=None):
+    """Pick a token id from ``probabilities`` (a list, changed in place by the penalty).
+
+    ``repeat_penalty`` divides the probability of every id in ``recent``;
+    ``temperature <= 0`` picks the most likely id, otherwise the
+    probabilities are raised to ``1 / temperature``, cut to the ``top_k``
+    most likely ids and to the smallest set whose mass reaches ``top_p``,
+    and one id is drawn with ``rng`` (a :class:`random.Random`).
+    """
+    if repeat_penalty and repeat_penalty != 1.0:
+        for token in set(recent):
+            if 0 <= token < len(probabilities):
+                probabilities[token] /= repeat_penalty
+    ids = range(len(probabilities))
+    if temperature <= 0:
+        return max(ids, key=probabilities.__getitem__)
+    if temperature != 1.0:
+        power = 1.0 / temperature
+        probabilities = [p ** power if p > 0 else 0.0 for p in probabilities]
+    if top_k:
+        # Same order as sorted(..., reverse=True)[:k], without sorting everything.
+        ranked = heapq.nlargest(max(1, int(top_k)), ids, key=probabilities.__getitem__)
+    else:
+        ranked = sorted(ids, key=probabilities.__getitem__, reverse=True)
+    if top_p is not None and 0 < top_p < 1:
+        total = sum(probabilities[token] for token in ranked) or 1.0
+        kept, running = [], 0.0
+        for token in ranked:
+            kept.append(token)
+            running += probabilities[token] / total
+            if running >= top_p:
+                break
+        ranked = kept
+    weights = [probabilities[token] for token in ranked]
+    if not sum(weights) > 0:
+        return ranked[0]
+    return rng.choices(ranked, weights=weights)[0]
 
 
 class ByteLanguageModel:
@@ -299,32 +341,6 @@ class ByteLanguageModel:
 
     # -- generation ----------------------------------------------------
 
-    def _pick(self, probabilities, rng, *, temperature, top_k, top_p, recent, repeat_penalty):
-        if repeat_penalty and repeat_penalty != 1.0:
-            for token in set(recent):
-                probabilities[token] /= repeat_penalty
-        if temperature <= 0:
-            return max(range(_VOCAB), key=probabilities.__getitem__)
-        if temperature != 1.0:
-            power = 1.0 / temperature
-            probabilities = [p ** power if p > 0 else 0.0 for p in probabilities]
-        ranked = sorted(range(_VOCAB), key=probabilities.__getitem__, reverse=True)
-        if top_k:
-            ranked = ranked[:max(1, int(top_k))]
-        if top_p is not None and 0 < top_p < 1:
-            total = sum(probabilities[token] for token in ranked) or 1.0
-            kept, running = [], 0.0
-            for token in ranked:
-                kept.append(token)
-                running += probabilities[token] / total
-                if running >= top_p:
-                    break
-            ranked = kept
-        weights = [probabilities[token] for token in ranked]
-        if not sum(weights) > 0:
-            return ranked[0]
-        return rng.choices(ranked, weights=weights)[0]
-
     def stream(self, prompt="", **options):
         """Yield text pieces continuing ``prompt``.
 
@@ -356,8 +372,9 @@ class ByteLanguageModel:
         pending = ""
         for _ in range(max_tokens):
             probabilities = self.next_token_probabilities(tokens)
-            token = self._pick(probabilities, rng, temperature=temperature, top_k=top_k, top_p=top_p,
-                               recent=tokens[-self.context:], repeat_penalty=repeat_penalty)
+            token = sample_token(probabilities, rng, temperature=temperature, top_k=top_k,
+                                 top_p=top_p, recent=tokens[-self.context:],
+                                 repeat_penalty=repeat_penalty)
             if token >= _BYTES:
                 state["finish_reason"] = "stop"
                 break

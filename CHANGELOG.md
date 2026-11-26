@@ -43,6 +43,21 @@ next pull request moves those entries under the new version heading.
   zero-copy `raw()` views and float conversion of F32/F16/BF16/F64/Q8_0/Q4_0
   tensors. `ModelStore` imports, summarizes and opens these formats;
   `load()` still runs only `wsbuilder.bytelm` models.
+- `wsbuilder.bpe`: standard-library byte-level BPE tokenizer that loads
+  Hugging Face `tokenizer.json` or GGUF tokenizer metadata, with Qwen2/Qwen3,
+  Llama 3 and GPT-2 pre-tokenizers, streaming decode and the Qwen3 chat
+  template (`format_qwen3_chat`). `encode_chat` builds the chat prompt from
+  the template's control tokens and encodes message text without matching
+  any added token, so user text cannot inject turns or tool-call markers.
+- Graph models: `model.json` describes a decoder as a validated graph of
+  generic ops and `weights.ndjson` holds its tensors; `GraphModel` runs it per
+  token with a KV cache and `GraphBackend` / `LanguageModel.from_graph` plug it
+  into `LanguageModel`. `convert_to_graph` converts Hugging Face directories
+  and GGUF files of Qwen3, Qwen2, Llama and Mistral. Pure Python, standard
+  library only.
+- NDJSON model format version 2: base64-encoded tensors and `BF16`, `Q8_0`,
+  `Q4_0` dtypes; version 1 files are still read and written.
+- `BPETokenizer.to_json()`; shared `sample_token` in `wsbuilder.ia_lm`.
 
 ### Changed
 

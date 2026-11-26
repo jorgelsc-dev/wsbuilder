@@ -78,6 +78,8 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   pki.py                CA, certificados y material TLS (extra tls)
   ia.py predicts.py     redes neuronales y predicción
   ia_text.py ia_audio.py tokens UTF-8, vectores de texto y audio WAV PCM
+  bpe.py                tokenizador BPE byte-level (Qwen2/Qwen3, Llama 3, GPT-2) y plantilla de chat Qwen3
+  graph.py graph_convert.py  motor genérico de modelos (model.json + weights.ndjson) y conversores HF/GGUF
 tests/                  suite unittest ejecutada con pytest (test_*.py)
 docs/ + mkdocs.yml      sitio MkDocs (docs/reference, docs/help, stylesheets, assets)
 examples/full-project/  proyecto de ejemplo
@@ -107,7 +109,7 @@ tests, a `tests/`; los de docs, a `docs/`.
 | HTTP/3 y WebSocket sobre HTTP/3 | `http3.py`, `http3_server.py`, `http3_websocket.py`, `qpack.py` | `test_http3.py`, `test_http3_server.py`, `test_http3_streaming.py`, `test_http3_streaming_udp.py` | `http-versions.md` |
 | Transporte QUIC | `quic/` | `test_quic_protocol.py`, `test_quic_crypto.py`, `test_quic_tls.py`, `test_quic_recovery.py`, `test_quic_address.py` | `http-versions.md` |
 | Cliente QUIC/HTTP/3 y mTLS en QUIC | `quic/client.py`, `quic/tls.py`, `http3_client.py` | `test_quic_client.py` | `rpc.md` |
-| Modelos de lenguaje, motor nativo, formato NDJSON y lectores de pesos | `llm.py`, `ia_lm.py`, `ndjson_model.py`, `weights.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_ndjson_model.py`, `test_weights.py` | `llm.md`, `ia.md` |
+| Modelos de lenguaje, motor nativo y de grafo, formato NDJSON, lectores de pesos y tokenizador BPE | `llm.py`, `ia_lm.py`, `graph.py`, `graph_convert.py`, `ndjson_model.py`, `weights.py`, `bpe.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_graph.py`, `test_ndjson_model.py`, `test_weights.py`, `test_bpe.py` | `llm.md`, `ia.md` |
 | RPC entre servicios y codec CBOR | `rpc.py`, `codec.py`, `app.py` (`App.rpc`) | `test_rpc.py`, `test_codec.py`, `test_optional_extras.py` | `rpc.md` |
 | WebSocket y frames | `ws.py` | `test_ws.py`, `test_server.py` | `websocket.md` |
 | SQLite, ORM y réplicas | `orm.py`, `db_replicas.py` | `test_orm.py`, `test_orm_replicas.py` | `data-orm.md`, `persistence.md` |
@@ -395,12 +397,45 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   Convierte F32/F16/BF16/F64/Q8_0/Q4_0; otros tipos cuantizados solo `raw()`.
   `summary()` usa las claves de `ModelReader.summary()` y resume arrays largos.
   Es la base para ejecutar arquitecturas externas (Qwen3) en fases siguientes.
+- Tokenizador (`bpe.py`): `BPETokenizer` byte-level desde `tokenizer.json`
+  (`from_json`, `from_file`, `from_pretrained_dir`) o metadatos GGUF
+  (`from_gguf_metadata(dict)`, model `gpt2`, pre `qwen2`/`llama-bpe`/`gpt-2`);
+  `encode`, `decode`, `stream_decoder()` (`BPEStreamDecoder`, UTF-8 incremental).
+  Los pretokenizadores Qwen2, Llama 3 y GPT-2 replican sus regex sin el módulo
+  `regex` (`unicodedata`; `\s` = White_Space, sin U+001C..U+001F); otro patrón
+  lanza `ValueError` salvo `pretokenizer=`. Merges con heap (rango, posición),
+  O(n log n). `format_qwen3_chat` reproduce la plantilla ChatML de Qwen3 sin
+  herramientas (`enable_thinking`, quita `<think>` del historial).
+  `encode_chat` es la vía segura para texto no confiable: los marcadores salen
+  solo de la plantilla y el contenido se codifica con `split_added_tokens=False`
+  (`encode` conserva el defecto de HF, que convierte tokens de control del texto).
+- Modelos de grafo (`graph.py`, `graph_convert.py`): `model.json`
+  (`"format": "wsbuilder-graph"`, `config`, `weights` y `tokenizer` relativos sin
+  `..`, `chat_template` `qwen3`/`chatml`/`llama3`, `graph` con `embed`,
+  `blocks` {`count`, `ops`} con nombres `blk.{i}.*` y `head`) más
+  `weights.ndjson`. `GraphModel.load` valida el grafo (op, atributo, clave,
+  tensor, forma o valor desconocidos → `GraphFormatError`) y ejecuta por token
+  con caché KV (`GraphCache`, `array("d")`); el runtime no tiene código por
+  arquitectura. Ops v1 en `GRAPH_OPS` (rms_norm, layer_norm, linear, add, mul,
+  scale, silu, gelu, gelu_tanh, relu, split, head_rms_norm, rope neox/interleaved
+  con `freq_factors`, attention con GQA/sliding_window/softcap, softcap).
+  `generate`/`stream`/`chat`/`stream_chat`/`encode_chat` (sin inyección de
+  control), `GraphBackend` (interfaz de `NativeBackend`) y
+  `LanguageModel.from_graph`. `convert_to_graph(source, out_dir, dtype=None)`
+  convierte un directorio HF o un GGUF de qwen3, qwen2, llama o mistral
+  (`ARCHITECTURES`); un tensor que el grafo no usaría lanza
+  `NotImplementedError`. Llama en GGUF usa RoPE `interleaved` (Q/K permutados por
+  llama.cpp); Qwen, `neox`. `ModelStore.load()` aún no carga grafos. Python puro:
+  ~7,5 s/token estimados en Qwen3-0.6B.
 - Formato de modelos (`ndjson_model.py`): único formato de modelo y pesos del
   proyecto. Archivo NDJSON: línea 1 `{"format": "wsbuilder-model", "version": 1,
   "architecture", "name", "metadata", "tensor_count"}`; cada línea siguiente un
   tensor `{"tensor", "shape", "dtype", "data"}` (lista plana, orden por filas).
   dtypes `F64`/`F32`/`F16` (redondeo al escribir) e `I32`/`I64`; NaN/infinito
-  como cadenas. `ModelReader` valida todas las líneas al abrir, indexa offsets
+  como cadenas. Versión 2: tensores con `"encoding": "base64"` (bytes
+  little-endian, `data` al final) y dtypes `BF16`/`Q8_0`/`Q4_0`; un archivo sin
+  ellos se sigue escribiendo como versión 1. `to_array`, `row_arrays` (bloques
+  de ~1 MiB) y `ModelWriter.add_tensor_bytes`. `ModelReader` valida todas las líneas al abrir, indexa offsets
   y lee cada tensor bajo demanda; `ModelWriter` escribe de forma atómica.
   Errores: `ModelFormatError` (subclase de `ValueError`). `NeuralNetwork.save`/
   `load` usan la arquitectura `wsbuilder.dense` (`blk.N.weight` con forma

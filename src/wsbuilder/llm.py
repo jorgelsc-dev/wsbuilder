@@ -830,6 +830,14 @@ class LanguageModel:
         return cls(NativeBackend(model, **defaults), name=name or "native")
 
     @classmethod
+    def from_graph(cls, path, *, max_context=None, name=None, **defaults):
+        """A graph model (``model.json`` or its directory) run by :class:`~wsbuilder.graph.GraphModel`."""
+        from .graph import GraphBackend, GraphModel
+
+        model = GraphModel.load(path, max_context=max_context)
+        return cls(GraphBackend(model, **defaults), name=name or model.name)
+
+    @classmethod
     def from_openai(cls, base_url, model, **options):
         return cls(OpenAICompatibleBackend(base_url, model, **options), name=model)
 
