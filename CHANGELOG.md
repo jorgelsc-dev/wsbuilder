@@ -38,6 +38,10 @@ next pull request moves those entries under the new version heading.
 - Absolute-form request targets and `OPTIONS *` (#89).
 - `.github/SECURITY.md` with the private reporting process (#85).
 - `benchmarks/http1_keepalive.py` (#91).
+- `wsbuilder.bpe`: standard-library byte-level BPE tokenizer that loads
+  Hugging Face `tokenizer.json` or GGUF tokenizer metadata, with Qwen2/Qwen3,
+  Llama 3 and GPT-2 pre-tokenizers, streaming decode and the Qwen3 chat
+  template (`format_qwen3_chat`).
 
 ### Changed
 

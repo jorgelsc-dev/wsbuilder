@@ -2,7 +2,7 @@
 
 !!! warning "Experimental"
     Los modulos de IA y modelos de lenguaje (`ia`, `ia_lm`, `ia_text`,
-    `ia_audio`, `predicts`, `llm`, `ndjson_model`) son experimentales: su API y
+    `ia_audio`, `predicts`, `llm`, `ndjson_model`, `bpe`) son experimentales: su API y
     sus formatos pueden cambiar entre versiones menores sin periodo de
     transicion, a diferencia del nucleo HTTP/WebSocket. Fija la version
     (`wsbuilder==X.Y.*`) si dependes de ellos y revisa el
@@ -277,6 +277,49 @@ Las rutas que modifican el disco del servidor estan desactivadas por defecto:
   manifiesto del modelo nuevo. `train_limits` ajusta los limites de
   `DEFAULT_TRAIN_LIMITS` (1 MiB de texto, `context` 128, `embedding` 64,
   capas de hasta 512 unidades, 500 epocas).
+
+## Tokenizador BPE (Qwen3, GPT-2, Llama 3)
+
+`wsbuilder.bpe` incluye `BPETokenizer`, un tokenizador BPE a nivel de bytes
+compatible con los de GPT-2, Qwen2/Qwen3 y Llama 3, escrito solo con la
+biblioteca estandar. Lee el `tokenizer.json` de Hugging Face o los metadatos
+`tokenizer.ggml.*` de un GGUF (ya leidos como `dict`):
+
+```python
+from wsbuilder import BPETokenizer, format_qwen3_chat
+
+tok = BPETokenizer.from_pretrained_dir("Qwen3-0.6B")    # tokenizer.json + tokenizer_config.json
+# tok = BPETokenizer.from_file("tokenizer.json")
+# tok = BPETokenizer.from_gguf_metadata(metadata)         # tokenizer.ggml.model == "gpt2"
+
+prompt = format_qwen3_chat(
+    [{"role": "user", "content": "Hola"}],
+    enable_thinking=False,
+)
+ids = tok.encode(prompt)                  # los <|im_start|>/<|im_end|> son un solo id
+text = tok.decode(ids, skip_special_tokens=True)
+
+stream = tok.stream_decoder()             # para streaming: retiene UTF-8 incompleto
+pieces = [stream.push(token_id) for token_id in ids]
+```
+
+- `encode(text, add_special_tokens=False, allow_special=True)` separa primero
+  los tokens anadidos por coincidencia mas larga; con `allow_special=False` los
+  especiales se tokenizan como texto normal. `decode(ids,
+  skip_special_tokens=False)` sustituye el UTF-8 invalido por U+FFFD.
+- Normalizadores soportados: ninguno, `NFC`, `NFD`, `NFKC`, `NFKD` y `Sequence`
+  de ellos. Pretokenizadores reconocidos: los patrones de Qwen2/Qwen3, Llama 3
+  y GPT-2, implementados sin el modulo `regex`; con otro patron se lanza
+  `ValueError`, salvo que se pase `pretokenizer=` (un nombre o una funcion).
+- `from_gguf_metadata` no normaliza, como llama.cpp; pasa `normalizer="NFC"`
+  para reproducir el tokenizador de Hugging Face de Qwen. Los tokens de tipo 5
+  (sin uso, como `[PAD...]`) no se generan y se decodifican como texto vacio.
+- `format_qwen3_chat(messages, add_generation_prompt=True,
+  enable_thinking=True, system=None)` genera el prompt ChatML de Qwen3 sin
+  Jinja y quita el bloque `<think>` de las respuestas anteriores a la ultima
+  pregunta. `system=` anade un primer mensaje de sistema (`ValueError` si los
+  mensajes ya empiezan por uno). Los roles `tool` y las llamadas a
+  herramientas aun no estan soportados.
 
 ## Redes propias
 

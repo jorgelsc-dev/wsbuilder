@@ -77,6 +77,7 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   pki.py                CA, certificados y material TLS (extra tls)
   ia.py predicts.py     redes neuronales y predicción
   ia_text.py ia_audio.py tokens UTF-8, vectores de texto y audio WAV PCM
+  bpe.py                tokenizador BPE byte-level (Qwen2/Qwen3, Llama 3, GPT-2) y plantilla de chat Qwen3
 tests/                  suite unittest ejecutada con pytest (test_*.py)
 docs/ + mkdocs.yml      sitio MkDocs (docs/reference, docs/help, stylesheets, assets)
 examples/full-project/  proyecto de ejemplo
@@ -106,7 +107,7 @@ tests, a `tests/`; los de docs, a `docs/`.
 | HTTP/3 y WebSocket sobre HTTP/3 | `http3.py`, `http3_server.py`, `http3_websocket.py`, `qpack.py` | `test_http3.py`, `test_http3_server.py`, `test_http3_streaming.py`, `test_http3_streaming_udp.py` | `http-versions.md` |
 | Transporte QUIC | `quic/` | `test_quic_protocol.py`, `test_quic_crypto.py`, `test_quic_tls.py`, `test_quic_recovery.py`, `test_quic_address.py` | `http-versions.md` |
 | Cliente QUIC/HTTP/3 y mTLS en QUIC | `quic/client.py`, `quic/tls.py`, `http3_client.py` | `test_quic_client.py` | `rpc.md` |
-| Modelos de lenguaje, motor nativo y formato NDJSON | `llm.py`, `ia_lm.py`, `ndjson_model.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_ndjson_model.py` | `llm.md`, `ia.md` |
+| Modelos de lenguaje, motor nativo, formato NDJSON y tokenizador BPE | `llm.py`, `ia_lm.py`, `ndjson_model.py`, `bpe.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_ndjson_model.py`, `test_bpe.py` | `llm.md`, `ia.md` |
 | RPC entre servicios y codec CBOR | `rpc.py`, `codec.py`, `app.py` (`App.rpc`) | `test_rpc.py`, `test_codec.py`, `test_optional_extras.py` | `rpc.md` |
 | WebSocket y frames | `ws.py` | `test_ws.py`, `test_server.py` | `websocket.md` |
 | SQLite, ORM y réplicas | `orm.py`, `db_replicas.py` | `test_orm.py`, `test_orm_replicas.py` | `data-orm.md`, `persistence.md` |
@@ -385,6 +386,15 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   termina en `<|assistant|>`. `NativeBackend` lo adapta a `LanguageModel`;
   `submit_lm_training_task` entrena con `TaskManager`. Python puro: tamaños
   pequeños.
+- Tokenizador (`bpe.py`): `BPETokenizer` byte-level desde `tokenizer.json`
+  (`from_json`, `from_file`, `from_pretrained_dir`) o metadatos GGUF
+  (`from_gguf_metadata(dict)`, model `gpt2`, pre `qwen2`/`llama-bpe`/`gpt-2`);
+  `encode`, `decode`, `stream_decoder()` (`BPEStreamDecoder`, UTF-8 incremental).
+  Los pretokenizadores Qwen2, Llama 3 y GPT-2 replican sus regex sin el módulo
+  `regex` (`unicodedata`; `\s` = White_Space, sin U+001C..U+001F); otro patrón
+  lanza `ValueError` salvo `pretokenizer=`. Merges con heap (rango, posición),
+  O(n log n). `format_qwen3_chat` reproduce la plantilla ChatML de Qwen3 sin
+  herramientas (`enable_thinking`, quita `<think>` del historial).
 - Formato de modelos (`ndjson_model.py`): único formato de modelo y pesos del
   proyecto. Archivo NDJSON: línea 1 `{"format": "wsbuilder-model", "version": 1,
   "architecture", "name", "metadata", "tensor_count"}`; cada línea siguiente un

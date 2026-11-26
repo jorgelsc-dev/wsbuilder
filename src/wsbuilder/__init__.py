@@ -2,6 +2,7 @@
 
 import importlib.util
 
+from .bpe import BPEStreamDecoder, BPETokenizer, format_qwen3_chat
 from .cache import Cache, SQLiteMemoryCache, install_cache
 from .caches import GlobalCacheRule, ViewResponseCache, install_caches
 from .codec import CBORDecodeError, CBOREncodeError, CBORSimple, CBORTag, cbor_dumps, cbor_loads
@@ -305,6 +306,9 @@ __all__ = [
     "AudioData",
     "ByteTokenizer",
     "HashingTextVectorizer",
+    "BPETokenizer",
+    "BPEStreamDecoder",
+    "format_qwen3_chat",
     "audio_features",
     "load_wav",
     "DataSummary",
