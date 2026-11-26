@@ -830,11 +830,14 @@ class LanguageModel:
         return cls(NativeBackend(model, **defaults), name=name or "native")
 
     @classmethod
-    def from_graph(cls, path, *, max_context=None, name=None, **defaults):
-        """A graph model (``model.json`` or its directory) run by :class:`~wsbuilder.graph.GraphModel`."""
+    def from_graph(cls, path, *, max_context=None, name=None, accel=None, **defaults):
+        """A graph model (``model.json`` or its directory) run by :class:`~wsbuilder.graph.GraphModel`.
+
+        ``accel`` selects the algebra backend (see :mod:`wsbuilder.accel`).
+        """
         from .graph import GraphBackend, GraphModel
 
-        model = GraphModel.load(path, max_context=max_context)
+        model = GraphModel.load(path, max_context=max_context, accel=accel)
         return cls(GraphBackend(model, **defaults), name=name or model.name)
 
     @classmethod

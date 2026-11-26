@@ -59,6 +59,11 @@ fallback_version = "0.0.0.dev0"
 where = ["src"]
 include = ["wsbuilder*"]
 
+# C source of wsbuilder.accel, compiled at run time by the user's compiler:
+# shipped as data, so the wheel stays pure Python (no extension modules).
+[tool.setuptools.package-data]
+wsbuilder = ["_accel_kernels.c"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100

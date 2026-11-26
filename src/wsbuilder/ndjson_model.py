@@ -405,6 +405,21 @@ class ModelTensor:
             for row in range(last - first):
                 yield flat[row * width:(row + 1) * width]
 
+    def raw_chunks(self):
+        """Yield the raw bytes of a 2-D tensor (see :meth:`raw`) a few rows at a time.
+
+        Each item holds whole rows, about 1 MiB for base64 tensors, so a
+        caller can copy a large tensor into its own buffer without holding it
+        twice.
+        """
+        rows, _width = self._check_2d()
+        if not self.row_reads:
+            yield self.raw()
+            return
+        step = max(1, _CHECK_CHUNK // max(1, self.nbytes // rows))
+        for first in range(0, rows, step):
+            yield self._rows_bytes(first, min(rows, first + step))
+
     def __repr__(self):
         return f"<ModelTensor {self.name} {self.dtype} {list(self.shape)}>"
 

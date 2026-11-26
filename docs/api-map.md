@@ -125,7 +125,7 @@ completa en [RPC entre servicios](rpc.md).
 | Tokenizador BPE | `BPETokenizer` (`from_file`, `from_json`, `from_pretrained_dir`, `from_gguf_metadata`, `encode_chat`, `to_json`), `BPEStreamDecoder`, `format_qwen3_chat` |
 | HTTP | `install_llm`, `App.enable_llm` |
 | Formato NDJSON | `ModelReader`, `ModelWriter`, `ModelTensor`, `ModelFormatError`, `MODEL_FORMAT`, `is_model_file`, `read_model_header` |
-| Modelos de grafo | `GraphModel`, `GraphBackend`, `GraphCache`, `GraphFormatError`, `GRAPH_FORMAT`, `GRAPH_OPS`, `convert_to_graph`, `LanguageModel.from_graph` |
+| Modelos de grafo | `GraphModel` (`accel=`, `accel_name`), `GraphBackend`, `GraphCache`, `GraphFormatError`, `GRAPH_FORMAT`, `GRAPH_OPS`, `convert_to_graph`, `LanguageModel.from_graph` |
 | Pesos safetensors y GGUF | `open_weights`, `detect_weights_format`, `SafetensorsReader`, `ShardedSafetensors`, `GGUFReader`, `WeightTensor`, `WeightsFormatError` |
 
 Guia completa en [Modelos de lenguaje](llm.md).
@@ -142,3 +142,6 @@ de bajo nivel:
 - `wsbuilder.http.parse_http_request`
 - `wsbuilder.http.send_http_response`
 - `wsbuilder.logs.append_ndjson`
+- `wsbuilder.accel`: backends de calculo de los modelos de grafo
+  (`create_backend`, `describe`, `NativeAccel`, `ProcessAccel`, `PythonAccel`,
+  `AccelBackend`, `AccelError`); ver [Aceleracion](llm.md#aceleracion)
