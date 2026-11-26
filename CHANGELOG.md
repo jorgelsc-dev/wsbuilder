@@ -58,6 +58,14 @@ next pull request moves those entries under the new version heading.
 - NDJSON model format version 2: base64-encoded tensors and `BF16`, `Q8_0`,
   `Q4_0` dtypes; version 1 files are still read and written.
 - `BPETokenizer.to_json()`; shared `sample_token` in `wsbuilder.ia_lm`.
+- `wsbuilder.accel`: graph models run their `linear` and `attention` ops on a
+  backend chosen with `GraphModel.load(..., accel=)` or `WSBUILDER_ACCEL`:
+  `native` compiles wsbuilder's own C kernel at run time with the system
+  compiler and runs it on several threads, `process` uses a process pool over
+  shared memory (only when asked for), `python` is the reference. `auto` tries
+  `native` and falls back to `python`. The compiled library is cached in
+  `WSBUILDER_CACHE` (owner-only directory, SHA-256 checked); the wheel stays
+  pure Python.
 
 ### Changed
 

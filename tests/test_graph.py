@@ -444,6 +444,25 @@ def graph_logits(model, tokens):
 
 
 TOKENS = [104, 101, 108, 108, 111, 32, IM_END, 7, 300 - 30]
+_saved_cache = None
+_cache_dir = None
+
+
+def setUpModule():
+    # GraphModel.load uses accel="auto": compiled kernels go to a temporary
+    # cache, never to ~/.cache.
+    global _saved_cache, _cache_dir
+    _cache_dir = tempfile.TemporaryDirectory()
+    _saved_cache = os.environ.get("WSBUILDER_CACHE")
+    os.environ["WSBUILDER_CACHE"] = _cache_dir.name
+
+
+def tearDownModule():
+    if _saved_cache is None:
+        os.environ.pop("WSBUILDER_CACHE", None)
+    else:
+        os.environ["WSBUILDER_CACHE"] = _saved_cache
+    _cache_dir.cleanup()
 
 
 class _TempDir(unittest.TestCase):

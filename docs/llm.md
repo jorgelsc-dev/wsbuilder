@@ -270,7 +270,8 @@ ops nuevas y una nueva version del formato.
 
 ### Ejecutar
 
-`GraphModel.load(path, max_context=None)` acepta `model.json` o su directorio.
+`GraphModel.load(path, max_context=None, accel=None)` acepta `model.json` o su
+directorio; `accel` elige el backend de calculo (ver [Aceleracion](#aceleracion)).
 `max_context` (por defecto el menor de `config.context_length` y 4096) limita
 prompt + respuesta; un prompt mas largo lanza `ValueError` y la generacion se
 detiene con `finish_reason="length"` al llegar al limite.
@@ -294,17 +295,110 @@ detiene con `finish_reason="length"` al llegar al limite.
   suelto del almacen sigue lanzando `NotImplementedError`; conviertelo con
   `convert_to_graph` y usa `LanguageModel.from_graph`.
 
-### Rendimiento y memoria
+### Aceleracion
 
-Es Python puro: las matrices son filas `array("f")` multiplicadas con
-`sum(map(operator.mul, fila, x))`, unos 8·10^7 multiplicaciones-suma por
-segundo en un nucleo. Qwen3-0.6B necesita unos 6·10^8 por token, es decir
-**varios segundos por token** (~7,5 s medidos), tambien en el prompt, que se
-procesa token a token. Al cargar, las matrices se convierten a float32: unos 4
-bytes por parametro (~2,4 GB para 0,6B, aunque el GGUF este en Q8_0). La cache
-KV ocupa `capas x 2 x kv_heads x head_dim x 8` bytes por token (~460 KB en
-Qwen3-0.6B, ~1,9 GB con 4096 tokens). Sirve para modelos pequenos, pruebas y
-como referencia exacta; los modelos grandes requieren un acelerador.
+Los productos matriz-vector y la atencion se ejecutan en un *backend* de
+`wsbuilder.accel`, todo codigo de wsbuilder sin bibliotecas de terceros (ni
+numpy ni BLAS). El acelerador es generico: sirve para cualquier modelo de grafo
+(`model.json` + `weights.ndjson`), sin rutas por arquitectura.
+
+| Backend | Como funciona | Cuando |
+| --- | --- | --- |
+| `native` | `_accel_kernels.c` (incluido en el paquete) compilado al vuelo con el compilador del sistema y llamado con `ctypes`; reparte las filas de las matrices grandes entre hilos (`ctypes` suelta el GIL) | por defecto si hay compilador |
+| `process` | pool de procesos con las matrices grandes en `multiprocessing.shared_memory`; cada proceso calcula un rango de filas con el bucle de Python | solo si se pide |
+| `python` | `sum(map(operator.mul, fila, x))` por fila: la referencia | sin compilador, o si se pide |
+
+```python
+model = GraphModel.load("qwen3-graph")               # accel="auto"
+model.accel_name                                      # "native", "process" o "python"
+model = GraphModel.load("qwen3-graph", accel="python")
+llm = LanguageModel.from_graph("qwen3-graph", accel="native")
+
+from wsbuilder import accel
+accel.describe()        # compilador, directorio de cache, biblioteca ya compilada
+backend = accel.NativeAccel(threads=4)   # o ProcessAccel(workers=4), PythonAccel()
+model = GraphModel.load("qwen3-graph", accel=backend)  # el llamador cierra backend
+```
+
+- **Seleccion**: `accel=` o la variable `WSBUILDER_ACCEL`
+  (`auto|native|process|python`). `auto` usa `native` si compila y carga; si
+  no, registra un aviso con `wsbuilder.logs` y usa `python`. Pedir `native`
+  explicitamente sin compilador lanza `AccelError`. `process` nunca se elige
+  solo: con `spawn`/`forkserver` (por defecto `forkserver` en POSIX) cada
+  proceso trabajador vuelve a importar el script principal, que debe proteger
+  su trabajo con `if __name__ == "__main__":`, como cualquier codigo de
+  `multiprocessing`. Si los trabajadores no arrancan, calcula en el proceso
+  principal y avisa.
+- **Resultados**: `process` da exactamente los mismos numeros que `python`.
+  `native` convierte cada peso al mismo valor float que los decodificadores de
+  Python y acumula en `double`, pero suma en otro orden (ocho sumas parciales
+  por fila): los logits difieren en el redondeo (~1e-14 relativo en las
+  pruebas), y la generacion greedy de las pruebas coincide.
+- **Memoria**: `native` guarda cada matriz en un unico buffer con el dtype del
+  archivo (F32, F64, F16, BF16, Q8_0 o Q4_0) y la multiplica directamente:
+  Q8_0 ocupa ~1,06 bytes por parametro y BF16/F16 2, en lugar de los 4 bytes
+  de float32 de `python` y `process`. La cache KV es un `array("d")` contiguo
+  por cabeza KV.
+- `GraphModel.close()` libera matrices, hilos, procesos y memoria compartida
+  (tambien al recolectar un `ProcessAccel` sin cerrar o al salir del
+  interprete); un backend pasado por el llamador queda abierto.
+
+**Compilacion y cache.** El compilador sale de `$CC`, del que se uso para
+compilar Python (`sysconfig`), o de `cc`, `gcc` o `clang`, y se ejecuta sin
+shell, con lista de argumentos, tiempo limite y flags `-O3 -ffp-contract=off
+-fPIC -shared`: sin `-march=native` (la cache se puede copiar a otra CPU), sin
+`-ffast-math` ni FMA (cambiarian los resultados segun la plataforma). La
+biblioteca se guarda en `$WSBUILDER_CACHE/accel` (por defecto
+`~/.cache/wsbuilder/accel`):
+
+- El directorio y los padres que falten se crean con modo 0700. Se rechaza si
+  es un enlace simbolico, no es del usuario o lo pueden escribir otros, o si un
+  directorio superior es de otro usuario (salvo root) o escribible por otros sin
+  el bit *sticky*. En ese caso `auto` usa `python`; elige otro directorio con
+  `WSBUILDER_CACHE`.
+- El nombre del archivo es el SHA-256 del fuente C, la plataforma, la version
+  de Python y el comando del compilador; un archivo `.json` al lado guarda el
+  SHA-256 de la biblioteca construida. Una biblioteca cuyo `.json` o cuyos
+  bytes no coinciden se recompila y nunca se carga.
+- Un candado de archivo (`flock`) serializa comprobacion, compilacion y carga
+  entre procesos; la compilacion se mueve a su sitio con `os.replace` y se
+  vuelve a verificar antes de cargarla.
+- Las bibliotecas de versiones anteriores se quedan en el directorio: borralo
+  cuando quieras, se reconstruye al primer uso (~1 s).
+- El paquete sigue siendo una rueda pura (`py3-none-any`): el `.c` va como
+  dato del paquete, sin extensiones compiladas al instalar.
+
+**Cifras medidas** (Intel i7-1355U, 12 hilos, Python 3.14, con ruido de otros
+procesos: rangos de varias ejecuciones). Matrices de Qwen3-0.6B: una capa
+(q, k, v, o, gate, up y down: 15,7·10^6 multiplicaciones-suma) y la cabeza de
+salida (151936x1024 = 155,6·10^6):
+
+| Backend | Capa (solo matrices) | Cabeza | Matrices por token (28 capas + cabeza) |
+| --- | --- | --- | --- |
+| `python` | 197-293 ms (0,05-0,08 GMAC/s) | 2,0-2,6 s | 7,5-10,8 s |
+| `process` (12 procesos) | 43-53 ms (0,3-0,36 GMAC/s) | 0,42-0,44 s | 1,6-1,9 s |
+| `native`, 1 hilo, F32 | 6,7-6,9 ms (2,3 GMAC/s) | 69-71 ms | 0,26 s |
+| `native`, 12 hilos, F32 | 1,9-2,8 ms (5,6-8,3 GMAC/s) | 18 ms (8,7 GMAC/s) | 0,07-0,10 s |
+| `native`, 12 hilos, Q8_0 | 2,4-2,6 ms (6-6,5 GMAC/s) | 16 ms (9,9 GMAC/s) | 0,08-0,09 s |
+
+Un bloque completo del tamano de Qwen3-0.6B (normas, RoPE, atencion y
+residuales incluidos, que siguen en Python salvo la atencion) tarda 4-6 ms con
+`native` entre 16 y 256 tokens de contexto, de modo que Qwen3-0.6B queda en
+**~0,13-0,2 s por token** (5-7 tokens/s); con `process` unos 2-4 s y con
+`python` unos 8-10 s. El prompt se procesa token a token con las mismas
+matrices preparadas. Los hilos solo compensan en matrices grandes: cada hilo
+recibe al menos 2^18 multiplicaciones-suma (`NATIVE_CHUNK_MACS`); `process`
+deja en el proceso principal las matrices de menos de 2^18 (`PROCESS_MIN_MACS`),
+donde la comunicacion costaria mas que el calculo, y escala poco (4-6x con 12
+procesos) porque sigue calculando con Python.
+
+### Memoria
+
+La cache KV ocupa `capas x 2 x kv_heads x head_dim x 8` bytes por token
+(~460 KB en Qwen3-0.6B, ~1,9 GB con 4096 tokens). Las matrices ocupan 4 bytes
+por parametro con `python` y `process` (~2,4 GB para 0,6B, aunque el GGUF este
+en Q8_0); con `native`, los bytes de su dtype (Q8_0 ~1,06 bytes por parametro,
+F16/BF16 2, F32 4; los tensores con `encoding` json se guardan como F32 o F64).
 
 ## Leer pesos safetensors y GGUF
 

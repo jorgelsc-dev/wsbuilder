@@ -80,6 +80,7 @@ src/wsbuilder/          paquete (layout src; setuptools package-dir "" = "src")
   ia_text.py ia_audio.py tokens UTF-8, vectores de texto y audio WAV PCM
   bpe.py                tokenizador BPE byte-level (Qwen2/Qwen3, Llama 3, GPT-2) y plantilla de chat Qwen3
   graph.py graph_convert.py  motor genérico de modelos (model.json + weights.ndjson) y conversores HF/GGUF
+  accel.py _accel_kernels.c  aceleración del motor de grafo (python, native en C propio, process)
 tests/                  suite unittest ejecutada con pytest (test_*.py)
 docs/ + mkdocs.yml      sitio MkDocs (docs/reference, docs/help, stylesheets, assets)
 examples/full-project/  proyecto de ejemplo
@@ -109,7 +110,7 @@ tests, a `tests/`; los de docs, a `docs/`.
 | HTTP/3 y WebSocket sobre HTTP/3 | `http3.py`, `http3_server.py`, `http3_websocket.py`, `qpack.py` | `test_http3.py`, `test_http3_server.py`, `test_http3_streaming.py`, `test_http3_streaming_udp.py` | `http-versions.md` |
 | Transporte QUIC | `quic/` | `test_quic_protocol.py`, `test_quic_crypto.py`, `test_quic_tls.py`, `test_quic_recovery.py`, `test_quic_address.py` | `http-versions.md` |
 | Cliente QUIC/HTTP/3 y mTLS en QUIC | `quic/client.py`, `quic/tls.py`, `http3_client.py` | `test_quic_client.py` | `rpc.md` |
-| Modelos de lenguaje, motor nativo y de grafo, formato NDJSON, lectores de pesos y tokenizador BPE | `llm.py`, `ia_lm.py`, `graph.py`, `graph_convert.py`, `ndjson_model.py`, `weights.py`, `bpe.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_graph.py`, `test_ndjson_model.py`, `test_weights.py`, `test_bpe.py` | `llm.md`, `ia.md` |
+| Modelos de lenguaje, motor nativo y de grafo, aceleración, formato NDJSON, lectores de pesos y tokenizador BPE | `llm.py`, `ia_lm.py`, `graph.py`, `graph_convert.py`, `accel.py`, `_accel_kernels.c`, `ndjson_model.py`, `weights.py`, `bpe.py`, `ia.py` (`NeuralNetwork.save`/`load`) | `test_llm.py`, `test_ia_lm.py`, `test_graph.py`, `test_accel.py`, `test_ndjson_model.py`, `test_weights.py`, `test_bpe.py` | `llm.md`, `ia.md` |
 | RPC entre servicios y codec CBOR | `rpc.py`, `codec.py`, `app.py` (`App.rpc`) | `test_rpc.py`, `test_codec.py`, `test_optional_extras.py` | `rpc.md` |
 | WebSocket y frames | `ws.py` | `test_ws.py`, `test_server.py` | `websocket.md` |
 | SQLite, ORM y réplicas | `orm.py`, `db_replicas.py` | `test_orm.py`, `test_orm_replicas.py` | `data-orm.md`, `persistence.md` |
@@ -425,8 +426,22 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   convierte un directorio HF o un GGUF de qwen3, qwen2, llama o mistral
   (`ARCHITECTURES`); un tensor que el grafo no usaría lanza
   `NotImplementedError`. Llama en GGUF usa RoPE `interleaved` (Q/K permutados por
-  llama.cpp); Qwen, `neox`. `ModelStore.load()` aún no carga grafos. Python puro:
-  ~7,5 s/token estimados en Qwen3-0.6B.
+  llama.cpp); Qwen, `neox`. `ModelStore.load()` aún no carga grafos.
+- Aceleración (`accel.py`): `linear` y `attention` del grafo usan un backend
+  (`prepare_matrix`, `matvec`, `attend`), genérico para cualquier modelo de
+  grafo. `GraphModel.load(path, accel=None)` o `$WSBUILDER_ACCEL`
+  (`ACCEL_BACKENDS`: `auto`, `native`, `process`, `python`). `auto` prueba
+  `native` y cae a `python`; `process` (pool con `multiprocessing.shared_memory`)
+  solo si se pide, porque con spawn/forkserver los workers reimportan el script
+  principal (requiere `if __name__ == "__main__":`). `native` (solo POSIX) compila
+  `_accel_kernels.c` en tiempo de ejecución con el compilador del sistema
+  (`$CC`, `CFLAGS` sin `-march=native` ni `-ffast-math`), lo carga con `ctypes`
+  y reparte filas entre hilos. Caché en `$WSBUILDER_CACHE/accel` (por defecto
+  `~/.cache/wsbuilder/accel`): directorio 0700 propio del usuario, nombre por
+  SHA-256 de fuente, plataforma, Python y compilador, sidecar con el SHA-256 de
+  la librería (si no coincide se recompila, nunca se carga), `flock` entre
+  procesos y `os.replace` atómico. El wheel sigue siendo puro: el `.c` va como
+  `package-data` y en `MANIFEST.in`, sin `ext_modules`.
 - Formato de modelos (`ndjson_model.py`): único formato de modelo y pesos del
   proyecto. Archivo NDJSON: línea 1 `{"format": "wsbuilder-model", "version": 1,
   "architecture", "name", "metadata", "tensor_count"}`; cada línea siguiente un
@@ -505,6 +520,9 @@ literales del cache, incluidos `%`, `_` y barras invertidas. `QuerySet.count()`,
 ## Restricciones técnicas
 
 - Núcleo: biblioteca estándar de Python. No añadir dependencias de runtime.
+- El backend `native` de `accel.py` usa el compilador C del sistema en tiempo de
+  ejecución para código propio del repositorio; es opcional (sin compilador se
+  usa `python`) y no es una dependencia.
 - Extra `tls`: `cryptography>=43`, utilizado únicamente por `pki.py`, `quic/`,
   `http3_server.py` y `http3_client.py` (`rpc.py` lo importa solo para HTTP/3). Los helpers PKI de la API pública se cargan de forma diferida
   para que importar el núcleo no requiera este extra.

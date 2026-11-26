@@ -35,11 +35,11 @@ anything runs.
 
 Any decoder expressible with these ops runs without code for its
 architecture (Llama, Mistral, Qwen2, Qwen3 and others; see
-:mod:`wsbuilder.graph_convert` to convert them). Python is slow: matrices
-are ``array("f")`` rows multiplied with ``sum(map(operator.mul, ...))``, about
-10^8 multiply-adds per second, so a 0.6B model takes seconds per token and
-needs about 4 bytes of RAM per parameter. It is meant for small models,
-tests and as a reference.
+:mod:`wsbuilder.graph_convert` to convert them). The matrix products and the
+attention run on a backend of :mod:`wsbuilder.accel` (``accel=`` or
+``$WSBUILDER_ACCEL``): C kernels compiled on demand (``native``), a pool of
+processes over shared memory (``process``) or the pure Python reference
+(``python``, about 10^8 multiply-adds per second).
 """
 
 import array
@@ -50,6 +50,7 @@ import os
 import random
 from collections.abc import Mapping
 
+from .accel import AccelBackend, _softmax, create_backend
 from .ia_lm import sample_token
 
 __all__ = [
@@ -181,10 +182,14 @@ def read_graph_spec(path):
 
 
 class _Weights:
-    """Tensors of the weights file, converted once and shared by name."""
+    """Tensors of the weights file, converted once and shared by name.
 
-    def __init__(self, reader):
+    Matrices are stored by the algebra backend (:mod:`wsbuilder.accel`).
+    """
+
+    def __init__(self, reader, backend):
         self.reader = reader
+        self.backend = backend
         self.matrices = {}
         self._vectors = {}
 
@@ -203,7 +208,7 @@ class _Weights:
                 raise GraphFormatError(
                     f"{where}: tensor {name!r} has shape {list(tensor.shape)}, expected 2-D"
                 )
-            rows = list(tensor.row_arrays())
+            rows = self.backend.prepare_matrix(tensor.shape[0], tensor.shape[1], tensor)
             self.matrices[name] = rows
         return rows
 
@@ -251,9 +256,10 @@ class GraphCache:
     """The key/value cache of one sequence: create it with :meth:`GraphModel.new_cache`."""
 
     def __init__(self, slots):
-        # One (keys, values) pair per attention op; each holds a list per KV head.
-        self.slots = [([[] for _ in range(heads)], [[] for _ in range(heads)])
-                      for heads in slots]
+        # One (keys, values) pair per attention op, each with an array("d") per
+        # KV head holding head_dim values per position: exact like the floats.
+        self.slots = [([array.array("d") for _ in range(heads)],
+                       [array.array("d") for _ in range(heads)]) for heads in slots]
         self.length = 0
 
 
@@ -272,13 +278,6 @@ def _rms_norm(x, weight, eps):
 
 def _silu(value):
     return value / (1.0 + math.exp(-value)) if value > -700.0 else 0.0
-
-
-def _softmax(scores):
-    peak = max(scores)
-    exps = [math.exp(score - peak) for score in scores]
-    total = sum(exps)
-    return [value / total for value in exps]
 
 
 def _number(value, where, key, *, positive=False):
@@ -439,15 +438,15 @@ class _Compiler:
                 f"{where}: tensor {name!r} has shape {[rows_count, width]} but the input "
                 f"{source!r} has size {sizes[source]}"
             )
-        rows = self.weights.matrix(name, where)
+        matrix = self.weights.matrix(name, where)
         bias_name = self._tensor_name(op, "bias", where, block, None)
-        bias = None if bias_name is None else self.weights.vector(bias_name, where, rows_count)
+        bias = (None if bias_name is None else self.weights.backend.prepare_vector(
+            self.weights.vector(bias_name, where, rows_count)))
+        matvec = self.weights.backend.matvec
         sizes[out] = rows_count
 
         def run(env, _ctx):
-            x = env[source]
-            result = [sum(map(_mul, row, x)) for row in rows]
-            env[out] = result if bias is None else list(map(_add, result, bias))
+            env[out] = matvec(matrix, env[source], bias)
         return run
 
     def _binary(function):
@@ -596,28 +595,19 @@ class _Compiler:
             softcap = _number(softcap, where, "logit_softcap", positive=True)
         slot = len(self.attention_heads)
         self.attention_heads.append(kv_heads)
-        group = heads // kv_heads
+        attend = self.weights.backend.attend
         sizes[out] = heads * head_dim
 
         def run(env, ctx):
             keys, values = ctx.cache.slots[slot]
-            q, k, v = env[q_name], env[k_name], env[v_name]
+            k, v = env[k_name], env[v_name]
             for head in range(kv_heads):
-                # array("d"): exact like the floats, a quarter of their memory.
-                keys[head].append(array.array("d", k[head * head_dim:(head + 1) * head_dim]))
-                values[head].append(array.array("d", v[head * head_dim:(head + 1) * head_dim]))
+                # One array("d") per KV head, a row of head_dim values per position.
+                keys[head].extend(k[head * head_dim:(head + 1) * head_dim])
+                values[head].extend(v[head * head_dim:(head + 1) * head_dim])
             start = 0 if window is None else max(0, ctx.position + 1 - window)
-            result = []
-            for head in range(heads):
-                query = q[head * head_dim:(head + 1) * head_dim]
-                kv = head // group
-                scores = [sum(map(_mul, query, key)) * scale for key in keys[kv][start:]]
-                if softcap is not None:
-                    scores = [math.tanh(score / softcap) * softcap for score in scores]
-                weights = _softmax(scores)
-                window_values = values[kv][start:]
-                result += [sum(map(_mul, weights, column)) for column in zip(*window_values)]
-            env[out] = result
+            env[out] = attend(env[q_name], keys, values, heads, kv_heads, head_dim, start,
+                              scale, softcap)
         return run
 
     _gelu = _unary(lambda value: 0.5 * value * (1.0 + math.erf(value * _INV_SQRT_2)))
@@ -755,10 +745,28 @@ class GraphModel:
     ``generate``/``stream`` continue a prompt and ``chat``/``stream_chat``
     answer messages with the model's chat template. ``max_context`` (default
     the smaller of ``config.context_length`` and 4096) caps the tokens of
-    one sequence.
+    one sequence. ``accel`` is a backend name of :mod:`wsbuilder.accel`
+    (``"auto"``, ``"native"``, ``"process"`` or ``"python"``; default
+    ``$WSBUILDER_ACCEL`` or ``"auto"``) or an
+    :class:`~wsbuilder.accel.AccelBackend`, which the caller then closes;
+    ``accel_name`` tells which one runs.
     """
 
-    def __init__(self, spec, reader, tokenizer=None, *, max_context=None, path=None):
+    def __init__(self, spec, reader, tokenizer=None, *, max_context=None, path=None,
+                 accel=None):
+        if isinstance(accel, AccelBackend):
+            self.accel, self._owns_accel = accel, False
+        else:
+            self.accel, self._owns_accel = create_backend(accel), True
+        try:
+            self._setup(spec, reader, tokenizer, max_context, path)
+        except BaseException:
+            if self._owns_accel:
+                self.accel.close()
+            raise
+
+    def _setup(self, spec, reader, tokenizer, max_context, path):
+        self._closed = False
         self.spec = spec
         self.path = path
         self.name = spec.get("name") or "graph-model"
@@ -781,9 +789,17 @@ class GraphModel:
         self._stop_ids = self._stop_token_ids()
         self._blocked_ids = self._undecodable_ids()
 
+    @property
+    def accel_name(self):
+        """The name of the algebra backend: ``native``, ``process`` or ``python``."""
+        return self.accel.name
+
     @classmethod
-    def load(cls, path, *, max_context=None):
-        """Load ``model.json`` (or the directory holding it), its weights and tokenizer."""
+    def load(cls, path, *, max_context=None, accel=None):
+        """Load ``model.json`` (or the directory holding it), its weights and tokenizer.
+
+        See the class docstring for ``max_context`` and ``accel``.
+        """
         from .bpe import BPETokenizer
         from .ndjson_model import ModelReader
 
@@ -805,7 +821,7 @@ class GraphModel:
             tokenizer.eos_token_id = eos[0] if eos else None
         reader = ModelReader(_safe_path(base_dir, spec["weights"], "weights"))
         try:
-            return cls(spec, reader, tokenizer, max_context=max_context, path=path)
+            return cls(spec, reader, tokenizer, max_context=max_context, path=path, accel=accel)
         except BaseException:
             reader.close()
             raise
@@ -813,7 +829,7 @@ class GraphModel:
     # -- compilation -----------------------------------------------------
 
     def _compile(self, graph):
-        compiler = _Compiler(_Weights(self.reader))
+        compiler = _Compiler(_Weights(self.reader, self.accel))
         embed = graph.get("embed")
         if not isinstance(embed, dict):
             raise GraphFormatError("graph.embed must be an object")
@@ -847,11 +863,11 @@ class GraphModel:
             raise GraphFormatError("graph.head must produce the value 'logits'")
         self.logits_size = sizes["logits"]
         self._attention_heads = list(compiler.attention_heads)
-        # Tied embeddings: the head already converted the matrix; reuse its rows.
-        self._embed_rows = compiler.weights.matrices.get(embed_name)
+        # Tied embeddings: the head already stored the matrix; reuse its rows.
+        self._embed_matrix = compiler.weights.matrices.get(embed_name)
         self._embed_tensor = self.reader.tensor(embed_name)
-        if self._embed_rows is None and not self._embed_tensor.row_reads:
-            self._embed_rows = compiler.weights.matrix(embed_name, "graph.embed")
+        if self._embed_matrix is None and not self._embed_tensor.row_reads:
+            self._embed_matrix = compiler.weights.matrix(embed_name, "graph.embed")
         self.parameter_count = self.reader.parameter_count
 
     def _stop_token_ids(self):
@@ -882,8 +898,8 @@ class GraphModel:
         if type(token_id) is not int or not 0 <= token_id < self.vocab_size:
             raise ValueError(f"token id {token_id!r} is outside the vocabulary "
                              f"(0..{self.vocab_size - 1})")
-        if self._embed_rows is not None:
-            row = list(self._embed_rows[token_id])
+        if self._embed_matrix is not None:
+            row = self._embed_matrix.row(token_id)
         else:
             row = self._embed_tensor.row_array(token_id).tolist()
         if self._embed_scale is not None:
@@ -891,6 +907,8 @@ class GraphModel:
         return row
 
     def _step(self, token_id, position, cache, want_logits):
+        if self._closed:
+            raise ValueError("the model is closed")
         if not isinstance(cache, GraphCache):
             raise TypeError("cache must come from new_cache()")
         if position != cache.length:
@@ -1064,8 +1082,15 @@ class GraphModel:
         return "".join(self.stream_chat(messages, **options))
 
     def close(self):
-        """Close the weights file (idempotent)."""
+        """Close the weights file and free the matrices and the backend's pools and
+        shared memory (idempotent; a backend passed in by the caller stays open)."""
+        self._closed = True
+        self._blocks = []
+        self._head = []
+        self._embed_matrix = None
         self.reader.close()
+        if self._owns_accel:
+            self.accel.close()
 
     def __enter__(self):
         return self
