@@ -1,8 +1,12 @@
+import base64
 import json
 import math
 import os
+import random
+import struct
 import tempfile
 import unittest
+from unittest import mock
 
 from wsbuilder import (
     MODEL_FORMAT,
@@ -144,6 +148,173 @@ class TestHostileFiles(unittest.TestCase):
         text = _lines(_header(1)) + "\n" + _lines({"tensor": "a", "shape": [1], "data": [2]})
         with ModelReader(_write(text)) as reader:
             self.assertEqual(reader.tensor("a").values(), [2.0])
+
+
+def _q8_0(scale, quants):
+    return struct.pack("<e", scale) + struct.pack("<32b", *quants)
+
+
+def _q4_0(scale, nibbles):
+    return struct.pack("<e", scale) + bytes(lo | (hi << 4) for lo, hi in
+                                             zip(nibbles[:16], nibbles[16:]))
+
+
+class TestBase64Tensors(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = temporary.name
+
+    def read(self, writer):
+        path = writer.write(os.path.join(self.directory, f"m{random.random()}.ndjson"))
+        reader = ModelReader(path)
+        self.addCleanup(reader.close)
+        return reader
+
+    def test_values_round_trip_in_every_float_and_int_dtype(self):
+        values = [0.1, -2.5, 3.0, 1e-3, 65504.0, -0.0]
+        writer = ModelWriter(architecture="demo")
+        for dtype in ("F64", "F32", "F16", "BF16"):
+            writer.add_tensor(dtype, values, shape=(2, 3), dtype=dtype, encoding="base64")
+            writer.add_tensor(dtype + "-json", values, shape=(2, 3), dtype=dtype)
+        writer.add_tensor("I32", [1, -2, 2**31 - 1], dtype="I32", encoding="base64")
+        writer.add_tensor("I64", [2**40, -1], dtype="I64", encoding="base64")
+        reader = self.read(writer)
+        self.assertEqual(reader.version, 2)
+        for dtype in ("F64", "F32", "F16", "BF16"):
+            with self.subTest(dtype=dtype):
+                tensor = reader.tensor(dtype)
+                self.assertEqual((tensor.encoding, tensor.dtype), ("base64", dtype))
+                self.assertEqual(tensor.values(), reader.tensor(dtype + "-json").values())
+                self.assertEqual(tensor.rows(), [tensor.values()[:3], tensor.values()[3:]])
+                self.assertEqual(tensor.to_array().typecode, "d" if dtype == "F64" else "f")
+                self.assertEqual(tensor.raw(), reader.tensor(dtype + "-json").raw())
+        self.assertEqual(reader.tensor("F64").values(), values)
+        self.assertEqual(reader.tensor("BF16").values()[0], 0.10009765625)
+        self.assertEqual(reader.tensor("I32").values(), [1, -2, 2**31 - 1])
+        self.assertEqual(reader.tensor("I64").values(), [2**40, -1])
+        self.assertEqual(reader.summary()["dtypes"]["BF16"], 12)
+
+    def test_quantized_blocks_and_row_reads(self):
+        rng = random.Random(5)
+        rows = 7
+        q8 = b"".join(_q8_0(0.5, [rng.randint(-127, 127) for _ in range(32)])
+                      for _ in range(rows * 2))
+        q4 = b"".join(_q4_0(0.25, [rng.randint(0, 15) for _ in range(32)]) for _ in range(rows))
+        writer = ModelWriter()
+        writer.add_tensor_bytes("q8", q8, shape=(rows, 64), dtype="Q8_0")
+        writer.add_tensor_bytes("q4", lambda: q4, shape=(rows, 32), dtype="Q4_0")
+        widths = (1, 2, 3, 5)
+        for width in widths:
+            writer.add_tensor(f"f32-{width}", [rng.uniform(-1, 1) for _ in range(rows * width)],
+                              shape=(rows, width), dtype="F32", encoding="base64")
+            writer.add_tensor(f"bf16-{width}", [rng.uniform(-1, 1) for _ in range(rows * width)],
+                              shape=(rows, width), dtype="BF16", encoding="base64")
+        reader = self.read(writer)
+        q8_values = reader.tensor("q8").values()
+        first = struct.unpack("<32b", q8[2:34])
+        self.assertEqual(q8_values[:32], [0.5 * quant for quant in first])
+        q4_values = reader.tensor("q4").values()
+        self.assertEqual(q4_values[0], 0.25 * ((q4[2] & 0x0F) - 8))
+        self.assertEqual(q4_values[16], 0.25 * ((q4[2] >> 4) - 8))
+        self.assertEqual(reader.tensor("q4").raw(), q4)
+        for name in ["q8", "q4"] + [f"{kind}-{w}" for kind in ("f32", "bf16") for w in widths]:
+            tensor = reader.tensor(name)
+            self.assertTrue(tensor.row_reads)
+            flat = tensor.values()
+            width = tensor.shape[1]
+            for row in range(rows):
+                self.assertEqual(tensor.row_array(row).tolist(),
+                                 flat[row * width:(row + 1) * width], (name, row))
+            with self.assertRaises(IndexError):
+                tensor.row_array(rows)
+
+    def test_chunked_checks_reads_and_writes(self):
+        rng = random.Random(9)
+        values = [rng.uniform(-1, 1) for _ in range(11 * 5)]
+        with mock.patch("wsbuilder.ndjson_model._CHECK_CHUNK", 7), \
+                mock.patch("wsbuilder.ndjson_model._B64_CHUNK", 6):
+            writer = ModelWriter().add_tensor("t", values, shape=(11, 5), dtype="F32",
+                                              encoding="base64")
+            text = writer.to_bytes()
+            reader = self.read(writer)
+            tensor = reader.tensor("t")
+            rows = [row.tolist() for row in tensor.row_arrays()]
+        whole = ModelWriter().add_tensor("t", values, shape=(11, 5), dtype="F32",
+                                         encoding="base64").to_bytes()
+        self.assertEqual(text, whole)
+        self.assertEqual(rows, tensor.rows())
+        self.assertEqual(len(rows), 11)
+        json_tensor = self.read(ModelWriter().add_tensor("j", values, shape=(11, 5)))
+        self.assertEqual([r.tolist() for r in json_tensor.tensor("j").row_arrays()],
+                         json_tensor.tensor("j").rows())
+
+    def test_version_one_files_stay_version_one(self):
+        reader = self.read(ModelWriter().add_tensor("a", [1.0, 2.0], dtype="F32"))
+        self.assertEqual(reader.version, 1)
+        self.assertFalse(reader.tensor("a").row_reads)
+        with self.assertRaises(ModelFormatError):
+            reader.tensor("a").row_array(0)  # 1-D
+        self.assertEqual(reader.tensor("a").to_array().tolist(), [1.0, 2.0])
+        self.assertEqual(self.read(ModelWriter().add_tensor("b", [1.0], dtype="BF16")).version, 2)
+
+    def test_non_canonical_base64_lines_are_read(self):
+        data = base64.b64encode(struct.pack("<3f", 1.0, 2.0, 3.0)).decode()
+        entry = {"data": data, "tensor": "a", "encoding": "base64", "shape": [1, 3],
+                 "dtype": "F32"}
+        path = _write(_lines(_header(1, version=2), entry))
+        with ModelReader(path) as reader:
+            tensor = reader.tensor("a")
+            self.assertFalse(tensor.row_reads)
+            self.assertEqual(tensor.values(), [1.0, 2.0, 3.0])
+            self.assertEqual(tensor.row_array(0).tolist(), [1.0, 2.0, 3.0])
+        spaced = _lines(_header(1, version=2)) + json.dumps(dict(entry, data=None)).replace(
+            '"data": null, ', "") [:-1] + f', "data": "{data}"}}\n'
+        with ModelReader(_write(spaced)) as reader:
+            self.assertEqual(reader.tensor("a").values(), [1.0, 2.0, 3.0])
+
+    def test_bad_base64_tensors_are_refused(self):
+        good = base64.b64encode(struct.pack("<2f", 1.0, 2.0)).decode()
+        bad = [
+            {"tensor": "a", "shape": [2], "dtype": "F32", "encoding": "base64", "data": good[:-4]},
+            {"tensor": "a", "shape": [2], "dtype": "F32", "encoding": "base64",
+             "data": "*" + good[1:]},
+            {"tensor": "a", "shape": [1], "dtype": "F16", "encoding": "base64", "data": "AA=="},
+            {"tensor": "a", "shape": [1], "dtype": "F16", "encoding": "base64", "data": "AA=A"},
+            {"tensor": "a", "shape": [2], "dtype": "F32", "encoding": "hex", "data": good},
+            {"tensor": "a", "shape": [2], "dtype": "F32", "encoding": "base64", "data": [1, 2]},
+            {"tensor": "a", "shape": [16], "dtype": "Q8_0", "encoding": "base64", "data": ""},
+            {"tensor": "a", "shape": [32], "dtype": "Q8_0", "data": [0] * 32},
+        ]
+        for entry in bad:
+            with self.subTest(entry=entry):
+                with self.assertRaises(ModelFormatError):
+                    ModelReader(_write(_lines(_header(1, version=2), entry))).close()
+
+    def test_writer_checks_bytes(self):
+        writer = ModelWriter()
+        with self.assertRaises(ModelFormatError):
+            writer.add_tensor_bytes("a", b"\x00" * 7, shape=(2,), dtype="F32")
+        with self.assertRaises(ModelFormatError):
+            writer.add_tensor_bytes("a", b"\x00" * 34, shape=(16,), dtype="Q8_0")
+        with self.assertRaises(ModelFormatError):
+            writer.add_tensor("a", [1.0] * 32, dtype="Q8_0", encoding="base64")
+        with self.assertRaises(ModelFormatError):
+            writer.add_tensor("a", [1.0], encoding="hex")
+        writer.add_tensor_bytes("lazy", lambda: b"\x00" * 4, shape=(2,), dtype="F32")
+        with self.assertRaises(ModelFormatError):
+            writer.to_bytes()
+        target = os.path.join(self.directory, "never.ndjson")
+        with self.assertRaises(ModelFormatError):
+            writer.write(target)
+        self.assertEqual(os.listdir(self.directory), [])
+
+    def test_closed_reader(self):
+        reader = self.read(ModelWriter().add_tensor("a", [1.0], dtype="F32", encoding="base64"))
+        reader.close()
+        self.assertTrue(reader.closed)
+        with self.assertRaises(ModelFormatError):
+            reader.tensor("a").values()
 
 
 class TestNeuralNetworkFiles(unittest.TestCase):

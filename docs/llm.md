@@ -2,7 +2,8 @@
 
 !!! warning "Experimental"
     Los modulos de IA y modelos de lenguaje (`ia`, `ia_lm`, `ia_text`,
-    `ia_audio`, `predicts`, `llm`, `ndjson_model`, `weights`, `bpe`) son experimentales: su API y
+    `ia_audio`, `predicts`, `llm`, `ndjson_model`, `weights`, `bpe`, `graph`,
+    `graph_convert`) son experimentales: su API y
     sus formatos pueden cambiar entre versiones menores sin periodo de
     transicion, a diferencia del nucleo HTTP/WebSocket. Fija la version
     (`wsbuilder==X.Y.*`) si dependes de ellos y revisa el
@@ -20,6 +21,7 @@ motor externo.
 | `LanguageModel` + `NativeBackend` | Conversar con un modelo nativo (`chat`, `generate`, streaming) | Ninguna |
 | `ModelWriter` / `ModelReader` | Escribir y leer el formato de modelos de wsbuilder: un unico archivo NDJSON con el modelo y sus pesos | Ninguna |
 | `open_weights` | Leer pesos en safetensors o GGUF (mmap, sin copiar) | Ninguna |
+| `convert_to_graph` + `GraphModel` | Convertir Qwen3, Qwen2, Llama o Mistral (Hugging Face o GGUF) a `model.json` + pesos NDJSON y ejecutarlos | Ninguna |
 | `ModelStore` | Directorio de modelos: importar, descargar, exportar, verificar y borrar | Ninguna |
 | `download_file`, `huggingface_files` | Descargas reanudables y verificadas con SHA-256 | Ninguna |
 | `LanguageModel` + `OpenAICompatibleBackend` | Opcional: usar un modelo que ya sirve otro programa por HTTP (API de OpenAI) | Ninguna |
@@ -89,8 +91,9 @@ Opciones de generacion: `max_tokens` (en bytes, 256 por defecto),
 wsbuilder usa un solo formato para los modelos y sus pesos: un archivo
 **NDJSON** (JSON con un objeto por linea, extension `.ndjson`). Los pesos en
 safetensors o GGUF se pueden leer e importar al almacen (ver
-[Leer pesos safetensors y GGUF](#leer-pesos-safetensors-y-gguf)), pero todavia
-no se pueden ejecutar.
+[Leer pesos safetensors y GGUF](#leer-pesos-safetensors-y-gguf)) y, para las
+arquitecturas soportadas, convertir a un modelo de grafo que si se ejecuta (ver
+[Modelos de grafo](#modelos-de-grafo-modeljson)).
 
 - **Linea 1, el modelo.** Formato, version, arquitectura, nombre, metadatos
   libres y el numero de tensores que siguen.
@@ -122,17 +125,186 @@ with ModelReader("demo.ndjson") as model:
     model.tensor("capa.0.weight").rows()               # [[0.1, 0.2], [0.3, 0.4]] (redondeado a F32)
 ```
 
-- **Tipos.** `F64` (exacto), `F32` y `F16` (los valores se redondean a esa
-  precision al escribir), `I32` e `I64`. NaN e infinito, que JSON no admite,
-  se escriben como `"NaN"`, `"Infinity"` y `"-Infinity"`.
+- **Tipos.** `F64` (exacto), `F32`, `F16` y `BF16` (los valores se redondean a
+  esa precision al escribir), `I32` e `I64`, y los bloques ggml `Q8_0` y `Q4_0`
+  (solo en base64; la ultima dimension debe ser multiplo de 32). NaN e
+  infinito, que JSON no admite, se escriben como `"NaN"`, `"Infinity"` y
+  `"-Infinity"`.
+- **Tensores compactos (version 2).** Escribir numeros como texto es inviable
+  para modelos grandes: `add_tensor(..., encoding="base64")` y
+  `add_tensor_bytes(nombre, bytes, shape=, dtype=)` guardan
+  `{"tensor", "shape", "dtype", "encoding": "base64", "data": "<base64>"}`, con
+  los bytes little-endian (4/3 del tamano binario). `add_tensor_bytes` acepta
+  tambien una funcion sin argumentos que devuelve los bytes al escribir, para
+  convertir un tensor cada vez. Un archivo solo con listas JSON y tipos de la
+  version 1 se sigue escribiendo como version 1; `ModelReader` lee ambos.
+- **Decodificar.** `tensor.to_array()` devuelve un `array.array` (`"f"` para
+  todos los tipos float y cuantizados); `row_array(i)` y `row_arrays()` leen
+  una fila o todas por bloques de ~1 MiB sin cargar el tensor entero.
 - **Lectura por partes.** Al abrir, `ModelReader` valida cada linea (nombres,
-  tipos, formas y cantidad de valores) y recuerda donde empieza cada tensor;
-  `tensor(nombre).values()` solo vuelve a leer esa linea.
+  tipos, formas y cantidad de valores; en base64, longitud, relleno y
+  alfabeto) y recuerda donde empieza cada tensor; `tensor(nombre).values()`
+  solo vuelve a leer esa linea. Las lecturas son seguras entre hilos.
 - **Entrada no confiable.** Un archivo con lineas que no son JSON, tensores
   repetidos, valores que no cuadran con la forma o un `tensor_count` distinto
   del real se rechaza con `ModelFormatError`.
 - **Portable.** Es texto plano: cualquier lenguaje con un parser JSON puede
   leerlo linea a linea, y `head -1 modelo.ndjson` muestra el modelo.
+
+## Modelos de grafo (`model.json`)
+
+Un **modelo de grafo** describe con datos lo que calcula un modelo de lenguaje
+decoder, de modo que el motor nativo lo ejecuta sin codigo especifico de cada
+arquitectura. Es un directorio con tres archivos:
+
+- `model.json`: el grafo y la configuracion.
+- `weights.ndjson`: los tensores en el [formato NDJSON](#el-formato-de-modelos-ndjson)
+  (normalmente base64, con los nombres de GGUF: `token_embd.weight`,
+  `blk.0.attn_q.weight`...).
+- `tokenizer.json`: el tokenizador BPE (formato de Hugging Face).
+
+```python
+from wsbuilder import GraphModel, LanguageModel, convert_to_graph
+
+path = convert_to_graph("Qwen3-0.6B", "qwen3-graph")      # directorio de Hugging Face
+# path = convert_to_graph("qwen3-0.6b-q8_0.gguf", "qwen3-graph")
+model = GraphModel.load(path, max_context=2048)
+print(model.chat("Hola", enable_thinking=False, max_tokens=32, temperature=0))
+
+llm = LanguageModel.from_graph("qwen3-graph", temperature=0.6)   # backend GraphBackend
+llm.chat_completion([{"role": "user", "content": "Hola"}])        # usage con tokens reales
+```
+
+### Convertir
+
+`convert_to_graph(source, out_dir, dtype=None, name=None)` acepta un
+directorio de Hugging Face (`config.json`, `model.safetensors` o
+`model.safetensors.index.json`, `tokenizer.json`, `tokenizer_config.json` y,
+si existe, `generation_config.json`) o un archivo GGUF, y escribe los tres
+archivos. Arquitecturas soportadas: `qwen3`, `qwen2`, `llama` y `mistral`; con
+otra lanza `NotImplementedError` con la lista. Cada arquitectura es solo una
+funcion que construye el JSON del grafo. Tambien se rechaza
+(`NotImplementedError`) un modelo con tensores que el grafo no usaria (por
+ejemplo biases del MLP) o con un escalado de RoPE no soportado (YaRN,
+dinamico): mejor un error que logits incorrectos.
+
+- Las matrices conservan su tipo si el motor lo lee (`F32`, `F16`, `BF16`,
+  `Q8_0`, `Q4_0`, copiadas byte a byte) y pasan a `F32` en otro caso;
+  `dtype="F32"|"F16"|"BF16"` las convierte. Normas y biases van siempre en
+  `F32`. Los tensores se copian de uno en uno.
+- El tokenizador de un GGUF se genera desde sus metadatos con
+  `BPETokenizer.to_json()`.
+- RoPE: los checkpoints de Hugging Face rotan los pares `(i, i + d/2)` (estilo
+  `neox`). El conversor de llama.cpp permuta las filas de Q y K (y sus biases)
+  de los modelos **llama** para rotar pares vecinos `(2i, 2i + 1)`: esos grafos
+  usan el estilo `interleaved` con los pesos permutados. Qwen2/Qwen3 en GGUF no
+  se permutan y usan `neox`. El escalado `llama3` de Llama 3.1 se guarda como
+  `rope_freqs.weight` (divisores por frecuencia, en F32 como en llama.cpp).
+- `generation_config.json` aporta los valores por defecto (`temperature`,
+  `top_k`, `top_p`, `repetition_penalty`) y los ids de fin de secuencia.
+
+### El formato `model.json`
+
+```json
+{"format": "wsbuilder-graph", "version": 1, "name": "Qwen3-0.6B",
+ "architecture": "qwen3",
+ "weights": "weights.ndjson",
+ "tokenizer": {"type": "bpe", "file": "tokenizer.json"},
+ "chat_template": "qwen3",
+ "config": {"context_length": 40960, "bos_token_id": null, "add_bos_token": false,
+            "eos_token_ids": [151645, 151643]},
+ "generation": {"temperature": 0.6, "top_k": 20, "top_p": 0.95},
+ "graph": {
+   "embed": {"weight": "token_embd.weight"},
+   "blocks": {"count": 28, "ops": [
+     {"op": "rms_norm", "in": ["x"], "out": "h", "weight": "blk.{i}.attn_norm.weight", "eps": 1e-6},
+     {"op": "linear", "in": ["h"], "out": "q", "weight": "blk.{i}.attn_q.weight"},
+     "...",
+     {"op": "add", "in": ["x", "m"], "out": "x"}]},
+   "head": {"ops": [
+     {"op": "rms_norm", "in": ["x"], "out": "x", "weight": "output_norm.weight", "eps": 1e-6},
+     {"op": "linear", "in": ["x"], "out": "logits", "weight": "token_embd.weight"}]}}}
+```
+
+- `weights` y `tokenizer.file` son rutas relativas a `model.json`; una ruta
+  absoluta o con `..` (o un enlace que salga del directorio) se rechaza.
+- `chat_template`: `"qwen3"` (con `enable_thinking`), `"chatml"` (Qwen2),
+  `"llama3"` o `null` (solo `generate`). El texto de los mensajes nunca se
+  convierte en tokens de control. Las plantillas son las basicas: no anaden el
+  mensaje de sistema por defecto de Qwen2.5 ni la fecha de corte de Llama 3.1.
+- `config.eos_token_ids`, junto con `<|im_end|>`/`<|endoftext|>` (Qwen) o
+  `<|eot_id|>`/`<|eom_id|>`/`<|end_of_text|>` (Llama 3), detiene la
+  generacion. `add_bos_token` antepone `bos_token_id` al prompt.
+- `generation` fija las opciones por defecto (`max_tokens`, `temperature`,
+  `top_k`, `top_p`, `repeat_penalty`).
+- El grafo se ejecuta una vez por token con cache de claves y valores. `embed`
+  busca la fila del token (opcionalmente multiplicada por `scale`) en el valor
+  `x`; las `ops` de `blocks` se ejecutan `count` veces con `{i}` sustituido en
+  los nombres de tensor por el numero de bloque (sustitucion literal, no
+  `str.format`) y deben dejar el flujo residual en `x`; las de `head` parten de
+  `x` y deben producir `logits`.
+- Al cargar se valida todo antes de ejecutar: op o atributo desconocido,
+  tensor ausente, forma que no encaja, valor usado antes de definirse, tamanos
+  incompatibles o claves desconocidas lanzan `GraphFormatError`.
+
+Ops de la version 1 (`GRAPH_OPS`); cada una es
+`{"op", "in": [valores], "out": valor, ...atributos}` y trabaja con vectores:
+
+| Op | Entradas | Atributos | Calcula |
+| --- | --- | --- | --- |
+| `rms_norm` | 1 | `weight`, `eps` (1e-6), `add_unit_offset` (Gemma: `1 + w`) | RMSNorm |
+| `layer_norm` | 1 | `weight`, `bias` opcional, `eps` (1e-5) | LayerNorm |
+| `linear` | 1 | `weight` `[salidas, entradas]`, `bias` opcional | `W x + b` |
+| `add`, `mul` | 2 | | Suma y producto elemento a elemento |
+| `scale` | 1 | `value` | `x * value` |
+| `silu`, `gelu`, `gelu_tanh`, `relu` | 1 | | Activaciones |
+| `split` | 1 | `sizes`; `out` es una lista | Parte un vector (QKV o gate/up fusionados, Phi-3) |
+| `head_rms_norm` | 1 | `weight` `[head_dim]`, `head_dim`, `eps`, `add_unit_offset` | RMSNorm por cabeza (Q/K de Qwen3) |
+| `rope` | 1 | `head_dim`, `style` (`neox`/`interleaved`), `theta`, `rotary_dim` (parcial), `scaling` (`null` o `{"type": "linear", "factor"}`), `freq_factors` (tensor) | Rotary embeddings en la posicion del token |
+| `attention` | 3 (q, k, v) | `heads`, `kv_heads` (GQA), `head_dim`, `scale` (`1/sqrt(head_dim)`), `sliding_window`, `logit_softcap` | Atencion causal con la cache KV |
+| `softcap` | 1 | `cap` | `tanh(x / cap) * cap` (logits finales de Gemma 2) |
+
+Cualquier arquitectura expresable con estas ops funciona sin tocar el motor;
+otras (mezcla de expertos, atencion con estado, normas distintas) necesitan
+ops nuevas y una nueva version del formato.
+
+### Ejecutar
+
+`GraphModel.load(path, max_context=None)` acepta `model.json` o su directorio.
+`max_context` (por defecto el menor de `config.context_length` y 4096) limita
+prompt + respuesta; un prompt mas largo lanza `ValueError` y la generacion se
+detiene con `finish_reason="length"` al llegar al limite.
+
+- `forward(token_id, position, cache)` devuelve los logits; `new_cache()` crea
+  la cache de una secuencia y `position` debe ser `cache.length`.
+- `generate`/`stream(prompt, **opciones)` continuan un texto o una lista de
+  ids; `chat`/`stream_chat(messages, enable_thinking=True, system=None,
+  **opciones)` usan la plantilla. Opciones: `max_tokens` (tokens reales),
+  `temperature` (0 = greedy), `top_k`, `top_p`, `repeat_penalty` (como Hugging
+  Face y llama.cpp: divide los logits positivos de los ultimos 64 tokens y
+  multiplica los negativos), `stop` y `seed`.
+- `generate` respeta los tokens de control escritos en el prompt (es la API de
+  completado en crudo, como en Hugging Face): si lo expones por HTTP a usuarios
+  no confiables, usa `chat`.
+- `GraphBackend(model, **defaults)` tiene la interfaz de los demas backends
+  (`complete`, `chat`, `close`; `usage` cuenta tokens) y
+  `LanguageModel.from_graph(path)` lo envuelve. Las filas de logits que el
+  tokenizador no sabe decodificar (relleno del vocabulario) nunca se eligen.
+- `ModelStore.load()` todavia no carga modelos de grafo: un safetensors o GGUF
+  suelto del almacen sigue lanzando `NotImplementedError`; conviertelo con
+  `convert_to_graph` y usa `LanguageModel.from_graph`.
+
+### Rendimiento y memoria
+
+Es Python puro: las matrices son filas `array("f")` multiplicadas con
+`sum(map(operator.mul, fila, x))`, unos 8·10^7 multiplicaciones-suma por
+segundo en un nucleo. Qwen3-0.6B necesita unos 6·10^8 por token, es decir
+**varios segundos por token** (~7,5 s medidos), tambien en el prompt, que se
+procesa token a token. Al cargar, las matrices se convierten a float32: unos 4
+bytes por parametro (~2,4 GB para 0,6B, aunque el GGUF este en Q8_0). La cache
+KV ocupa `capas x 2 x kv_heads x head_dim x 8` bytes por token (~460 KB en
+Qwen3-0.6B, ~1,9 GB con 4096 tokens). Sirve para modelos pequenos, pruebas y
+como referencia exacta; los modelos grandes requieren un acelerador.
 
 ## Leer pesos safetensors y GGUF
 
@@ -364,6 +536,9 @@ pieces = [stream.push(token_id) for token_id in ids]
   de ellos. Pretokenizadores reconocidos: los patrones de Qwen2/Qwen3, Llama 3
   y GPT-2, implementados sin el modulo `regex`; con otro patron se lanza
   `ValueError`, salvo que se pase `pretokenizer=` (un nombre o una funcion).
+- `to_json()` devuelve el `tokenizer.json` equivalente (ida y vuelta con
+  `from_json`); los ids sin uso de un GGUF se guardan en la clave de extension
+  `wsbuilder`.
 - `from_gguf_metadata` no normaliza, como llama.cpp; pasa `normalizer="NFC"`
   para reproducir el tokenizador de Hugging Face de Qwen. Los tokens de tipo 5
   (sin uso, como `[PAD...]`) no se generan y se decodifican como texto vacio.

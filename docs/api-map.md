@@ -121,10 +121,11 @@ completa en [RPC entre servicios](rpc.md).
 | Almacen | `ModelStore`, `ModelRecord` |
 | Descargas | `download_file`, `huggingface_files`, `huggingface_url`, `DownloadError` |
 | Motor nativo | `ByteLanguageModel`, `NativeBackend`, `format_chat`, `submit_lm_training_task`, `BYTELM_ARCHITECTURE` |
-| Ejecucion | `LanguageModel` (`native`, `from_file`, `from_openai`), `OpenAICompatibleBackend`, `ModelStore(loader=...)` |
-| Tokenizador BPE | `BPETokenizer` (`from_file`, `from_json`, `from_pretrained_dir`, `from_gguf_metadata`, `encode_chat`), `BPEStreamDecoder`, `format_qwen3_chat` |
+| Ejecucion | `LanguageModel` (`native`, `from_file`, `from_graph`, `from_openai`), `OpenAICompatibleBackend`, `ModelStore(loader=...)` |
+| Tokenizador BPE | `BPETokenizer` (`from_file`, `from_json`, `from_pretrained_dir`, `from_gguf_metadata`, `encode_chat`, `to_json`), `BPEStreamDecoder`, `format_qwen3_chat` |
 | HTTP | `install_llm`, `App.enable_llm` |
 | Formato NDJSON | `ModelReader`, `ModelWriter`, `ModelTensor`, `ModelFormatError`, `MODEL_FORMAT`, `is_model_file`, `read_model_header` |
+| Modelos de grafo | `GraphModel`, `GraphBackend`, `GraphCache`, `GraphFormatError`, `GRAPH_FORMAT`, `GRAPH_OPS`, `convert_to_graph`, `LanguageModel.from_graph` |
 | Pesos safetensors y GGUF | `open_weights`, `detect_weights_format`, `SafetensorsReader`, `ShardedSafetensors`, `GGUFReader`, `WeightTensor`, `WeightsFormatError` |
 
 Guia completa en [Modelos de lenguaje](llm.md).

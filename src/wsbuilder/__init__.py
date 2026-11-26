@@ -63,6 +63,15 @@ from .framework import (
     parse_query_string,
     proxyi,
 )
+from .graph import (
+    GRAPH_FORMAT,
+    GRAPH_OPS,
+    GraphBackend,
+    GraphCache,
+    GraphFormatError,
+    GraphModel,
+)
+from .graph_convert import convert_to_graph
 from .headers import add_header, get_header, has_header, normalize_header_name, set_header
 from .ia import (
     AudioData,
@@ -353,6 +362,13 @@ __all__ = [
     "NativeBackend",
     "format_chat",
     "submit_lm_training_task",
+    "GRAPH_FORMAT",
+    "GRAPH_OPS",
+    "GraphBackend",
+    "GraphCache",
+    "GraphFormatError",
+    "GraphModel",
+    "convert_to_graph",
     "ModelRecord",
     "ModelStore",
     "OpenAICompatibleBackend",

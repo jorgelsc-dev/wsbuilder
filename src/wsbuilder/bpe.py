@@ -473,6 +473,12 @@ class BPETokenizer:
                 _token_matcher([t for t in tokens if not t.normalized]),
                 _token_matcher([t for t in tokens if t.normalized]),
             )
+        self._pretokenizer_name = pretokenizer if isinstance(pretokenizer, str) else next(
+            (name for name, func in PRETOKENIZERS.items() if func is pretokenizer),
+            "none" if pretokenizer is _no_split else None,
+        )
+        if pretokenizer == "none":
+            pretokenizer = _no_split
         if isinstance(pretokenizer, str):
             if pretokenizer not in PRETOKENIZERS:
                 raise ValueError(
@@ -529,6 +535,10 @@ class BPETokenizer:
             raise ValueError("tokenizer JSON added_tokens must be a list")
         split, add_prefix_space = _parse_pre_tokenizer(data.get("pre_tokenizer"), pretokenizer)
         options.setdefault("add_prefix_space", add_prefix_space)
+        extension = data.get("wsbuilder") or {}
+        if not isinstance(extension, Mapping):
+            raise ValueError("tokenizer JSON wsbuilder must be an object")
+        options.setdefault("unused_token_ids", extension.get("unused_token_ids") or ())
         options.setdefault("normalizer", _parse_normalizer(data.get("normalizer")))
         options.setdefault("ignore_merges", bool(model.get("ignore_merges", False)))
         return cls(vocab, merges, added_tokens=added, pretokenizer=split, **options)
@@ -631,6 +641,68 @@ class BPETokenizer:
         merges = metadata.get("tokenizer.ggml.merges")
         return cls(vocab, [] if merges is None else merges, added_tokens=added,
                    pretokenizer=pretokenizer, normalizer=normalizer, **options)
+
+    def to_json(self):
+        """A Hugging Face ``tokenizer.json`` object for this tokenizer (a dict).
+
+        ``from_json(to_json())`` encodes and decodes like this tokenizer.
+        BOS/EOS/PAD ids live in ``tokenizer_config.json`` in Hugging Face
+        models, so they are not part of it. Unused ids (GGUF type 5) stay in
+        the vocabulary and are listed in a ``wsbuilder`` extension key. A
+        custom pre-tokenizer function cannot be written and raises
+        ``ValueError``.
+        """
+        name = self._pretokenizer_name
+        byte_level = {"type": "ByteLevel", "add_prefix_space": self.add_prefix_space,
+                      "trim_offsets": False, "use_regex": name == "gpt2"}
+        if name in ("qwen2", "llama3"):
+            pattern = QWEN2_PATTERN if name == "qwen2" else LLAMA3_PATTERN
+            pre_tokenizer = {"type": "Sequence", "pretokenizers": [
+                {"type": "Split", "pattern": {"Regex": pattern}, "behavior": "Isolated",
+                 "invert": False},
+                byte_level,
+            ]}
+        elif name in ("gpt2", "none"):
+            pre_tokenizer = byte_level
+        else:
+            raise ValueError("a custom pre-tokenizer function cannot be written to tokenizer.json")
+        normalizer = None
+        if self._normalizer:
+            steps = [{"type": form} for form in self._normalizer]
+            normalizer = steps[0] if len(steps) == 1 else {"type": "Sequence",
+                                                           "normalizers": steps}
+        merges = sorted(self._ranks.items(), key=lambda item: item[1])
+        data = {
+            "version": "1.0",
+            "truncation": None,
+            "padding": None,
+            "added_tokens": [
+                {"id": t.id, "content": t.content, "single_word": t.single_word,
+                 "lstrip": t.lstrip, "rstrip": t.rstrip, "normalized": t.normalized,
+                 "special": t.special}
+                for t in sorted(self._added.values(), key=lambda t: t.id)
+            ],
+            "normalizer": normalizer,
+            "pre_tokenizer": pre_tokenizer,
+            "post_processor": None,
+            "decoder": {"type": "ByteLevel", "add_prefix_space": True, "trim_offsets": True,
+                        "use_regex": True},
+            "model": {
+                "type": "BPE",
+                "dropout": None,
+                "unk_token": None,
+                "continuing_subword_prefix": None,
+                "end_of_word_suffix": None,
+                "fuse_unk": False,
+                "byte_fallback": False,
+                "ignore_merges": self.ignore_merges,
+                "vocab": {token: token_id for token_id, token in sorted(self._id_to_token.items())},
+                "merges": [[first, second] for (first, second), _ in merges],
+            },
+        }
+        if self._unused:
+            data["wsbuilder"] = {"unused_token_ids": sorted(self._unused)}
+        return data
 
     # -- vocabulary -------------------------------------------------------
 

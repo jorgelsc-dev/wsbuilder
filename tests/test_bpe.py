@@ -307,6 +307,31 @@ class TestBPETokenizer(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "list"):
                 BPETokenizer.from_gguf_metadata(broken)
 
+    def test_to_json_round_trips(self):
+        metadata = _gguf_metadata()
+        metadata["tokenizer.ggml.tokens"] = metadata["tokenizer.ggml.tokens"] + ["[PAD1]"]
+        metadata["tokenizer.ggml.token_type"] = metadata["tokenizer.ggml.token_type"] + [5]
+        sources = [
+            BPETokenizer.from_json(_tokenizer_json(normalizer={"type": "NFC"})),
+            BPETokenizer.from_json(_tokenizer_json(pattern=LLAMA3_PATTERN)),
+            BPETokenizer.from_gguf_metadata(metadata),
+            BPETokenizer(_vocab(), MERGES, pretokenizer="gpt2", normalizer=("NFKC", "NFC")),
+            BPETokenizer(_vocab(), MERGES, pretokenizer="none", add_prefix_space=True),
+        ]
+        for tok in sources:
+            copy = BPETokenizer.from_json(json.dumps(tok.to_json()))
+            self.assertEqual(copy.to_json(), tok.to_json())
+            self.assertEqual(copy.vocab_size, tok.vocab_size)
+            self.assertEqual(copy.special_tokens, tok.special_tokens)
+            for text in SAMPLES + ["ﬁ café", "  hello\n"]:
+                ids = tok.encode(text)
+                self.assertEqual(copy.encode(text), ids, text)
+                self.assertEqual(copy.decode(ids), tok.decode(ids))
+        pad = sources[2].vocab_size - 1
+        self.assertEqual(BPETokenizer.from_json(sources[2].to_json()).decode([pad]), "")
+        with self.assertRaises(ValueError):
+            BPETokenizer(_vocab(), MERGES, pretokenizer=str.split).to_json()
+
     def test_missing_byte_symbol_is_reported(self):
         vocab = {BYTE[byte]: byte for byte in range(128)}
         tok = BPETokenizer(vocab, [])
