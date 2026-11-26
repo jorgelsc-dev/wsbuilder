@@ -847,6 +847,15 @@ class TestGraphValidation(_Model):
         self.assertRefused(lambda s: self.ops(s)[1].update({"in": ["nothing"]}),
                            "'nothing' is used before it is defined")
 
+    def test_block_count_is_bounded_by_the_weights(self):
+        # Blocks without tensors would otherwise compile a hostile count forever.
+        def change(spec):
+            spec["graph"]["blocks"]["ops"] = [{"op": "silu", "in": ["x"], "out": "x"}]
+            spec["graph"]["blocks"]["count"] = 10**9
+        started = time.monotonic()
+        self.assertRefused(change, "weights hold only")
+        self.assertLess(time.monotonic() - started, 5.0)
+
     def test_head_must_produce_logits(self):
         self.assertRefused(lambda s: s["graph"]["head"]["ops"][-1].update(out="scores"),
                            "logits")
