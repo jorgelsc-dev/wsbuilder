@@ -361,8 +361,20 @@ console_level="warning")` con `log(level, event, message="", exc=None,
 - LLM (`llm.py`): `ModelStore(root=None, loader=None)` (por defecto
   `$WSBUILDER_MODELS` o `~/.cache/wsbuilder/models`) guarda cada modelo en
   `<raíz>/<id>/` con `manifest.json` (sin índice compartido; escrituras
-  atómicas). Acepta modelos NDJSON de wsbuilder y archivos de pesos safetensors
-  y GGUF (`require_known_format=False` guarda otros como `unknown`). Métodos:
+  atómicas). Acepta modelos NDJSON de wsbuilder, archivos de pesos safetensors
+  y GGUF y modelos de grafo (formato `graph`: directorio con `model.json` y los
+  archivos que referencia; `summary["files"]` guarda size/sha256 de cada uno)
+  (`require_known_format=False` guarda otros como `unknown`). Grafos:
+  `import_graph(path)` (json o directorio; copia solo lo referenciado, rechaza
+  rutas fuera, symlinks que escapan y nombres reservados; registro atómico con un
+  `os.replace` del staging), `import_file` delega en él, `convert(source,
+  dtype=)` (id GGUF del store o ruta HF/GGUF) y
+  `download_huggingface_model(repo)` (solo config, tokenizador y safetensors con
+  índice y shards; verifica SHA-256 de LFS o el `oid` git de los no LFS, que
+  `huggingface_files` también devuelve; convierte y registra). `load` de un
+  grafo usa `LanguageModel.from_graph` (`accel`, `max_context`); un GGUF/
+  safetensors sin convertir lanza `NotImplementedError` sugiriendo `convert`.
+  `verify` comprueba todos los archivos y `export` copia el directorio. Métodos:
   `import_file`, `download`, `download_huggingface` (SHA-256 del listado del
   Hub), `list`, `get`, `open` (`ModelReader`, o el lector de `weights.py` para
   safetensors/GGUF), `load_network` (`NeuralNetwork`), `export`, `verify`,
@@ -377,8 +389,9 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   usa `NativeBackend` u `OpenAICompatibleBackend` (stdlib), o cualquier backend
   con `complete`/`chat`/`close`. `install_llm`/`App.enable_llm` sirven
   `GET models|model`, `POST chat|generate` (NDJSON al hacer streaming) y
-  `/v1/models`, `/v1/chat/completions` (SSE); `download`/`import`/`delete`/
-  `train` solo con `allow_*=True` (`train` valida contra `DEFAULT_TRAIN_LIMITS`).
+  `/v1/models`, `/v1/chat/completions` (SSE); `download` (con `{"repo",
+  "convert": true}` descarga y convierte)/`import` (también grafos)/`convert`
+  (tarea, con `allow_import`)/`delete`/`train` solo con `allow_*=True` (`train` valida contra `DEFAULT_TRAIN_LIMITS`).
 - Motor nativo (`ia_lm.py`): `ByteLanguageModel(context, embedding, hidden, seed)`,
   arquitectura `wsbuilder.bytelm`: modelo neuronal por bytes (vocabulario
   258 = 256 bytes + BOS + EOS; embedding por byte, capas `tanh`, softmax).
@@ -426,7 +439,7 @@ console_level="warning")` con `log(level, event, message="", exc=None,
   convierte un directorio HF o un GGUF de qwen3, qwen2, llama o mistral
   (`ARCHITECTURES`); un tensor que el grafo no usaría lanza
   `NotImplementedError`. Llama en GGUF usa RoPE `interleaved` (Q/K permutados por
-  llama.cpp); Qwen, `neox`. `ModelStore.load()` aún no carga grafos.
+  llama.cpp); Qwen, `neox`. `ModelStore` los guarda y carga (formato `graph`).
 - Aceleración (`accel.py`): `linear` y `attention` del grafo usan un backend
   (`prepare_matrix`, `matvec`, `attend`), genérico para cualquier modelo de
   grafo. `GraphModel.load(path, accel=None)` o `$WSBUILDER_ACCEL`

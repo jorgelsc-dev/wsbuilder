@@ -118,7 +118,7 @@ completa en [RPC entre servicios](rpc.md).
 
 | Grupo | Exportaciones |
 | --- | --- |
-| Almacen | `ModelStore`, `ModelRecord` |
+| Almacen | `ModelStore` (`import_file`, `import_graph`, `convert`, `download`, `download_huggingface`, `download_huggingface_model`, `load`, `open`, `export`, `verify`), `ModelRecord` |
 | Descargas | `download_file`, `huggingface_files`, `huggingface_url`, `DownloadError` |
 | Motor nativo | `ByteLanguageModel`, `NativeBackend`, `format_chat`, `submit_lm_training_task`, `BYTELM_ARCHITECTURE` |
 | Ejecucion | `LanguageModel` (`native`, `from_file`, `from_graph`, `from_openai`), `OpenAICompatibleBackend`, `ModelStore(loader=...)` |

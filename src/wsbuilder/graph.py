@@ -844,6 +844,15 @@ class GraphModel:
         count = blocks.get("count")
         if type(count) is not int or count < 0:
             raise GraphFormatError("graph.blocks.count must be a non-negative integer")
+        # Every block has its own tensors, so a count above the number of
+        # tensors is bogus; checking it first keeps a hostile model.json from
+        # compiling blocks without end.
+        tensor_total = len(self.reader.names())
+        if count > tensor_total:
+            raise GraphFormatError(
+                f"graph.blocks.count is {count} but the weights hold only {tensor_total} "
+                f"tensors"
+            )
         self._blocks = []
         for block in range(count):
             sizes = {"x": self.hidden_size}
